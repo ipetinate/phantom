@@ -197,7 +197,7 @@ private struct DocumentView: View {
             }
 
             CodeTextView(
-                text: document.text,
+                text: document.currentText,
                 textRevision: document.revision,
                 language: document.language,
                 theme: theme,
