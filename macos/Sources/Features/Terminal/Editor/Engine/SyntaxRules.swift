@@ -351,6 +351,47 @@ struct SyntaxRules {
                 attribute: #"^\s*#\s*[a-z]+"#
             )
 
+        case .php:
+            return SyntaxRules(
+                comment: #"//[^\n]*|#[^\n]*|/\*[\s\S]*?\*/"#,
+                string: cStyleString,
+                number: number,
+                keyword: words([
+                    "abstract", "and", "array", "as", "break", "callable", "case", "catch",
+                    "class", "clone", "const", "continue", "declare", "default", "do", "echo",
+                    "else", "elseif", "empty", "enddeclare", "endfor", "endforeach", "endif",
+                    "endswitch", "endwhile", "extends", "final", "finally", "fn", "for",
+                    "foreach", "function", "global", "goto", "if", "implements", "include",
+                    "include_once", "instanceof", "insteadof", "interface", "isset", "list",
+                    "match", "namespace", "new", "or", "print", "private", "protected", "public",
+                    "require", "require_once", "return", "static", "switch", "throw", "trait",
+                    "try", "unset", "use", "var", "while", "xor", "yield", "true", "false", "null",
+                ]),
+                type: capitalizedType,
+                function: callBeforeParen,
+                // A `$variable` is the one thing PHP marks visually that
+                // nothing else in this table already covers.
+                attribute: #"\$[A-Za-z_][A-Za-z0-9_]*"#
+            )
+
+        case .terraform:
+            return SyntaxRules(
+                comment: #"#[^\n]*|//[^\n]*|/\*[\s\S]*?\*/"#,
+                string: cStyleString,
+                number: number,
+                keyword: words([
+                    "resource", "data", "variable", "output", "module", "provider", "locals",
+                    "terraform", "for_each", "count", "depends_on", "lifecycle", "dynamic",
+                    "provisioner", "connection", "true", "false", "null", "if", "else", "endif",
+                    "for", "in", "endfor",
+                ]),
+                type: capitalizedType,
+                function: callBeforeParen,
+                // `key = value` rather than `key:` — HCL's own assignment,
+                // not the colon-property pattern the JS-family rules use.
+                attribute: #"^[ \t]*[A-Za-z_][A-Za-z0-9_-]*(?=\s*=(?!=))"#
+            )
+
         // A single-file component has no rules of its own: the highlighter
         // splits it into blocks and asks for the rules of each. Reaching
         // here would mean something tried to lex the container itself.

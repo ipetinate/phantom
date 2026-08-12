@@ -30,6 +30,8 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
     case sql
     case zig
     case c
+    case php
+    case terraform
     case plain
 
     /// Extensions are matched longest-first, so `component.spec.ts` can be
@@ -58,6 +60,8 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
         "sql": .sql,
         "zig": .zig, "zon": .zig,
         "c": .c, "h": .c, "cpp": .c, "hpp": .c, "cc": .c, "m": .c, "mm": .c,
+        "php": .php,
+        "tf": .terraform, "tfvars": .terraform,
     ]
 
     /// Files whose name carries the language, with no extension to read.
@@ -83,8 +87,8 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
     /// comment-toggling command.
     var lineComment: String? {
         switch self {
-        case .javascript, .swift, .kotlin, .rust, .go, .zig, .c, .css: return "//"
-        case .python, .ruby, .shell, .yaml: return "#"
+        case .javascript, .swift, .kotlin, .rust, .go, .zig, .c, .css, .php: return "//"
+        case .python, .ruby, .shell, .yaml, .terraform: return "#"
         case .sql: return "--"
         // An SFC has no single answer — it depends which block you are in —
         // so it declines to give one rather than give the wrong one.
@@ -94,7 +98,7 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
 
     var blockComment: (open: String, close: String)? {
         switch self {
-        case .javascript, .swift, .kotlin, .rust, .go, .c, .css: return ("/*", "*/")
+        case .javascript, .swift, .kotlin, .rust, .go, .c, .css, .php, .terraform: return ("/*", "*/")
         // The top level of an SFC is markup, whatever the blocks contain.
         case .html, .vue: return ("<!--", "-->")
         case .python, .ruby, .shell, .yaml, .sql, .json, .markdown, .zig, .plain: return nil

@@ -136,6 +136,94 @@ enum LSPServerRegistry {
             command: "yaml-language-server",
             arguments: ["--stdio"],
             installHint: "npm i -g yaml-language-server"
+        ),
+        LSPServerDefinition(
+            languageID: "shellscript",
+            displayName: "Bash Language Server",
+            command: "bash-language-server",
+            arguments: ["start"],
+            installHint: "npm i -g bash-language-server"
+        ),
+        LSPServerDefinition(
+            languageID: "html",
+            displayName: "HTML Language Server",
+            command: "vscode-html-language-server",
+            arguments: ["--stdio"],
+            installHint: "npm i -g vscode-langservers-extracted"
+        ),
+        LSPServerDefinition(
+            languageID: "css",
+            displayName: "CSS Language Server",
+            command: "vscode-css-language-server",
+            arguments: ["--stdio"],
+            installHint: "npm i -g vscode-langservers-extracted"
+        ),
+        LSPServerDefinition(
+            languageID: "scss",
+            displayName: "CSS Language Server",
+            command: "vscode-css-language-server",
+            arguments: ["--stdio"],
+            installHint: "npm i -g vscode-langservers-extracted"
+        ),
+        LSPServerDefinition(
+            languageID: "less",
+            displayName: "CSS Language Server",
+            command: "vscode-css-language-server",
+            arguments: ["--stdio"],
+            installHint: "npm i -g vscode-langservers-extracted"
+        ),
+        LSPServerDefinition(
+            languageID: "java",
+            displayName: "Eclipse JDT Language Server",
+            command: "jdtls",
+            // Eclipse's own workspace model needs a `-data` directory to
+            // keep its index in; one fixed path rather than one per
+            // project root, so switching projects re-imports into the same
+            // workspace instead of paying a full fresh index every time.
+            arguments: ["-data", NSHomeDirectory() + "/.cache/jdtls-workspace"],
+            installHint: "brew install jdtls"
+        ),
+        LSPServerDefinition(
+            languageID: "c",
+            displayName: "clangd",
+            command: "clangd",
+            arguments: [],
+            installHint: "Ships with Xcode Command Line Tools — run: xcode-select --install"
+        ),
+        LSPServerDefinition(
+            languageID: "cpp",
+            displayName: "clangd",
+            command: "clangd",
+            arguments: [],
+            installHint: "Ships with Xcode Command Line Tools — run: xcode-select --install"
+        ),
+        LSPServerDefinition(
+            languageID: "terraform",
+            displayName: "terraform-ls",
+            command: "terraform-ls",
+            arguments: ["serve"],
+            installHint: "brew install hashicorp/tap/terraform-ls"
+        ),
+        LSPServerDefinition(
+            languageID: "php",
+            displayName: "Intelephense",
+            command: "intelephense",
+            arguments: ["--stdio"],
+            installHint: "npm i -g intelephense"
+        ),
+        LSPServerDefinition(
+            languageID: "ruby",
+            displayName: "Ruby LSP",
+            command: "ruby-lsp",
+            arguments: [],
+            installHint: "gem install ruby-lsp"
+        ),
+        LSPServerDefinition(
+            languageID: "markdown",
+            displayName: "Marksman",
+            command: "marksman",
+            arguments: ["server"],
+            installHint: "brew install marksman"
         )
     ]
 
@@ -169,7 +257,30 @@ enum LSPServerRegistry {
         "json": "json",
         "jsonc": "json",
         "yaml": "yaml",
-        "yml": "yaml"
+        "yml": "yaml",
+        "sh": "shellscript",
+        "bash": "shellscript",
+        "zsh": "shellscript",
+        "html": "html",
+        "htm": "html",
+        "css": "css",
+        "scss": "scss",
+        "less": "less",
+        "java": "java",
+        "c": "c",
+        "h": "c",
+        "cpp": "cpp",
+        "cc": "cpp",
+        "cxx": "cpp",
+        "hpp": "cpp",
+        "hxx": "cpp",
+        "tf": "terraform",
+        "tfvars": "terraform",
+        "php": "php",
+        "rb": "ruby",
+        "md": "markdown",
+        "markdown": "markdown",
+        "mdx": "markdown"
     ]
 
     /// Nil for a language nobody has taught this table about — which is the

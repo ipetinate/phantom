@@ -100,7 +100,6 @@ struct LSPServerRegistryTests {
     /// Most files a terminal opens have no language server, and that is the
     /// normal case rather than a failure.
     @Test func pathsWithNoKnownLanguageResolveToNothing() {
-        #expect(LSPServerRegistry.languageID(forPath: "README.md") == nil)
         #expect(LSPServerRegistry.languageID(forPath: "Makefile") == nil)
         #expect(LSPServerRegistry.languageID(forPath: "/etc/hosts") == nil)
         #expect(LSPServerRegistry.server(forPath: "notes.txt") == nil)
