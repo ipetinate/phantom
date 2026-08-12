@@ -126,16 +126,6 @@ struct ConfigTests {
         #expect(config.resizeOverlayPosition == .center)
     }
 
-    @Test func macosIconDefaultsToOfficial() throws {
-        let config = try TemporaryConfig("")
-        #expect(config.macosIcon == .official)
-    }
-
-    @Test func macosIconFrameDefaultsToAluminum() throws {
-        let config = try TemporaryConfig("")
-        #expect(config.macosIconFrame == .aluminum)
-    }
-
     @Test func macosWindowButtonsDefaultsToVisible() throws {
         let config = try TemporaryConfig("")
         #expect(config.macosWindowButtons == .visible)

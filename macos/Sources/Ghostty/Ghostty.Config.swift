@@ -414,61 +414,6 @@ extension Ghostty {
             return v
         }
 
-        var macosIcon: MacOSIcon {
-            let defaultValue = MacOSIcon.official
-            guard let config = self.config else { return defaultValue }
-            var v: UnsafePointer<Int8>?
-            let key = "macos-icon"
-            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return defaultValue }
-            guard let ptr = v else { return defaultValue }
-            let str = String(cString: ptr)
-            return MacOSIcon(rawValue: str) ?? defaultValue
-        }
-
-        var macosCustomIcon: String {
-            #if os(macOS)
-            let defaultValue = NSString("~/.config/ghostty/Ghostty.icns").expandingTildeInPath
-            guard let config = self.config else { return defaultValue }
-            var v: UnsafePointer<Int8>?
-            let key = "macos-custom-icon"
-            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return defaultValue }
-            guard let ptr = v else { return defaultValue }
-            guard let path = NSString(utf8String: ptr) else { return defaultValue }
-            return path.expandingTildeInPath
-            #else
-            return ""
-            #endif
-        }
-
-        var macosIconFrame: MacOSIconFrame {
-            let defaultValue = MacOSIconFrame.aluminum
-            guard let config = self.config else { return defaultValue }
-            var v: UnsafePointer<Int8>?
-            let key = "macos-icon-frame"
-            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return defaultValue }
-            guard let ptr = v else { return defaultValue }
-            let str = String(cString: ptr)
-            return MacOSIconFrame(rawValue: str) ?? defaultValue
-        }
-
-        var macosIconGhostColor: OSColor? {
-            guard let config = self.config else { return nil }
-            var v: ghostty_config_color_s = .init()
-            let key = "macos-icon-ghost-color"
-            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
-            return .init(ghostty: v)
-        }
-
-        var macosIconScreenColor: [OSColor]? {
-            guard let config = self.config else { return nil }
-            var v: ghostty_config_color_list_s = .init()
-            let key = "macos-icon-screen-color"
-            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
-            guard v.len > 0 else { return nil }
-            let buffer = UnsafeBufferPointer(start: v.colors, count: v.len)
-            return buffer.map { .init(ghostty: $0) }
-        }
-
         var macosHidden: MacHidden {
             guard let config = self.config else { return .never }
             var v: UnsafePointer<Int8>?
