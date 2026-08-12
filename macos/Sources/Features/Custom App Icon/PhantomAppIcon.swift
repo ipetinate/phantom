@@ -8,41 +8,31 @@ import AppKit
 /// Keeping it apart also keeps it out of `GuiConfigStore` — an unknown key in
 /// there raises Ghostty's "Configuration Errors" window.
 ///
-/// Every icon here is drawn by Icon Composer — a glyph plus the Liquid Glass
-/// material and per-appearance variants it renders around one — not artwork
-/// Phantom composes itself. The `.icon` documents are kept in
-/// `images/PhantomIcons/` as the source of truth, and their rendered
-/// exports live in `macos/Resources/PhantomIconVariants/` as
-/// `<Icon>-<Style>.png`.
+/// Every icon here is a flat, hand-delivered render (Figma, not Icon
+/// Composer) — one PNG per icon per style, kept in
+/// `macos/Resources/PhantomIconVariants/` as `<Icon>-<Style>.png`. Plain
+/// images rather than Icon Composer documents: `NSApp.applicationIconImage`
+/// and `NSWorkspace.setIcon` — the only way to change a running app's
+/// icon — take an `NSImage` and nothing else, so a chooser with more than
+/// one icon in it has to be built from renders regardless of what produced
+/// them, and Icon Composer's own single-icon-per-bundle pipeline made that
+/// exactly one of these renders "special" in a way that stopped being worth
+/// the upkeep. `productionDefault`'s render is also what
+/// `Assets.xcassets/PhantomAppIcon.appiconset` is generated from, so the
+/// compiled-in icon and the picker's own "Default" thumbnail are the same
+/// artwork.
 ///
-/// **Why exports rather than the `.icon` documents themselves**, which would
-/// be the obvious thing: the Icon Composer pipeline renders exactly *one*
-/// icon per app bundle — the one named by `ASSETCATALOG_COMPILER_APPICON_NAME`.
-/// `actool` accepts every other `.icon` in the project as an input without
-/// complaint and materialises none of them: no `.icns`, no catalog entry, no
-/// generated symbol. There is no runtime API that renders a `.icon` either,
-/// and `NSApp.applicationIconImage`/`NSWorkspace.setIcon` — the only way to
-/// change a running app's icon — take an `NSImage` and nothing else. So a
-/// chooser with more than one icon in it has to be built from renders, and
-/// these come from Icon Composer's own export rather than from anything
-/// Phantom approximates.
-///
-/// `productionDefault` is the exception and keeps the real thing: it *is* the
-/// compiled-in icon, so it needs no override and gets the live material,
-/// including following the system's own appearance.
-///
-/// **Adding one is three steps.** Put the `.icon` in `images/PhantomIcons/`,
-/// export its variants into `macos/Resources/PhantomIconVariants/` following
-/// the `<Icon>-<Style>.png` naming, and add a case whose raw value is the
-/// icon's name. The raw value *is* the file-name stem, so there is no second
-/// list to keep in step, and `allCases` drives the picker, the About
+/// **Adding one is two steps.** Export `<Icon>-Default.png`,
+/// `<Icon>-Dark.png` and `<Icon>-Clear.png` into
+/// `macos/Resources/PhantomIconVariants/`, and add a case whose raw value is
+/// the icon's name. The raw value *is* the file-name stem, so there is no
+/// second list to keep in step, and `allCases` drives the picker, the About
 /// animation, and everything else.
 enum PhantomAppIcon: String, CaseIterable, Identifiable, Codable, Sendable {
     case bullsEye = "Bulls Eye"
     case circuits = "Circuits"
     case standard = "Default"
     case development = "Development"
-    case fractalNoise = "Fractal Noise"
     case nebula = "Nebula"
     case purpleHaze = "Purple Haze"
 
@@ -50,7 +40,6 @@ enum PhantomAppIcon: String, CaseIterable, Identifiable, Codable, Sendable {
     case tributeCircuits = "Ghostty Tribute Circuits"
     case tributeStandard = "Ghostty Tribute Default"
     case tributeDevelopment = "Ghostty Tribute Development"
-    case tributeFractalNoise = "Ghostty Tribute Fractal Noise"
     case tributeNebula = "Ghostty Tribute Nebula"
     case tributePurpleHaze = "Ghostty Tribute Purple Haze"
 
@@ -101,11 +90,11 @@ enum PhantomAppIcon: String, CaseIterable, Identifiable, Codable, Sendable {
     /// `apply(_:)` can skip writing an override for — it is already what is on
     /// disk.
     ///
-    /// Its source is `images/PhantomAppIcon.icon`, which carries the same
-    /// artwork as this case; the name differs because the app icon is
-    /// selected by the `ASSETCATALOG_COMPILER_APPICON_NAME` build setting,
-    /// and pointing that at a file called `Default` would read as a
-    /// placeholder rather than a choice.
+    /// Its render is also the source for `Assets.xcassets/PhantomAppIcon.appiconset`;
+    /// the name differs because the app icon is selected by the
+    /// `ASSETCATALOG_COMPILER_APPICON_NAME` build setting, and pointing that
+    /// at a file called `Default` would read as a placeholder rather than a
+    /// choice.
     static let productionDefault: PhantomAppIcon = .standard
 
     /// What a build with nothing chosen yet falls back to.
@@ -124,10 +113,10 @@ enum PhantomAppIcon: String, CaseIterable, Identifiable, Codable, Sendable {
     /// Where the rendered exports are bundled.
     static let variantsDirectory = "PhantomIconVariants"
 
-    /// This icon in one style, as Icon Composer exported it.
-    func image(variant: PhantomAppIconVariant, isDark: Bool) -> NSImage? {
+    /// This icon in one style.
+    func image(variant: PhantomAppIconVariant) -> NSImage? {
         guard let url = Bundle.main.url(
-            forResource: "\(rawValue)-\(variant.fileSuffix(isDark: isDark))",
+            forResource: "\(rawValue)-\(variant.fileSuffix)",
             withExtension: "png",
             subdirectory: Self.variantsDirectory
         ) else { return nil }
@@ -138,10 +127,7 @@ enum PhantomAppIcon: String, CaseIterable, Identifiable, Codable, Sendable {
     /// what gets applied.
     @MainActor
     func image() -> NSImage? {
-        image(
-            variant: PhantomAppIconVariantStore.current,
-            isDark: PhantomAppIconVariantStore.isDarkAppearance
-        )
+        image(variant: PhantomAppIconVariantStore.current)
     }
 }
 
@@ -156,11 +142,9 @@ enum PhantomAppIcon: String, CaseIterable, Identifiable, Codable, Sendable {
 ///
 /// The default icon in its default style is expressed by passing `nil` to
 /// both: that *removes* the override and lets the icon compiled into the app
-/// show through, rather than writing a copy of it over itself. That pairing is
-/// also the only one that gets the live Liquid Glass material and follows the
-/// system's own appearance — every other choice is a rendered export, because
-/// neither `setIcon` nor `applicationIconImage` accepts anything but an
-/// `NSImage`.
+/// show through, rather than writing a copy of it over itself — the two are
+/// the same artwork, so this is purely skipping a redundant write, not
+/// preserving anything the override couldn't reproduce.
 @MainActor
 enum PhantomAppIconStore {
     static let defaultsKey = "PhantomAppIcon"
@@ -193,8 +177,8 @@ enum PhantomAppIconStore {
     static func applyCurrent() -> Bool {
         let icon = current
 
-        // No override for the compiled-in pairing: leaving it alone is what
-        // keeps the live material rather than freezing a render over it.
+        // No override for the compiled-in pairing: it is already the same
+        // artwork, so writing one over it would be a no-op with extra I/O.
         let isCompiledIn = icon == .productionDefault
             && PhantomAppIconVariantStore.current == .default
         let override = isCompiledIn ? nil : icon.image()
@@ -213,17 +197,22 @@ enum PhantomAppIconStore {
         return applied
     }
 
-    /// Re-applies the remembered choice at launch.
+    /// Re-applies the remembered choice at launch, unconditionally.
     ///
     /// Needed because `setIcon` writes to the bundle, and a rebuild replaces
     /// the bundle — so a fresh build comes up wearing the compiled-in icon
-    /// even though a different one was chosen.
+    /// even though a different one was chosen. Unconditional rather than
+    /// skipped when the choice already matches the compiled-in default: the
+    /// running app's Dock tile (`applicationIconImage`, in memory, gone at
+    /// every launch) and the bundle's own custom icon (`setIcon`, on disk,
+    /// and able to fail — a read-only volume, a bundle Gatekeeper hasn't
+    /// cleared yet) can end up disagreeing about which icon is showing, and
+    /// skipping this because "the stored choice is already the default"
+    /// says nothing about whether either of *those* actually is. Calling it
+    /// every time is one redundant write in the common case in exchange for
+    /// never leaving the two out of sync.
     static func restore() {
         seedDevelopmentDefaultIfNeeded()
-
-        guard current != .productionDefault
-            || PhantomAppIconVariantStore.current != .default
-        else { return }
         applyCurrent()
     }
 

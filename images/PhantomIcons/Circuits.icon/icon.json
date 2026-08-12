@@ -33,7 +33,7 @@
           "image-name" : "Phantom.svg",
           "name" : "Phantom",
           "position" : {
-            "scale" : 1,
+            "scale" : 0.8,
             "translation-in-points" : [
               -1.1368683772161603e-13,
               0.00039570289345647325
