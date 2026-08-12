@@ -166,7 +166,14 @@ final class LSPProcess: @unchecked Sendable {
     /// npm prefix, `~/.cargo/bin`, a Go module cache. Without this, the
     /// entire feature reports "not installed" on a machine where all of it
     /// is installed.
-    func start() async throws {
+    ///
+    /// - Parameter workingDirectory: Left unset, `Process` inherits this
+    ///   app's own cwd — `/`, for a GUI app launched through Launch
+    ///   Services — not the project the server is about to be asked to
+    ///   index. Most servers don't care; they take `rootUri` instead. A
+    ///   few shell out and resolve paths relative to `Dir.pwd`/`cwd`, and
+    ///   for those, `/` is a directory they have no business writing to.
+    func start(workingDirectory: String) async throws {
         try claimStart()
 
         let environment = await Task.detached(priority: .userInitiated) { [environmentProvider] in
@@ -174,7 +181,7 @@ final class LSPProcess: @unchecked Sendable {
         }.value
 
         do {
-            try launch(environment: environment)
+            try launch(environment: environment, workingDirectory: workingDirectory)
         } catch {
             lock.withLock { state = .idle }
             throw error
@@ -353,7 +360,7 @@ final class LSPProcess: @unchecked Sendable {
         }
     }
 
-    private func launch(environment: [String: String]) throws {
+    private func launch(environment: [String: String], workingDirectory: String) throws {
         let searchPath = environment["PATH"] ?? ""
         guard let executable = Self.locate(definition.command, searchPath: searchPath) else {
             throw LSPProcessError.serverNotFound(
@@ -366,6 +373,7 @@ final class LSPProcess: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = definition.arguments
         process.environment = environment
+        process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
 
         let input = Pipe()
         let output = Pipe()

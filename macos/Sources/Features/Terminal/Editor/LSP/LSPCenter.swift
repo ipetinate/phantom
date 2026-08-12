@@ -538,7 +538,7 @@ final class LSPCenter: ObservableObject {
 
         let process = LSPProcess(definition: definition)
         do {
-            try await process.start()
+            try await process.start(workingDirectory: key.root)
             let result = try await process.initialize(
                 rootURI: Self.uri(key.root),
                 initializationOptions: initializationOptions
