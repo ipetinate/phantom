@@ -131,6 +131,9 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = true
     @AppStorage("SidebarGroupShowNewTerminal") private var groupShowNewTerminal = true
     @AppStorage("SidebarGroupShowCount") private var groupShowCount = true
+    @AppStorage("SidebarGroupAlwaysShowActions") private var groupAlwaysShowActions = false
+
+    @AppStorage("SidebarChromeAlwaysShowActions") private var chromeAlwaysShowActions = false
 
     var body: some View {
         Form {
@@ -161,6 +164,17 @@ struct SidebarSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section {
+                Toggle("Always Show Toolbar Icons", isOn: $chromeAlwaysShowActions)
+                    .toggleStyle(.switch)
+            } header: {
+                Text("Toolbar")
+            } footer: {
+                Text("New Terminal, New Claude Session, New Group and Refresh appear on hover by default. The sidebar show/hide button is always visible either way.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Tab Info") {
                 Toggle("Show Working Directory", isOn: $showDirectory)
                     .toggleStyle(.switch)
@@ -183,10 +197,12 @@ struct SidebarSettingsView: View {
                     .toggleStyle(.switch)
                 Toggle("Show Terminal Count", isOn: $groupShowCount)
                     .toggleStyle(.switch)
+                Toggle("Always Show Group Actions", isOn: $groupAlwaysShowActions)
+                    .toggleStyle(.switch)
             } header: {
                 Text("Group")
             } footer: {
-                Text("The action icons appear in a group's header on hover. The group's icon, name and color are set per group, from its context menu.")
+                Text("The action icons above appear in a group's header on hover by default — turn this on to keep them visible. The group's icon, name and color are set per group, from its context menu.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

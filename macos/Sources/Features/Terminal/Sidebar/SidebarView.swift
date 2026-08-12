@@ -258,11 +258,19 @@ struct SidebarTitlebarChrome: View {
     @ObservedObject var collapse: SidebarCollapseState = .shared
 
     @State private var isCreatingGroup = false
+    @State private var isHovered = false
 
     /// Mirrors `SidebarView`'s own fallback: a panel switched off in
     /// settings must not leave its buttons behind in the titlebar.
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
+
+    /// Whether the pane actions (new terminal, new Claude session, new
+    /// group, refresh) stay visible without a hover — off by default,
+    /// matching the behavior before this existed. The sidebar show/hide
+    /// button is exempt: hiding it behind a hover would leave no visible
+    /// way to bring a collapsed sidebar back.
+    @AppStorage("SidebarChromeAlwaysShowActions") private var alwaysShowActions = false
 
     private var visiblePane: SidebarPane {
         switch layout.selectedPane {
@@ -276,6 +284,8 @@ struct SidebarTitlebarChrome: View {
         HStack(spacing: 2) {
             if !collapse.isCollapsed {
                 paneActions
+                    .opacity(alwaysShowActions || isHovered ? 1 : 0)
+                    .allowsHitTesting(alwaysShowActions || isHovered)
                     // The tab bar wraps the pane change in `withAnimation`,
                     // and that animation reached in here too: switching
                     // panels animated the whole row, sliding every button
@@ -292,6 +302,7 @@ struct SidebarTitlebarChrome: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: collapse.isCollapsed)
+        .onHover { isHovered = $0 }
     }
 
     /// The buttons here belong to whichever panel is showing — creating a
@@ -499,6 +510,10 @@ private struct SidebarGroupSection: View {
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
 
+    /// Whether the three action icons above stay visible without a hover —
+    /// off by default, matching the behavior before this existed.
+    @AppStorage("SidebarGroupAlwaysShowActions") private var alwaysShowActions = false
+
     @State private var isDropTarget = false
     @State private var isEditing = false
     @State private var isHeaderHovered = false
@@ -599,8 +614,8 @@ private struct SidebarGroupSection: View {
                     GitIcon(size: 11)
                         .foregroundStyle(.secondary)
                 }
-                .opacity(isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(isHeaderHovered)
+                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
                 .popover(isPresented: $isShowingPRs) {
                     GroupPRListView(
                         group: group,
@@ -615,8 +630,8 @@ private struct SidebarGroupSection: View {
                 } label: {
                     ClaudeIcon(size: 12)
                 }
-                .opacity(isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(isHeaderHovered)
+                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
             }
 
             if showNewTerminal {
@@ -627,8 +642,8 @@ private struct SidebarGroupSection: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
-                .opacity(isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(isHeaderHovered)
+                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
             }
 
             if showCount {
@@ -1376,7 +1391,10 @@ private struct SidebarTabRow: View {
                 )
         }
         .buttonStyle(.plain)
-        .help("Open Pull Request #\(number)")
+        // Verbatim for the same reason as the badge above: a plain
+        // interpolation is a LocalizedStringKey, which formats the number
+        // for the locale and turns PR #1234 into "#1.234".
+        .help(Text(verbatim: "Open Pull Request #\(number)"))
     }
 
     /// The clickable dev-server tag: opens the port this tab is serving.
@@ -1406,7 +1424,10 @@ private struct SidebarTabRow: View {
             )
         }
         .buttonStyle(.plain)
-        .help("Open http://localhost:\(port)")
+        // Verbatim for the same reason as the badge above: a plain
+        // interpolation is a LocalizedStringKey, which formats the number
+        // for the locale and turns port 8899 into "8.899".
+        .help(Text(verbatim: "Open http://localhost:\(port)"))
     }
 
     /// Rows always carry a fill, not only when hovered or selected: over a
