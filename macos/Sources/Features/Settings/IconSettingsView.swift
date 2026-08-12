@@ -99,7 +99,7 @@ struct IconSettingsView: View {
                 }
             }
 
-            Text("Clear follows light and dark mode; Default and Dark don't.")
+            Text("Each style is a fixed image — none of them follow the system's light/dark mode.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -133,7 +133,7 @@ private struct IconOption: View {
     @State private var isHovered = false
 
     private var artwork: NSImage? {
-        icon.image(variant: variant, isDark: PhantomAppIconVariantStore.isDarkAppearance)
+        icon.image(variant: variant)
     }
 
     var body: some View {

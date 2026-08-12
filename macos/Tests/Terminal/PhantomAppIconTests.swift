@@ -4,31 +4,19 @@ import Testing
 
 /// The app icon set, its families, and its names.
 struct PhantomAppIconTests {
-    /// Every icon must have artwork in every style, at both appearances. A
-    /// missing export is a build mistake that would otherwise show up as an
-    /// empty square in the picker — and only for the one combination whose
-    /// file was forgotten, which is exactly the kind of gap a spot check
-    /// misses.
+    /// Every icon must have artwork in every style. A missing export is a
+    /// build mistake that would otherwise show up as an empty square in the
+    /// picker — and only for the one combination whose file was forgotten,
+    /// which is exactly the kind of gap a spot check misses.
     @Test @MainActor func everyIconHasArtworkInEveryStyle() {
         for icon in PhantomAppIcon.allCases {
             for variant in PhantomAppIconVariant.allCases {
-                for isDark in [false, true] {
-                    #expect(
-                        icon.image(variant: variant, isDark: isDark) != nil,
-                        "\(icon.rawValue) has no \(variant.fileSuffix(isDark: isDark)) export"
-                    )
-                }
+                #expect(
+                    icon.image(variant: variant) != nil,
+                    "\(icon.rawValue) has no \(variant.fileSuffix) export"
+                )
             }
         }
-    }
-
-    /// The style that is a material follows the system; the two that name an
-    /// appearance override it. Getting this backwards would make "Dark" flip
-    /// to light artwork whenever the system did.
-    @Test func onlyTheMaterialStyleFollowsTheSystem() {
-        #expect(!PhantomAppIconVariant.standard.followsSystemAppearance)
-        #expect(!PhantomAppIconVariant.dark.followsSystemAppearance)
-        #expect(PhantomAppIconVariant.clear.followsSystemAppearance)
     }
 
     /// Tinted is deliberately absent — it washed the ghost out. Asserted so
@@ -37,19 +25,6 @@ struct PhantomAppIconTests {
     @Test func tintedIsNotOffered() {
         #expect(PhantomAppIconVariant(rawValue: "Tinted") == nil)
         #expect(PhantomAppIconVariant.allCases.count == 3)
-    }
-
-    /// A style that follows the system resolves to a different file per
-    /// appearance; one that doesn't resolves to the same file either way.
-    @Test func suffixesResolvePerAppearanceOnlyWhereThatMeansSomething() {
-        for variant in PhantomAppIconVariant.allCases {
-            let light = variant.fileSuffix(isDark: false)
-            let dark = variant.fileSuffix(isDark: true)
-            #expect(
-                (light != dark) == variant.followsSystemAppearance,
-                "\(variant.rawValue) resolves appearances inconsistently with what it claims"
-            )
-        }
     }
 
     /// Families are read from the name, so a new tribute icon needs no extra

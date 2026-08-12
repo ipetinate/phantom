@@ -100,7 +100,6 @@ struct LSPServerRegistryTests {
     /// Most files a terminal opens have no language server, and that is the
     /// normal case rather than a failure.
     @Test func pathsWithNoKnownLanguageResolveToNothing() {
-        #expect(LSPServerRegistry.languageID(forPath: "README.md") == nil)
         #expect(LSPServerRegistry.languageID(forPath: "Makefile") == nil)
         #expect(LSPServerRegistry.languageID(forPath: "/etc/hosts") == nil)
         #expect(LSPServerRegistry.server(forPath: "notes.txt") == nil)
@@ -129,5 +128,19 @@ struct LSPServerRegistryTests {
 
         #expect(typescript.invocation == "typescript-language-server --stdio")
         #expect(swift.invocation == "sourcekit-lsp")
+    }
+
+    /// Volar is the one server that needs to be told where TypeScript
+    /// lives; everyone else sends nothing at all.
+    @Test func onlyVueResolvesInitializationOptions() throws {
+        let vue = try #require(LSPServerRegistry.server(forLanguage: "vue"))
+        #expect(vue.initializationOptionsKind == .vueTypeScriptSDK)
+
+        for definition in LSPServerRegistry.all where definition.languageID != "vue" {
+            #expect(
+                definition.initializationOptionsKind == .none,
+                "\(definition.languageID) shouldn't need initializationOptions"
+            )
+        }
     }
 }

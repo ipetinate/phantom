@@ -15,6 +15,11 @@ import AppKit
 /// Icon Composer also renders a *tinted* style, which is deliberately not
 /// offered: it washed the ghost out to the point of being hard to tell the
 /// icons apart, and an option nobody would pick is just a wider control.
+///
+/// Each style is one fixed image per icon now, not a per-appearance render:
+/// the artwork is hand-delivered (Figma, not Icon Composer's automatic
+/// per-appearance variants), and a single "Clear" look that reads fine in
+/// both light and dark was simpler to draw than two.
 enum PhantomAppIconVariant: String, CaseIterable, Identifiable, Codable, Sendable {
     case standard = "Default"
     case dark = "Dark"
@@ -25,28 +30,8 @@ enum PhantomAppIconVariant: String, CaseIterable, Identifiable, Codable, Sendabl
     /// What the segmented control shows.
     var title: String { rawValue }
 
-    /// Whether this style has separate light and dark renderings.
-    ///
-    /// `Default` and `Dark` are already answers to "which appearance" —
-    /// `Default` *is* the light one. `Clear` is a material, drawn differently
-    /// in light and dark, so it follows the system while the other two
-    /// override it.
-    var followsSystemAppearance: Bool {
-        switch self {
-        case .standard, .dark: return false
-        case .clear: return true
-        }
-    }
-
-    /// The suffix Icon Composer's export uses for this style, given whether
-    /// the system is currently in dark mode.
-    func fileSuffix(isDark: Bool) -> String {
-        switch self {
-        case .standard: return "Default"
-        case .dark: return "Dark"
-        case .clear: return isDark ? "ClearDark" : "ClearLight"
-        }
-    }
+    /// The suffix an artwork filename uses for this style: `"\(icon)-\(suffix).png"`.
+    var fileSuffix: String { rawValue }
 
     /// The default, which is also what the app is compiled with.
     static let `default`: PhantomAppIconVariant = .standard
@@ -67,11 +52,5 @@ enum PhantomAppIconVariantStore {
 
     static func set(_ variant: PhantomAppIconVariant) {
         UserDefaults.standard.set(variant.rawValue, forKey: defaultsKey)
-    }
-
-    /// Whether the system is drawing in dark mode right now, for the two
-    /// styles that follow it.
-    static var isDarkAppearance: Bool {
-        NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 }
