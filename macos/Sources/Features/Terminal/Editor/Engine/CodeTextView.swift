@@ -1233,6 +1233,86 @@ final class CodeNSTextView: NSTextView {
         }
     }
 
+    /// What each opener closes with. Quotes map to themselves: typing one
+    /// is either "open a string" or "step over the one already there"
+    /// depending on what is around the caret, and both halves of that
+    /// decision need to recognise the same character.
+    private static let autoClosingPairs: [Character: Character] = [
+        "(": ")", "[": "]", "{": "}",
+        "\"": "\"", "'": "'", "`": "`"
+    ]
+
+    private static let quoteCharacters: Set<Character> = ["\"", "'", "`"]
+
+    private static func character(in content: NSString, at index: Int) -> Character? {
+        guard index >= 0, index < content.length else { return nil }
+        return Character(UnicodeScalar(content.character(at: index)) ?? " ")
+    }
+
+    /// Closes a bracket or quote as it is typed, and steps over one that is
+    /// already there instead of stacking a second — the two halves every
+    /// editor with this feature needs before it feels usable rather than
+    /// intrusive.
+    ///
+    /// Quotes skip the close when a letter or digit sits on either side of
+    /// the caret: `it's` and `5'` are an apostrophe and a prime mark, not
+    /// the start of a string, and auto-closing them anyway is exactly the
+    /// kind of wrong guess that gets this feature turned back off.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        guard let text = string as? String,
+              text.count == 1,
+              let typed = text.first,
+              selectedRange().length == 0
+        else {
+            super.insertText(string, replacementRange: replacementRange)
+            return
+        }
+
+        let caret = selectedRange().location
+        let content = self.string as NSString
+        let after = Self.character(in: content, at: caret)
+
+        if let after, after == typed, Self.autoClosingPairs.values.contains(typed) {
+            setSelectedRange(NSRange(location: caret + 1, length: 0))
+            return
+        }
+
+        if let closing = Self.autoClosingPairs[typed] {
+            if Self.quoteCharacters.contains(typed) {
+                let before = Self.character(in: content, at: caret - 1)
+                let touchesAWord = [before, after].contains { $0?.isLetter == true || $0?.isNumber == true }
+                if touchesAWord {
+                    super.insertText(string, replacementRange: replacementRange)
+                    return
+                }
+            }
+
+            super.insertText("\(typed)\(closing)", replacementRange: replacementRange)
+            setSelectedRange(NSRange(location: caret + 1, length: 0))
+            return
+        }
+
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    /// Backspacing between an empty auto-closed pair removes both halves in
+    /// one step. Without this, closing a bracket auto-close put there for
+    /// you — and that you then changed your mind about — takes two
+    /// backspaces where every other editor with this feature takes one.
+    override func deleteBackward(_ sender: Any?) {
+        let caret = selectedRange().location
+        if selectedRange().length == 0, caret > 0 {
+            let content = self.string as NSString
+            if let before = Self.character(in: content, at: caret - 1),
+               let after = Self.character(in: content, at: caret),
+               Self.autoClosingPairs[before] == after {
+                super.replaceCharacters(in: NSRange(location: caret - 1, length: 2), with: "")
+                return
+            }
+        }
+        super.deleteBackward(sender)
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard modifiers.contains(.command) else {
