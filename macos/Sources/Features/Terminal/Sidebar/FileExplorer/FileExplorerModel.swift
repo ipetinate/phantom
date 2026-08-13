@@ -27,6 +27,13 @@ struct FileRow: Identifiable, Equatable {
     var id: String { isTruncationNotice ? "\(node.path)#more" : node.path }
 }
 
+/// What a drop did with the item, so the caller knows whether anything
+/// open moved with it.
+enum FileDropOutcome: Equatable {
+    case moved(URL)
+    case copied(URL)
+}
+
 /// What the explorer is asking for a name for, if anything.
 enum FileEditState: Equatable {
     /// Renaming the item at `path`.
@@ -248,11 +255,59 @@ final class FileExplorerModel: ObservableObject {
 
     /// Opens a create field inside `parent`. The name is prefilled with the
     /// next free "untitled" name; the field owns the text until commit.
+    ///
+    /// The folder is opened first. Rows are built by walking down from the
+    /// root through *expanded* folders only, so a placeholder inside a
+    /// collapsed one is never built — and with `editing` set and no field on
+    /// screen, every other action refuses to run behind it and the panel
+    /// wedges until the root changes.
     func beginCreate(in parent: String, isFolder: Bool) {
-        guard editing == nil else { return }
+        guard editing == nil, let root, isInsideRoot(parent) else { return }
+
+        expand(upTo: parent)
+        if children[parent] == nil { load(parent) }
+        if children[root.path] == nil { load(root.path) }
+
         editing = .create(parent: parent, isFolder: isFolder)
         selection = parent
         rebuildRows()
+    }
+
+    /// Whether the field the view is committing is still the one this is
+    /// asking for.
+    ///
+    /// A text field that lost focus can deliver one last commit after the
+    /// edit was cancelled or already committed — a rename against a name
+    /// that has since moved, or a file the user pressed Esc on. Only the
+    /// model knows which edit is live, so the answer has to come from here.
+    func isEditing(_ state: FileEditState) -> Bool {
+        editing == state
+    }
+
+    /// Opens every folder between the root and `directory`, loading what
+    /// hasn't been listed yet, so a row inside it can be built at all.
+    private func expand(upTo directory: String) {
+        guard let root, directory.hasPrefix(root.path) else { return }
+
+        var toOpen: [String] = []
+        var cursor = URL(fileURLWithPath: directory, isDirectory: true)
+        while cursor.path.count > root.path.count {
+            toOpen.append(cursor.path)
+            cursor = cursor.deletingLastPathComponent()
+        }
+
+        var changed = false
+        for dir in toOpen where !expanded.contains(dir) {
+            expanded.insert(dir)
+            changed = true
+        }
+        if changed { persistExpansion() }
+        for dir in toOpen where children[dir] == nil { load(dir) }
+    }
+
+    private func isInsideRoot(_ path: String) -> Bool {
+        guard let root else { return false }
+        return path == root.path || path.hasPrefix(root.path + "/")
     }
 
     /// Creates inside wherever the selection points, or the root.
@@ -299,14 +354,12 @@ final class FileExplorerModel: ObservableObject {
     func commitCreate(parent: String, isFolder: Bool, name: String) -> Result<URL, FileExplorerError> {
         editing = nil
 
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        let target = URL(fileURLWithPath: parent, isDirectory: true)
-            .appendingPathComponent(trimmed)
+        let directory = URL(fileURLWithPath: parent, isDirectory: true)
         let result = isFolder
-            ? FileExplorerFilesystem.createFolder(at: target)
-            : FileExplorerFilesystem.createFile(at: target)
+            ? FileExplorerFilesystem.createFolder(named: name, in: directory)
+            : FileExplorerFilesystem.createFile(named: name, in: directory)
         switch result {
-        case .success:
+        case .success(let target):
             selection = target.path
             reloaded(parent)
             rebuildRows()
@@ -351,6 +404,33 @@ final class FileExplorerModel: ObservableObject {
             errorMessage = error.message
         }
         return result
+    }
+
+    /// Takes a dropped item into `directory`, moving it when it already
+    /// belongs to this tree and copying it when it came from outside.
+    ///
+    /// The outcome says which happened, because only a move takes an open
+    /// tab with it — a copy leaves the original, and its tab, exactly where
+    /// they were.
+    @discardableResult
+    func drop(path: String, into directory: String) -> Result<FileDropOutcome, FileExplorerError> {
+        let source = URL(fileURLWithPath: path)
+        guard FileExplorerFilesystem.isInside(source, root: root?.path ?? "") else {
+            let result = FileExplorerFilesystem.copy(
+                source,
+                into: URL(fileURLWithPath: directory, isDirectory: true)
+            )
+            switch result {
+            case .success(let target):
+                reloaded(directory)
+                rebuildRows()
+                return .success(.copied(target))
+            case .failure(let error):
+                errorMessage = error.message
+                return .failure(error)
+            }
+        }
+        return move(path: path, into: directory).map { .moved($0) }
     }
 
     /// The id of the create placeholder row, for scrolling it into view.

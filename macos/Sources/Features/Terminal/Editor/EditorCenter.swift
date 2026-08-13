@@ -168,7 +168,21 @@ final class EditorCenter: ObservableObject {
         lastSelectedFile = path
     }
 
-    /// A file renamed or moved in the file explorer while open here.
+    /// The open documents a change to `path` reaches: the file itself, and
+    /// everything inside it when `path` is a folder.
+    ///
+    /// Matching the exact key alone is what made renaming a folder a silent
+    /// no-op — the tabs for the files under it kept paths that no longer
+    /// existed, watched a stale inode, and failed on save. A folder is not
+    /// a document here, so it never matches by itself; the files under it
+    /// are the ones that have to move.
+    private func documentPaths(under path: String) -> [String] {
+        let prefix = path + "/"
+        return documents.keys.filter { $0 == path || $0.hasPrefix(prefix) }
+    }
+
+    /// A file or folder renamed or moved in the file explorer while open
+    /// here.
     ///
     /// The buffer travels with it — renaming a file you are editing should
     /// not throw the edits away — and the tab keeps its place in the bar.
@@ -176,6 +190,19 @@ final class EditorCenter: ObservableObject {
     /// open through the pane's existing appear/disappear calls.
     func repath(from oldPath: String, to newPath: String) {
         guard oldPath != newPath else { return }
+
+        for path in documentPaths(under: oldPath) {
+            let moved = path == oldPath
+                ? newPath
+                : newPath + String(path.dropFirst(oldPath.count))
+            repathDocument(from: path, to: moved)
+        }
+    }
+
+    /// Moves one open document, with all of its bookkeeping: the watcher
+    /// follows the file, the dirty-dot observer is rebound to the new key,
+    /// and the tab keeps its position.
+    private func repathDocument(from oldPath: String, to newPath: String) {
         guard let document = documents.removeValue(forKey: oldPath) else { return }
 
         document.stopWatching()
@@ -197,12 +224,17 @@ final class EditorCenter: ObservableObject {
         if lastSelectedFile == oldPath { lastSelectedFile = newPath }
     }
 
-    /// A file deleted in the file explorer stops being a tab, and the
-    /// language server stops hearing about it.
+    /// A file or folder deleted in the file explorer stops being a tab, and
+    /// the language server stops hearing about it.
+    ///
+    /// Deleting a folder closes everything that was open inside it: those
+    /// tabs now point into the Trash, and leaving them open means the next
+    /// save recreates a file in a directory the user just threw away.
     func didDelete(path: String) {
-        guard documents[path] != nil else { return }
-        LSPCenter.shared.didClose(path: path)
-        close(path)
+        for open in documentPaths(under: path) {
+            LSPCenter.shared.didClose(path: open)
+            close(open)
+        }
     }
 
     // MARK: Saving

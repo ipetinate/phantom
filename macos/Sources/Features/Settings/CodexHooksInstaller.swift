@@ -35,15 +35,50 @@ enum CodexHooksInstaller {
         ("SessionEnd", "ended"),
     ]
 
-    private static let scriptBody = """
+    /// ⚠️ The id extraction here is written blind. Claude Code documents a
+    /// JSON payload on stdin with a `session_id`; Codex's hook payload was
+    /// not available to check, and Codex is not installed on the machine
+    /// this was written on, so the key names below are candidates rather
+    /// than facts. Every one of them failing is a supported outcome: the
+    /// script then reports the state alone, exactly as it did before, and
+    /// the tab resumes with `codex resume --last`.
+    static let scriptBody = #"""
     #!/bin/bash
     # Reports Codex session state to the Phantom sidebar.
     [ -n "$GHOSTTY_TAB_STATE_FILE" ] || exit 0
     STATE="$1"
-    printf '%s' "$STATE" > "$GHOSTTY_TAB_STATE_FILE.tmp" \
+
+    PAYLOAD=""
+    if [ ! -t 0 ]; then
+      PAYLOAD=$(cat 2>/dev/null)
+    fi
+    FLAT=$(printf '%s' "$PAYLOAD" | tr -d '\n')
+
+    SESSION=""
+    for KEY in session_id sessionId conversation_id conversationId thread_id; do
+      [ -n "$SESSION" ] && break
+      SESSION=$(printf '%s' "$FLAT" \
+        | sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p")
+    done
+
+    # A dash-leading id is a flag, not an id, once it reaches `codex resume`.
+    case "$SESSION" in
+      -*|*[!A-Za-z0-9._-]*) SESSION="" ;;
+    esac
+
+    if [ -z "$SESSION" ] && [ -f "$GHOSTTY_TAB_STATE_FILE" ]; then
+      SESSION=$(sed -n 's/^session=//p' "$GHOSTTY_TAB_STATE_FILE" | head -n 1)
+    fi
+
+    {
+      printf '%s\nagent=codex\n' "$STATE"
+      if [ -n "$SESSION" ]; then
+        printf 'session=%s\n' "$SESSION"
+      fi
+    } > "$GHOSTTY_TAB_STATE_FILE.tmp" \
       && mv "$GHOSTTY_TAB_STATE_FILE.tmp" "$GHOSTTY_TAB_STATE_FILE"
     exit 0
-    """
+    """#
 
     static private(set) var lastError: String?
 
@@ -66,7 +101,9 @@ enum CodexHooksInstaller {
             return fail("writing Codex hook script", error)
         }
 
-        var settings = readSettings() ?? [:]
+        guard var settings = readSettings() else {
+            return fail("hooks.json is unreadable or isn't a JSON object")
+        }
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
         for (event, state) in eventStates {
             var entries = hooks[event] as? [[String: Any]] ?? []
@@ -89,7 +126,9 @@ enum CodexHooksInstaller {
 
     @discardableResult
     static func uninstall() -> Bool {
-        var settings = readSettings() ?? [:]
+        guard var settings = readSettings() else {
+            return fail("hooks.json is unreadable or isn't a JSON object")
+        }
         if var hooks = settings["hooks"] as? [String: Any] {
             for (event, value) in hooks {
                 guard var entries = value as? [[String: Any]] else { continue }
@@ -106,9 +145,25 @@ enum CodexHooksInstaller {
         return true
     }
 
-    private static func readSettings() -> [String: Any]? {
-        guard let data = try? Data(contentsOf: settingsURL) else { return [:] }
+    /// Reads `hooks.json`, telling "there is nothing here yet" apart from
+    /// "there is something here this doesn't understand".
+    ///
+    /// An empty dictionary means the file is absent or empty, which the
+    /// installer may safely create. Nil means a file exists that isn't a
+    /// JSON object — hand-edited, half-written, a top-level array — and the
+    /// installer must leave it alone. Collapsing the two is what let a
+    /// single malformed byte turn the user's whole Codex configuration into
+    /// Phantom's six hooks, atomically and while reporting success.
+    static func readSettings(at url: URL) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: url) else {
+            return FileManager.default.fileExists(atPath: url.path) ? nil : [:]
+        }
+        guard !data.isEmpty else { return [:] }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    private static func readSettings() -> [String: Any]? {
+        readSettings(at: settingsURL)
     }
 
     private static func writeSettings(_ settings: [String: Any]) -> Bool {

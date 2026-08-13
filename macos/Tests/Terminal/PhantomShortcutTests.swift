@@ -358,6 +358,36 @@ struct FileExplorerFilesystemTests {
         #expect(try FileExplorerFilesystem.rename(url, to: "a.txt").get() == url)
     }
 
+    /// Fixing the capitalisation of a name is a rename people do all the
+    /// time, and on the default case-insensitive volume the target "already
+    /// exists" — it is the same file. The collision check had no way to tell
+    /// that from a real clash, so it refused the rename outright.
+    @Test func renameCanChangeNothingButTheCase() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "readme.md")
+
+        let target = try FileExplorerFilesystem.rename(
+            base.appendingPathComponent("readme.md"), to: "README.md"
+        ).get()
+
+        #expect(target.lastPathComponent == "README.md")
+        let listed = try FileManager.default.contentsOfDirectory(atPath: base.path)
+        #expect(listed.contains("README.md"))
+        #expect(!listed.contains("readme.md"))
+    }
+
+    @Test func aFolderCanBeRecasedToo() throws {
+        let base = try tempDirectory()
+        try makeDir(base, "sources")
+
+        let target = try FileExplorerFilesystem.rename(
+            base.appendingPathComponent("sources", isDirectory: true), to: "Sources"
+        ).get()
+
+        #expect(target.lastPathComponent == "Sources")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: base.path).contains("Sources"))
+    }
+
     // MARK: Move
 
     @Test func movePutsTheFileIntoTheFolder() throws {
@@ -438,11 +468,128 @@ struct FileExplorerFilesystemTests {
         }
     }
 
+    @Test func createFileTakesTheNameAndTheFolderSeparately() throws {
+        let base = try tempDirectory()
+        let url = try FileExplorerFilesystem.createFile(named: "notes.txt", in: base).get()
+
+        #expect(url == base.appendingPathComponent("notes.txt"))
+        #expect(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test func createFolderTakesTheNameAndTheFolderSeparately() throws {
+        let base = try tempDirectory()
+        let url = try FileExplorerFilesystem.createFolder(named: "src", in: base).get()
+
+        var isDirectory: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        #expect(isDirectory.boolValue)
+    }
+
     @Test func createRefusesANameWithAPathSeparator() throws {
         let base = try tempDirectory()
         #expect(throws: (any Error).self) {
-            try FileExplorerFilesystem.createFile(at: base.appendingPathComponent("a/b.txt")).get()
+            try FileExplorerFilesystem.createFile(named: "a/b.txt", in: base).get()
         }
+        #expect(!FileManager.default.fileExists(atPath: base.appendingPathComponent("a").path))
+    }
+
+    /// The traversal the old check could not see. `appendingPathComponent`
+    /// eats the "..", so by the time the name reached the filesystem its
+    /// `lastPathComponent` was the perfectly ordinary "escape.txt" — while
+    /// the URL pointed one directory above the tree. The typed string is the
+    /// only place the climb is still visible, so it is the only place worth
+    /// checking.
+    @Test func createRefusesANameThatClimbsOutOfTheFolder() throws {
+        let base = try tempDirectory()
+        let inside = base.appendingPathComponent("project", isDirectory: true)
+        try FileManager.default.createDirectory(at: inside, withIntermediateDirectories: true)
+
+        #expect(throws: (any Error).self) {
+            try FileExplorerFilesystem.createFile(named: "../escape.txt", in: inside).get()
+        }
+        #expect(!FileManager.default.fileExists(atPath: base.appendingPathComponent("escape.txt").path))
+    }
+
+    @Test func createFolderRefusesANameThatClimbsOutOfTheFolder() throws {
+        let base = try tempDirectory()
+        let inside = base.appendingPathComponent("project", isDirectory: true)
+        try FileManager.default.createDirectory(at: inside, withIntermediateDirectories: true)
+
+        #expect(throws: (any Error).self) {
+            try FileExplorerFilesystem.createFolder(named: "../escaped", in: inside).get()
+        }
+        #expect(!FileManager.default.fileExists(atPath: base.appendingPathComponent("escaped").path))
+    }
+
+    @Test func createRefusesAnAbsolutePath() throws {
+        let base = try tempDirectory()
+        #expect(throws: (any Error).self) {
+            try FileExplorerFilesystem.createFile(named: "/tmp/elsewhere.txt", in: base).get()
+        }
+    }
+
+    @Test func createRefusesTheDotNames() throws {
+        let base = try tempDirectory()
+        #expect(throws: (any Error).self) {
+            try FileExplorerFilesystem.createFile(named: "..", in: base).get()
+        }
+        #expect(throws: (any Error).self) {
+            try FileExplorerFilesystem.createFolder(named: ".", in: base).get()
+        }
+    }
+
+    // MARK: Copy and drop origin
+
+    /// A file dragged in from Finder is copied, so the original stays where
+    /// its owner left it.
+    @Test func copyLeavesTheOriginalBehind() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "a.txt")
+        try makeDir(base, "folder")
+
+        let source = base.appendingPathComponent("a.txt")
+        let target = try FileExplorerFilesystem.copy(
+            source, into: base.appendingPathComponent("folder", isDirectory: true)
+        ).get()
+
+        #expect(target.path == base.appendingPathComponent("folder/a.txt").path)
+        #expect(FileManager.default.fileExists(atPath: target.path))
+        #expect(FileManager.default.fileExists(atPath: source.path), "the original must survive")
+    }
+
+    @Test func copyRefusesANameClash() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "a.txt")
+        try makeDir(base, "folder")
+        try makeFile(base, "folder/a.txt")
+
+        #expect(throws: (any Error).self) {
+            try FileExplorerFilesystem.copy(
+                base.appendingPathComponent("a.txt"),
+                into: base.appendingPathComponent("folder", isDirectory: true)
+            ).get()
+        }
+    }
+
+    @Test func somethingAlreadyInTheTreeCountsAsInside() {
+        #expect(FileExplorerFilesystem.isInside(URL(fileURLWithPath: "/work/app/a.ts"), root: "/work"))
+        #expect(FileExplorerFilesystem.isInside(URL(fileURLWithPath: "/work"), root: "/work"))
+    }
+
+    @Test func somethingFromElsewhereCountsAsOutside() {
+        #expect(!FileExplorerFilesystem.isInside(
+            URL(fileURLWithPath: "/Users/x/Downloads/a.ts"), root: "/work"
+        ))
+    }
+
+    /// A sibling whose name starts with the root's is not inside it — the
+    /// same separator rule the editor's own repath needs.
+    @Test func aSiblingSharingTheRootsPrefixIsOutside() {
+        #expect(!FileExplorerFilesystem.isInside(URL(fileURLWithPath: "/work-2/a.ts"), root: "/work"))
+    }
+
+    @Test func nothingIsInsideAnAbsentRoot() {
+        #expect(!FileExplorerFilesystem.isInside(URL(fileURLWithPath: "/work/a.ts"), root: ""))
     }
 
     // MARK: Unique and proposed names
