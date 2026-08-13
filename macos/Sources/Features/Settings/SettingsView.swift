@@ -228,6 +228,7 @@ struct BehaviorsSettingsView: View {
 
     @AppStorage("SidebarRestoreAgentSessions") private var restoreAgentSessions = true
     @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
+    @AppStorage("SidebarNewTabHomeDirectory") private var newTabHomeDirectory = ""
     @AppStorage("AgentNotificationsEnabled") private var agentNotifications = true
     @AppStorage(FileOpenTarget.defaultsKey)
     private var fileOpenTarget = FileOpenTarget.alwaysNewTerminal.rawValue
@@ -259,11 +260,23 @@ struct BehaviorsSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Sidebar") {
+            Section {
                 Picker("New Terminal Position", selection: $newTabPosition) {
                     Text("Bottom of List").tag("end")
                     Text("Top of List").tag("start")
                 }
+
+                TextField(
+                    "New Terminal Home Directory",
+                    text: $newTabHomeDirectory,
+                    prompt: Text("~/")
+                )
+            } header: {
+                Text("Sidebar")
+            } footer: {
+                Text("New terminals and agents created by the sidebar start in the default home directory (`~/`) unless a group's project path applies. Type a path like `~/dev` to change it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {

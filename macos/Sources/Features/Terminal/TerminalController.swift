@@ -1625,9 +1625,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// Creates a terminal tab that starts inside the given group.
     ///
     /// Working directory rule: project groups start at the project root;
-    /// manual groups (and the ungrouped section) start at the pwd of the
-    /// currently selected tab. The new surface is pinned to the group so
-    /// later `cd`s never move it out.
+    /// manual groups start at the pwd of the tab selected *inside the
+    /// group*, falling back to the group's first terminal; the ungrouped
+    /// section starts at the configured default home (`~/` unless changed
+    /// in Behaviors). The new surface is pinned to the group so later
+    /// `cd`s never move it out.
     @discardableResult
     private func newSidebarTab(
         in group: SidebarGroup?,
@@ -1639,12 +1641,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         guard let window else { return nil }
 
         var baseConfig = Ghostty.SurfaceConfiguration()
-        if case .project(let root) = group?.kind {
-            baseConfig.workingDirectory = (root as NSString).expandingTildeInPath
-        } else if let selected = sidebarTabManager?.models.first(where: { $0.isSelected }),
-                  let pwd = selected.pwd, !pwd.isEmpty {
-            baseConfig.workingDirectory = pwd
-        }
+        baseConfig.workingDirectory = sidebarNewTabDirectory(in: group)
 
         guard let controller = Self.newTab(ghostty, from: window, withBaseConfig: baseConfig)
         else { return nil }
@@ -1677,6 +1674,48 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         sidebarTabManager?.scheduleRefresh()
         controller.sidebarTabManager?.scheduleRefresh()
         return surface
+    }
+
+    /// Resolves the working directory for a new sidebar terminal, per the
+    /// sidebar rule:
+    ///  - project groups open at the project root;
+    ///  - manual groups open at the pwd of the tab selected inside the
+    ///    group, else the group's first terminal;
+    ///  - the ungrouped section opens at the configured default home.
+    private func sidebarNewTabDirectory(in group: SidebarGroup?) -> String {
+        switch group?.kind {
+        case .project(let root):
+            return (root as NSString).expandingTildeInPath
+
+        case .manual, .none:
+            if let group {
+                let members = sidebarTabManager?.models.filter { model in
+                    SidebarGroupStore.shared.resolveGroup(
+                        surfaceId: model.surfaceId,
+                        pwd: model.pwd
+                    )?.id == group.id
+                } ?? []
+                if let selected = members.first(where: { $0.isSelected }),
+                   let pwd = selected.pwd, !pwd.isEmpty {
+                    return pwd
+                }
+                if let first = members.first, let pwd = first.pwd, !pwd.isEmpty {
+                    return pwd
+                }
+            }
+            return Self.sidebarDefaultHomeDirectory
+        }
+    }
+
+    /// The home directory new sidebar terminals start in when no group
+    /// rule applies. Defaults to the user's home; overridable in Behaviors.
+    static var sidebarDefaultHomeDirectory: String {
+        let configured = UserDefaults.standard.string(forKey: "SidebarNewTabHomeDirectory") ?? ""
+        let expanded = (configured as NSString).expandingTildeInPath
+        guard !expanded.isEmpty else {
+            return FileManager.default.homeDirectoryForCurrentUser.path
+        }
+        return expanded
     }
 
     /// Opens a file in this window's editor, explaining it when the editor
