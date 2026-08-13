@@ -30,6 +30,12 @@ final class SidebarLayoutModel: ObservableObject {
     /// Creates a new terminal tab that immediately starts a Claude session.
     var onNewClaudeTab: () -> Void = {}
 
+    /// Creates a new terminal tab that immediately starts a Codex session.
+    var onNewCodexTab: () -> Void = {}
+
+    /// Creates a new terminal tab that immediately starts an OpenCode session.
+    var onNewOpenCodeTab: () -> Void = {}
+
     /// Which panel the sidebar is showing.
     ///
     /// Per-window, and deliberately **not** persisted. Every terminal tab is

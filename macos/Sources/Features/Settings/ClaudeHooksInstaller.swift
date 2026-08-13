@@ -35,6 +35,9 @@ enum ClaudeHooksInstaller {
         ("PostToolUse", "working"),
         ("PermissionRequest", "awaiting"),
         ("Stop", "done"),
+        ("StopFailure", "failed"),
+        ("PermissionDenied", "denied"),
+        ("Notification", "notify"),
         ("SessionEnd", "ended"),
     ]
 

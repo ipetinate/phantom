@@ -193,6 +193,13 @@ final class ThemePalette: ObservableObject {
         primary.map { Color(nsColor: $0) }
     }
 
+    /// ANSI index 5 (Magenta) — the "waiting for input" hand colour, kept
+    /// distinct from the blue accent so the two attention signals read
+    /// differently.
+    var magenta: Color? {
+        colors.count > 5 ? Color(nsColor: colors[5]) : nil
+    }
+
     /// Whether the theme reads as light, which decides whether app windows
     /// take light or dark chrome regardless of the system setting.
     var isLightBackground: Bool {

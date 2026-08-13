@@ -1331,6 +1331,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         layout.onNewClaudeTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningClaude: true)
         }
+        layout.onNewCodexTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningCodex: true)
+        }
+        layout.onNewOpenCodeTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningOpenCode: true)
+        }
         self.sidebarLayout = layout
 
         let sidebarHosting = NSHostingView(rootView: SidebarView(
@@ -1343,6 +1349,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             },
             onNewClaudeTabInGroup: { [weak self] group in
                 self?.newSidebarTab(in: group, runningClaude: true)
+            },
+            onNewCodexTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningCodex: true)
+            },
+            onNewOpenCodeTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningOpenCode: true)
             },
             onSpawnTerminalBesideSelection: { [weak self] in
                 self?.newSidebarTabBesideSelection()
@@ -1617,6 +1629,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     private func newSidebarTab(
         in group: SidebarGroup?,
         runningClaude: Bool = false,
+        runningCodex: Bool = false,
+        runningOpenCode: Bool = false,
         inheritingPane: Bool = false
     ) -> Ghostty.SurfaceView? {
         guard let window else { return nil }
@@ -1647,6 +1661,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         if runningClaude, let surface {
             ClaudeSession.run("claude", in: surface)
+        }
+        if runningCodex, let surface {
+            ClaudeSession.run("codex", in: surface)
+        }
+        if runningOpenCode, let surface {
+            ClaudeSession.run("opencode", in: surface)
         }
 
         guard let group, let surface else { return surface }

@@ -77,7 +77,7 @@ struct SettingsRootView: View {
                 AgentsSettingsView()
             }
         }
-        .frame(minWidth: 700, minHeight: 480)
+        .frame(minWidth: 960, minHeight: 600)
     }
 }
 
@@ -287,57 +287,105 @@ struct BehaviorsSettingsView: View {
 /// that surface agent activity in the sidebar. Claude Code today; more
 /// agents later.
 struct AgentsSettingsView: View {
-    @State private var installed = ClaudeHooksInstaller.isInstalled
+    @State private var claudeInstalled = ClaudeHooksInstaller.isInstalled
+    @State private var codexInstalled = CodexHooksInstaller.isInstalled
+    @State private var openCodeInstalled = OpenCodeHooksInstaller.isInstalled
     @State private var feedback: String?
+
+    @AppStorage("SidebarShowClaude") private var sidebarShowClaude = true
+    @AppStorage("SidebarShowCodex") private var sidebarShowCodex = true
+    @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = true
+    @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = true
+    @AppStorage("SidebarShowOpenCode") private var sidebarShowOpenCode = true
+    @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = true
 
     var body: some View {
         Form {
+            Section("Sidebar") {
+                Toggle(isOn: $sidebarShowClaude) {
+                    HStack(spacing: 6) { ClaudeIcon(size: 14, tint: .original); Text("Claude Code") }
+                }
+                .toggleStyle(.switch)
+                Toggle(isOn: $sidebarShowCodex) {
+                    HStack(spacing: 6) { CodexIcon(size: 14, originalColors: true); Text("Codex") }
+                }
+                .toggleStyle(.switch)
+                Toggle(isOn: $sidebarShowOpenCode) {
+                    HStack(spacing: 6) { OpenCodeIcon(size: 14, originalColors: true); Text("OpenCode") }
+                }
+                .toggleStyle(.switch)
+            }
+
             Section {
-                LabeledContent {
-                    HStack(spacing: 10) {
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(installed ? Color.green : Color.secondary)
-                                .frame(width: 7, height: 7)
-                            Text(installed ? "Hooks installed" : "Not installed")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if installed {
-                            Button("Uninstall") {
-                                let ok = ClaudeHooksInstaller.uninstall()
-                                installed = ClaudeHooksInstaller.isInstalled
-                                feedback = ok && !installed
-                                    ? "Hooks removed"
-                                    : "Removal failed: \(ClaudeHooksInstaller.lastError ?? "check ~/.claude/settings.json")"
-                            }
-                        } else {
-                            Button("Install") {
-                                let ok = ClaudeHooksInstaller.install()
-                                installed = ClaudeHooksInstaller.isInstalled
-                                feedback = ok && installed
-                                    ? "Hooks installed \u{2713}"
-                                    : "Install failed: \(ClaudeHooksInstaller.lastError ?? "status did not update")"
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        ClaudeIcon(size: 14, tint: .original)
-                        Text("Claude Code")
-                    }
+                Toggle(isOn: $groupShowClaude) {
+                    HStack(spacing: 6) { ClaudeIcon(size: 14, tint: .original); Text("Claude Code") }
                 }
-
-                if let feedback {
-                    Text(feedback)
-                        .font(.caption)
-                        .foregroundStyle(feedback.contains("failed") ? .red : .secondary)
+                .toggleStyle(.switch)
+                Toggle(isOn: $groupShowCodex) {
+                    HStack(spacing: 6) { CodexIcon(size: 14, originalColors: true); Text("Codex") }
                 }
+                .toggleStyle(.switch)
+                Toggle(isOn: $groupShowOpenCode) {
+                    HStack(spacing: 6) { OpenCodeIcon(size: 14, originalColors: true); Text("OpenCode") }
+                }
+                .toggleStyle(.switch)
+            } header: {
+                Text("Groups")
+            } footer: {
+                Text("Control the new-agent buttons independently in the main sidebar and in each group header.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                agentHookRow(
+                    title: "Claude Code",
+                    icon: AnyView(ClaudeIcon(size: 14, tint: .original)),
+                    installed: claudeInstalled,
+                    install: {
+                        let ok = ClaudeHooksInstaller.install()
+                        claudeInstalled = ClaudeHooksInstaller.isInstalled
+                        feedback = ok && claudeInstalled ? "Claude hooks installed ✓" : "Claude install failed: \(ClaudeHooksInstaller.lastError ?? "status did not update")"
+                    },
+                    uninstall: {
+                        let ok = ClaudeHooksInstaller.uninstall()
+                        claudeInstalled = ClaudeHooksInstaller.isInstalled
+                        feedback = ok && !claudeInstalled ? "Claude hooks removed" : "Claude removal failed"
+                    }
+                )
+                agentHookRow(
+                    title: "Codex",
+                    icon: AnyView(CodexIcon(size: 14, originalColors: true)),
+                    installed: codexInstalled,
+                    install: {
+                        let ok = CodexHooksInstaller.install()
+                        codexInstalled = CodexHooksInstaller.isInstalled
+                        feedback = ok && codexInstalled ? "Codex hooks installed ✓" : "Codex install failed: \(CodexHooksInstaller.lastError ?? "status did not update")"
+                    },
+                    uninstall: {
+                        let ok = CodexHooksInstaller.uninstall()
+                        codexInstalled = CodexHooksInstaller.isInstalled
+                        feedback = ok && !codexInstalled ? "Codex hooks removed" : "Codex removal failed"
+                    }
+                )
+                agentHookRow(
+                    title: "OpenCode",
+                    icon: AnyView(OpenCodeIcon(size: 14, originalColors: true)),
+                    installed: openCodeInstalled,
+                    install: {
+                        openCodeInstalled = OpenCodeHooksInstaller.install()
+                        feedback = openCodeInstalled ? "OpenCode hooks installed ✓" : "OpenCode install failed"
+                    },
+                    uninstall: {
+                        openCodeInstalled = !OpenCodeHooksInstaller.uninstall()
+                        feedback = openCodeInstalled ? "OpenCode removal failed" : "OpenCode hooks removed"
+                    }
+                )
+                if let feedback { Text(feedback).font(.caption).foregroundStyle(feedback.contains("failed") ? .red : .secondary) }
             } header: {
                 Text("Hooks")
             } footer: {
-                Text("Installs a hook script in ~/.claude/hooks and registers it in ~/.claude/settings.json (existing hooks are preserved). With the hooks in place, tabs running Claude Code show a spinner while it works, a bubble while it waits for input, and an attention dot when a response is ready — and sessions resume on window restore.")
+                Text("Installs Phantom hooks for each agent while preserving existing configuration. Hooks update the tab activity indicator when an agent is working, waiting, or done.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -346,7 +394,9 @@ struct AgentsSettingsView: View {
         .navigationTitle("Agents")
         .onAppear {
             ClaudeHooksInstaller.logStatus()
-            installed = ClaudeHooksInstaller.isInstalled
+            claudeInstalled = ClaudeHooksInstaller.isInstalled
+            codexInstalled = CodexHooksInstaller.isInstalled
+            openCodeInstalled = OpenCodeHooksInstaller.isInstalled
         }
         // Claude Code owns this settings file too and rewrites it when its
         // own settings change, which can drop our registrations. Recheck on
@@ -356,7 +406,29 @@ struct AgentsSettingsView: View {
                 for: NSApplication.didBecomeActiveNotification
             )
         ) { _ in
-            installed = ClaudeHooksInstaller.isInstalled
+            claudeInstalled = ClaudeHooksInstaller.isInstalled
+            codexInstalled = CodexHooksInstaller.isInstalled
+            openCodeInstalled = OpenCodeHooksInstaller.isInstalled
+        }
+    }
+
+    private func agentHookRow(
+        title: String,
+        icon: AnyView,
+        installed: Bool,
+        install: @escaping () -> Void,
+        uninstall: @escaping () -> Void
+    ) -> some View {
+        LabeledContent {
+            HStack(spacing: 10) {
+                HStack(spacing: 4) {
+                    Circle().fill(installed ? Color.green : Color.secondary).frame(width: 7, height: 7)
+                    Text(installed ? "Hooks installed" : "Not installed").font(.caption).foregroundStyle(.secondary)
+                }
+                Button(installed ? "Uninstall" : "Install") { installed ? uninstall() : install() }
+            }
+        } label: {
+            HStack(spacing: 6) { icon; Text(title) }
         }
     }
 }

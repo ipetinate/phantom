@@ -71,6 +71,10 @@ struct SidebarView: View {
     /// Same as `onNewTabInGroup`, with a Claude session started in it.
     var onNewClaudeTabInGroup: (SidebarGroup?) -> Void = { _ in }
 
+    /// Same as `onNewTabInGroup`, with a Codex session started in it.
+    var onNewCodexTabInGroup: (SidebarGroup?) -> Void = { _ in }
+    var onNewOpenCodeTabInGroup: (SidebarGroup?) -> Void = { _ in }
+
     /// Opens a terminal directly beside the selected one — same group, or
     /// ungrouped if that's where the selection lives — and hands back its
     /// surface. The panels open every file in one of these; see
@@ -128,6 +132,8 @@ struct SidebarView: View {
     /// to `UserDefaults` directly, which SwiftUI has no way to observe.
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
+    @AppStorage("SidebarShowClaude") private var showClaude = true
+    @AppStorage("SidebarShowCodex") private var showCodex = true
 
     private var enabledPanes: [SidebarPane] {
         SidebarPane.allCases.filter { pane in
@@ -189,7 +195,9 @@ struct SidebarView: View {
                             store: store,
                             dragState: dragState,
                             onNewTab: onNewTabInGroup,
-                            onNewClaudeTab: onNewClaudeTabInGroup
+                            onNewClaudeTab: onNewClaudeTabInGroup,
+                            onNewCodexTab: onNewCodexTabInGroup,
+                            onNewOpenCodeTab: onNewOpenCodeTabInGroup
                         )
                         .transition(.opacity)
                     }
@@ -264,6 +272,9 @@ struct SidebarTitlebarChrome: View {
     /// settings must not leave its buttons behind in the titlebar.
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
+    @AppStorage("SidebarShowClaude") private var showClaude = true
+    @AppStorage("SidebarShowCodex") private var showCodex = true
+    @AppStorage("SidebarShowOpenCode") private var showOpenCode = true
 
     /// Whether the pane actions (new terminal, new Claude session, new
     /// group, refresh) stay visible without a hover — off by default,
@@ -320,10 +331,26 @@ struct SidebarTitlebarChrome: View {
             SidebarChromeButton(icon: "plus", help: "New Terminal") {
                 layout.onNewTab()
             }
-            SidebarIconButton(help: "New Claude Session") {
-                layout.onNewClaudeTab()
-            } label: {
-                ClaudeIcon(size: 12)
+            if showClaude {
+                SidebarIconButton(help: "New Claude Session") {
+                    layout.onNewClaudeTab()
+                } label: {
+                    ClaudeIcon(size: 12)
+                }
+            }
+            if showCodex {
+                SidebarIconButton(help: "New Codex Session") {
+                    layout.onNewCodexTab()
+                } label: {
+                    CodexIcon(size: 12)
+                }
+            }
+            if showOpenCode {
+                SidebarIconButton(help: "New OpenCode Session") {
+                    layout.onNewOpenCodeTab()
+                } label: {
+                    OpenCodeIcon(size: 12)
+                }
             }
             SidebarChromeButton(icon: "folder.badge.plus", help: "New Group") {
                 isCreatingGroup = true
@@ -502,11 +529,15 @@ private struct SidebarGroupSection: View {
     let dragState: SidebarDragState
     var onNewTab: (SidebarGroup?) -> Void = { _ in }
     var onNewClaudeTab: (SidebarGroup?) -> Void = { _ in }
+    var onNewCodexTab: (SidebarGroup?) -> Void = { _ in }
+    var onNewOpenCodeTab: (SidebarGroup?) -> Void = { _ in }
 
     @ObservedObject private var palette: ThemePalette = .shared
 
     @AppStorage("SidebarGroupShowPullRequests") private var showPullRequests = true
     @AppStorage("SidebarGroupShowClaude") private var showClaude = true
+    @AppStorage("SidebarGroupShowCodex") private var showCodex = true
+    @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = true
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
 
@@ -634,6 +665,26 @@ private struct SidebarGroupSection: View {
                 .allowsHitTesting(alwaysShowActions || isHeaderHovered)
             }
 
+            if showCodex {
+                SidebarIconButton(help: "New Codex Session in Group") {
+                    onNewCodexTab(group)
+                } label: {
+                    CodexIcon(size: 12)
+                }
+                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+            }
+
+            if showOpenCode {
+                SidebarIconButton(help: "New OpenCode Session in Group") {
+                    onNewOpenCodeTab(group)
+                } label: {
+                    OpenCodeIcon(size: 12)
+                }
+                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+            }
+
             if showNewTerminal {
                 SidebarIconButton(help: "New Terminal in Group") {
                     onNewTab(group)
@@ -668,6 +719,8 @@ private struct SidebarGroupSection: View {
     private var groupMenu: some View {
         Button("New Terminal in Group") { onNewTab(group) }
         Button("New Claude Session in Group") { onNewClaudeTab(group) }
+        Button("New Codex Session in Group") { onNewCodexTab(group) }
+        Button("New OpenCode Session in Group") { onNewOpenCodeTab(group) }
 
         Divider()
 
@@ -763,6 +816,7 @@ private struct GroupStatusRollup: View {
     let tabs: [SidebarTabModel]
     let accent: Color?
 
+    @ObservedObject private var themePalette: ThemePalette = .shared
     @State private var tick = 0
 
     var body: some View {
@@ -775,13 +829,21 @@ private struct GroupStatusRollup: View {
 
     @ViewBuilder
     private var content: some View {
-        if tabs.contains(where: { $0.agentState == .awaiting }) {
-            Image(systemName: "hand.raised.fill")
+        if tabs.contains(where: { $0.agentState == .failed }) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .help("A terminal in this group failed")
+        } else if tabs.contains(where: { $0.agentState == .denied }) {
+            Image(systemName: "octagon.fill")
                 .foregroundStyle(.orange)
+                .help("An action was denied in this group")
+        } else if tabs.contains(where: { $0.agentState == .awaiting }) {
+            Image(systemName: "hand.raised.fill")
+                .foregroundStyle(themePalette.magenta ?? .purple)
                 .help("A terminal in this group needs your input")
         } else if tabs.contains(where: { $0.needsAttention }) {
             Circle()
-                .fill(.orange)
+                .fill(accent ?? .accentColor)
                 .frame(width: 6, height: 6)
                 .help("A terminal in this group needs attention")
         } else if tabs.contains(where: { $0.agentState == .working }) {
@@ -1262,7 +1324,9 @@ private struct SidebarTabRow: View {
 
     /// Trailing status: spinner while the agent works, a raised hand
     /// while it waits for input, an accent dot when a response is ready
-    /// (cleared on selection), and the bell attention dot otherwise.
+    /// (cleared on selection), a red triangle when the turn failed, an
+    /// orange stop sign when an action was denied, and the bell attention
+    /// dot otherwise.
     @ViewBuilder
     private var statusIndicator: some View {
         switch tab.agentState {
@@ -1273,15 +1337,26 @@ private struct SidebarTabRow: View {
         case .awaiting:
             Image(systemName: "hand.raised.fill")
                 .font(.system(size: 11))
-                .foregroundStyle(.orange)
+                .foregroundStyle(themePalette.magenta ?? .purple)
+                .help("Waiting for your input")
         case .done:
             Circle()
                 .fill(themePalette.accent ?? .accentColor)
                 .frame(width: 8, height: 8)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.red)
+                .help("The agent turn failed")
+        case .denied:
+            Image(systemName: "octagon.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.orange)
+                .help("An action was denied")
         case .ended, nil:
             if tab.needsAttention {
                 Circle()
-                    .fill(.orange)
+                    .fill(themePalette.accent ?? .accentColor)
                     .frame(width: 6, height: 6)
             }
         }
