@@ -38,6 +38,19 @@ enum LoginEnvironment {
         return env
     }
 
+    /// The environment for a subprocess that runs developer tooling: the
+    /// login shell's `PATH` plus the directories where package managers
+    /// install user binaries (`GOBIN`, `~/go/bin`, …).
+    ///
+    /// A server's own subprocesses inherit this, so a tool the server shells
+    /// out to benefits too, not just the executable `Process` launches
+    /// directly.
+    static func executableEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = executableSearchPath()
+        return env
+    }
+
     /// Throws the cached `PATH` away so the next read resolves again.
     ///
     /// Resolving costs a login shell, so it is cached for the life of the
@@ -72,6 +85,32 @@ enum LoginEnvironment {
         lock.unlock()
 
         return resolved
+    }
+
+    /// Search path for tools installed outside the login shell's PATH.
+    ///
+    /// Go installs user binaries in GOBIN or GOPATH/bin by default. GUI apps
+    /// are often launched without the shell configuration that contains
+    /// those directories, so LSPs such as gopls would otherwise appear to be
+    /// missing even after `go install` succeeds.
+    static func executableSearchPath() -> String {
+        var directories: [String] = []
+        if let path = loginPath() {
+            directories.append(contentsOf: path.split(separator: ":").map(String.init))
+        }
+
+        let environment = ProcessInfo.processInfo.environment
+        if let gobin = environment["GOBIN"], !gobin.isEmpty {
+            directories.append(gobin)
+        }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let gopath = environment["GOPATH"] ?? "\(home)/go"
+        directories.append(contentsOf: gopath.split(separator: ":").map { "\($0)/bin" })
+        directories.append("\(home)/go/bin")
+
+        var seen = Set<String>()
+        return directories.filter { seen.insert($0).inserted }.joined(separator: ":")
     }
 
     private static func resolve() -> String? {

@@ -149,7 +149,7 @@ final class LSPCenter: ObservableObject {
 
         Task { [weak self] in
             let found = await Task.detached(priority: .utility) { () -> Set<String> in
-                var searchPath = LoginEnvironment.loginPath() ?? ""
+                var searchPath = LoginEnvironment.executableSearchPath()
                 var located = notInstalledCommands.filter {
                     LSPProcess.locate($0, searchPath: searchPath) != nil
                 }
@@ -159,7 +159,7 @@ final class LSPCenter: ObservableObject {
                 // One retry on a fresh resolve tells the two apart.
                 if located.isEmpty {
                     LoginEnvironment.invalidate()
-                    searchPath = LoginEnvironment.loginPath() ?? ""
+                    searchPath = LoginEnvironment.executableSearchPath()
                     located = notInstalledCommands.filter {
                         LSPProcess.locate($0, searchPath: searchPath) != nil
                     }
@@ -514,7 +514,7 @@ final class LSPCenter: ObservableObject {
         starting.insert(key)
         defer { starting.remove(key) }
 
-        let searchPath = LoginEnvironment.loginPath() ?? ""
+        let searchPath = LoginEnvironment.executableSearchPath()
         guard LSPProcess.locate(definition.command, searchPath: searchPath) != nil else {
             status[key] = .notInstalled
             return nil

@@ -106,6 +106,7 @@ final class LSPProcess: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?
     private var standardInput: FileHandle?
+    private var standardError: FileHandle?
     private var pending: [LSPRequestID: CheckedContinuation<LSPValue, Error>] = [:]
     private var nextID = 1
     private var state: State = .idle
@@ -123,11 +124,15 @@ final class LSPProcess: @unchecked Sendable {
 
     /// - Parameter environmentProvider: Injected so the transport can be
     ///   exercised without spawning a login shell, and so this file keeps
-    ///   no hard dependency on the app.
+    ///   no hard dependency on the app. The default hands the server the
+    ///   login shell's environment with the extended search path, so a
+    ///   binary in GOBIN/`~/go/bin` — where `go install` puts servers like
+    ///   gopls — is found both at launch and by the server's own
+    ///   subprocesses.
     init(
         definition: LSPServerDefinition,
         requestHandler: RequestHandler? = nil,
-        environmentProvider: @escaping @Sendable () -> [String: String] = { LoginEnvironment.environment() }
+        environmentProvider: @escaping @Sendable () -> [String: String] = { LoginEnvironment.executableEnvironment() }
     ) {
         self.definition = definition
         self.requestHandler = requestHandler
@@ -397,6 +402,7 @@ final class LSPProcess: @unchecked Sendable {
         lock.withLock {
             self.process = process
             self.standardInput = input.fileHandleForWriting
+            self.standardError = errors.fileHandleForReading
         }
 
         drain(output.fileHandleForReading) { [weak self] data in
@@ -578,7 +584,44 @@ final class LSPProcess: @unchecked Sendable {
     // MARK: Private — teardown
 
     private func handleTermination(status: Int32) {
+        // The server's last words are often the most important ones (e.g.
+        // Ruby LSP exiting 78 because the project has a Gemfile but no
+        // Gemfile.lock). The readability handler that feeds `recentLog` is
+        // scheduled on the main run loop and loses the race against this
+        // termination handler for short-lived processes, leaving the log
+        // empty. Drain whatever is left in the pipe before reporting the
+        // exit so the cause is never swallowed.
+        drainRemainingStandardError()
         finish(status: status)
+    }
+
+    /// Reads whatever bytes the termination handler beat the readability
+    /// handler to, feeding them into `recentLog` synchronously.
+    ///
+    /// The read is non-blocking: a server that spawns a grandchild which
+    /// inherits the stderr pipe would otherwise keep the write end open,
+    /// and a blocking drain would never return, hanging the termination
+    /// handler (and every waiter waiting on `finish`).
+    private func drainRemainingStandardError() {
+        guard let handle = lock.withLock({ standardError }) else { return }
+        handle.readabilityHandler = nil
+
+        let fd = handle.fileDescriptor
+        let flags = fcntl(fd, F_GETFL, 0)
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        defer { _ = fcntl(fd, F_SETFL, flags) }
+
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { raw in
+                read(fd, raw.baseAddress, raw.count)
+            }
+            guard count > 0 else { break }
+            ingestStandardError(Data(buffer[0..<count]))
+        }
+
+        try? handle.close()
+        lock.withLock { standardError = nil }
     }
 
     /// Everything waiting is failed here rather than left to time out. A
