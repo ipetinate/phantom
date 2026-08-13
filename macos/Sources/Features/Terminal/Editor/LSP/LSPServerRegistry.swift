@@ -1,5 +1,60 @@
 import Foundation
 
+/// The kind of language a server's workspace deals in, used to group the
+/// settings list into readable sections.
+///
+/// Deliberately coarser than "one category per server": the point of the
+/// grouping is that a user scanning for "the Python server" or "the one for
+/// C" can land in the right neighborhood without reading every row.
+enum LSPServerCategory: String, CaseIterable, Hashable, Sendable, Identifiable {
+    /// Interpreted or just-in-time languages whose sources run as-is.
+    case script
+
+    /// Languages that are compiled to native code or bytecode before
+    /// running.
+    case compiled
+
+    /// HTML, Markdown and friends — structured text for documents.
+    case markup
+
+    /// CSS and its preprocessors.
+    case styles
+
+    /// JSON, YAML and other structured data.
+    case data
+
+    /// Infrastructure-as-code.
+    case infrastructure
+
+    var id: String { rawValue }
+
+    /// The section header shown in Settings. "Script" and "Compiled" are the
+    /// first two so the two big families are visible without scrolling.
+    var title: String {
+        switch self {
+        case .script: return "Script"
+        case .compiled: return "Compiled"
+        case .markup: return "Markup"
+        case .styles: return "Styles"
+        case .data: return "Data"
+        case .infrastructure: return "Infrastructure"
+        }
+    }
+
+    /// An SF Symbol for the section header, when the row icon isn't enough
+    /// to distinguish one section from the next.
+    var systemImage: String {
+        switch self {
+        case .script: return "chevron.left.forwardslash.chevron.right"
+        case .compiled: return "hammer"
+        case .markup: return "doc.richtext"
+        case .styles: return "paintbrush"
+        case .data: return "tablecells"
+        case .infrastructure: return "server.rack"
+        }
+    }
+}
+
 /// How to start one language server, and what to tell the user when it
 /// isn't there.
 struct LSPServerDefinition: Hashable, Sendable, Identifiable {
@@ -29,9 +84,87 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
 
     var id: String { languageID }
 
+    /// Which section of the Settings list this server belongs to. Keyed off
+    /// the command so shared binaries (one server, four language ids) land
+    /// in one place and can't disagree about it.
+    var category: LSPServerCategory {
+        switch command {
+        case "typescript-language-server", "vue-language-server",
+             "pyright-langserver", "bash-language-server",
+             "intelephense", "ruby-lsp":
+            return .script
+        case "sourcekit-lsp", "kotlin-language-server", "rust-analyzer",
+             "gopls", "zls", "jdtls", "clangd":
+            return .compiled
+        case "vscode-html-language-server", "marksman":
+            return .markup
+        case "vscode-css-language-server":
+            return .styles
+        case "vscode-json-language-server", "yaml-language-server":
+            return .data
+        case "terraform-ls":
+            return .infrastructure
+        default:
+            // A future server that forgot to be classified is more visible
+            // as a Script than as a compiler error, but the UI groups by
+            // category, so an unclassified server is exactly as lost as its
+            // author was. Keeping a default lets new servers ship without a
+            // one-line diff in a switch, and `.script` is the largest group.
+            return .script
+        }
+    }
+
     /// What a "not installed" message should quote back.
     var invocation: String {
         ([command] + arguments).joined(separator: " ")
+    }
+
+    /// The executable command shown and copied by Settings. Some servers
+    /// ship with a toolchain, so their install hint also contains prose.
+    var installCommand: String {
+        switch command {
+        case "sourcekit-lsp": return "xcode-select --install"
+        case "clangd": return "xcode-select --install"
+        default: return installHint
+        }
+    }
+
+    var installHelper: String? {
+        switch command {
+        case "sourcekit-lsp": return "SourceKit-LSP ships with Xcode."
+        case "clangd": return "clangd ships with Xcode Command Line Tools."
+        default: return nil
+        }
+    }
+
+    /// Official project documentation, when the server has a stable public
+    /// home. Kept next to the definition so Settings does not need a second
+    /// table that can drift out of sync with the registry.
+    var documentationURL: URL? {
+        let address: String?
+        switch command {
+        case "typescript-language-server": address = "https://github.com/typescript-language-server/typescript-language-server"
+        case "vue-language-server": address = "https://github.com/vuejs/language-tools"
+        case "sourcekit-lsp": address = "https://github.com/swiftlang/sourcekit-lsp"
+        case "kotlin-language-server": address = "https://github.com/fwcd/kotlin-language-server"
+        case "pyright-langserver": address = "https://github.com/microsoft/pyright"
+        case "rust-analyzer": address = "https://rust-analyzer.github.io"
+        case "gopls": address = "https://go.dev/gopls"
+        case "terraform-ls": address = "https://github.com/hashicorp/terraform-ls"
+        case "zls": address = "https://github.com/zigtools/zls"
+        case "vscode-json-language-server": address = "https://github.com/hrsh7th/vscode-langservers-extracted"
+        case "yaml-language-server": address = "https://github.com/redhat-developer/yaml-language-server"
+        case "bash-language-server": address = "https://github.com/bash-lsp/bash-language-server"
+        case "vscode-html-language-server": address = "https://github.com/microsoft/vscode"
+        case "vscode-css-language-server": address = "https://github.com/microsoft/vscode"
+        case "jdtls": address = "https://github.com/eclipse-jdtls/eclipse.jdt.ls"
+        case "clangd": address = "https://clangd.llvm.org"
+        case "intelephense": address = "https://intelephense.com"
+        case "ruby-lsp": address = "https://github.com/Shopify/ruby-lsp"
+        case "marksman": address = "https://github.com/artempyanykh/marksman"
+        default: address = nil
+        }
+        return address.flatMap(URL.init(string:))
     }
 }
 

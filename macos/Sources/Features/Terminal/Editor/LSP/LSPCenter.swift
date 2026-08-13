@@ -289,6 +289,45 @@ final class LSPCenter: ObservableObject {
         return status[key]
     }
 
+    /// Aggregates installation and runtime state for the Settings screen.
+    /// A server can be active in more than one workspace, so the count is
+    /// included instead of pretending there is one global process.
+    func status(for server: LSPServerDefinition) -> LSPServerStatusSnapshot {
+        let states = status.compactMap { key, value -> LSPServerStatus? in
+            guard let definition = LSPServerRegistry.server(forLanguage: key.languageID),
+                  Self.effectiveDefinition(definition).command == server.command
+            else { return nil }
+            return value
+        }
+
+        let active = states.filter { if case .running = $0 { return true }; return false }.count
+        if active > 0 {
+            return LSPServerStatusSnapshot(state: .running, activeWorkspaceCount: active)
+        }
+        if states.contains(where: { if case .starting = $0 { return true }; return false }) {
+            return LSPServerStatusSnapshot(state: .starting, activeWorkspaceCount: 0)
+        }
+        if let failure = states.first(where: { $0.isFailure && !isNotInstalled($0) }) {
+            return LSPServerStatusSnapshot(
+                state: .error(failure.summary), activeWorkspaceCount: 0
+            )
+        }
+
+        let installed = LSPProcess.locate(
+            server.command,
+            searchPath: LoginEnvironment.executableSearchPath()
+        ) != nil
+        return LSPServerStatusSnapshot(
+            state: installed ? .installed : .notInstalled,
+            activeWorkspaceCount: 0
+        )
+    }
+
+    private func isNotInstalled(_ value: LSPServerStatus) -> Bool {
+        if case .notInstalled = value { return true }
+        return false
+    }
+
     /// The registry's definition plus any override, for the language this
     /// file would use. What a banner names and what "Check Again" or a log
     /// panel act on.
