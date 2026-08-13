@@ -233,6 +233,14 @@ class AppDelegate: NSObject,
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
 
+        // Restore our own persisted session. macOS's restoration has either
+        // run already (restoring, or standing down in favor of ours), or
+        // runs right after launch — it never creates a window when our store
+        // has a session. This must happen before `applicationDidBecomeActive`
+        // decides whether to open a default window, so a CLI launch restores
+        // too (see `PhantomSessionStore`).
+        PhantomSessionStore.shared.restoreIfNeeded()
+
         // Start our update checker.
         updateController.startUpdater()
 
@@ -352,6 +360,20 @@ class AppDelegate: NSObject,
                 NSApp.arrangeInFront(nil)
             }
         }
+
+        // Once macOS's restoration session has fully settled, record the
+        // resulting window set so the next launch restores from our store
+        // (see `PhantomSessionStore`).
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidFinishRestoringWindows(_:)),
+            name: NSApplication.didFinishRestoringWindowsNotification,
+            object: nil
+        )
+    }
+
+    @objc private func applicationDidFinishRestoringWindows(_ notification: Notification) {
+        PhantomSessionStore.shared.scheduleSave()
     }
 
     func applicationDidHide(_ notification: Notification) {
@@ -422,6 +444,9 @@ class AppDelegate: NSObject,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+
+        // Final authoritative write of our own session store.
+        PhantomSessionStore.shared.saveNow()
     }
 
     /// This is called when the application is already open and someone double-clicks the icon

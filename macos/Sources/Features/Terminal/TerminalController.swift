@@ -240,6 +240,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // we want to invalidate our state.
         invalidateRestorableState()
 
+        // Keep our own session store in sync with the current window set.
+        PhantomSessionStore.shared.scheduleSave()
+
         // Update our zoom state
         if let window = window as? TerminalWindow {
             window.surfaceIsZoomed = to.zoomed != nil
@@ -1976,6 +1979,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     override func windowWillClose(_ notification: Notification) {
         super.windowWillClose(notification)
+
+        // A closed window leaves the session store too.
+        PhantomSessionStore.shared.scheduleSave()
+
         cancelPendingInitialPresentation()
         self.relabelTabs()
 

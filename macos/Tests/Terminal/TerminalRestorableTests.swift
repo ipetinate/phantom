@@ -109,6 +109,74 @@ struct TerminalRestorableTests {
         #expect(v7Generic.surfaceTree.contains(where: { $0.id.uuidString == "953CE952-D91D-4D36-AC72-9D0F1F6BCE73" }))
         #expect(v7Generic.surfaceTree.contains(where: { $0.id.uuidString == "D3223569-2E01-4BC5-9DB2-DBFC3AFF46D1" }))
     }
+
+    // The session store persists `TerminalRestorableState` as JSON. Sessions
+    // saved before tab-group tracking must still decode with the new fields
+    // as nil (standalone windows).
+    @MainActor
+    @Test func sessionJSONWithoutTabGroupFieldsDecodes() throws {
+        let oldJSON = """
+        [
+          {
+            "focusedSurface": "f1",
+            "surfaceTree": {
+              "root": {
+                "view": {"title": "~", "isUserSetTitle": false, "pwd": null, "uuid": "f1"}
+              },
+              "version": 1
+            },
+            "effectiveFullscreenMode": null,
+            "tabColor": null,
+            "titleOverride": null,
+            "frame": [[0, 0], [1710, 1073]]
+          }
+        ]
+        """
+        let states = try JSONDecoder().decode(
+            [TerminalRestorableState].self,
+            from: Data(oldJSON.utf8))
+        #expect(states.count == 1)
+        #expect(states[0].tabGroupID == nil)
+        #expect(states[0].tabIndex == nil)
+    }
+
+    // Round-trips the tab-group fields so save/restore preserves group
+    // membership and tab order.
+    @MainActor
+    @Test func sessionJSONTabGroupFieldsRoundTrip() throws {
+        let json = """
+        [
+          {
+            "focusedSurface": "t1",
+            "surfaceTree": {
+              "root": {
+                "view": {"title": "~", "isUserSetTitle": false, "pwd": null, "uuid": "t1"}
+              },
+              "version": 1
+            },
+            "effectiveFullscreenMode": null,
+            "tabColor": null,
+            "titleOverride": null,
+            "frame": null,
+            "tabGroupID": 3,
+            "tabIndex": 1
+          }
+        ]
+        """
+        let states = try JSONDecoder().decode(
+            [TerminalRestorableState].self,
+            from: Data(json.utf8))
+        #expect(states.count == 1)
+        #expect(states[0].tabGroupID == 3)
+        #expect(states[0].tabIndex == 1)
+
+        let reencoded = try JSONEncoder().encode(states)
+        let again = try JSONDecoder().decode(
+            [TerminalRestorableState].self,
+            from: reencoded)
+        #expect(again[0].tabGroupID == 3)
+        #expect(again[0].tabIndex == 1)
+    }
 }
 
 private extension TerminalRestorableTests {
