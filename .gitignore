@@ -31,5 +31,7 @@ glad.zip
 
 vgcore.*
 
+*.profraw
+
 /sprite_face_test*
 .claude/worktrees/
