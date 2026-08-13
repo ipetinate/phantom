@@ -25,6 +25,21 @@ final class PhantomSessionStore {
     /// window set can never overwrite the saved session.
     private var isRestoring = false
 
+    /// True when this process is a test host rather than the app someone is
+    /// using.
+    ///
+    /// The tests run *inside* Phantom.app, so without this the suite plays
+    /// the whole session lifecycle against the real file: launch restores
+    /// the user's actual windows — spawning their shells, and resuming
+    /// their agent sessions — and termination writes whatever the test host
+    /// happened to have open back over it. A test run would quietly replace
+    /// the session someone left behind.
+    private static let isRunningTests: Bool = {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["XCTestSessionIdentifier"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }()
+
     private let fileURL: URL
     private var saveWorkItem: DispatchWorkItem?
 
@@ -54,7 +69,7 @@ final class PhantomSessionStore {
     /// Re-reads the open terminal windows and writes the session file,
     /// debounced. A single call per burst; cancelled work items never run.
     func scheduleSave() {
-        guard !isRestoring else { return }
+        guard !isRestoring, !Self.isRunningTests else { return }
         saveWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.saveNow()
@@ -66,7 +81,7 @@ final class PhantomSessionStore {
     /// Synchronous, authoritative save. Used at termination and when the
     /// debounced save fires.
     func saveNow() {
-        guard !isRestoring else { return }
+        guard !isRestoring, !Self.isRunningTests else { return }
 
         // Windows sharing a tab group are tabs of one window; record the
         // group membership and in-group order so the restore can re-form
@@ -127,7 +142,7 @@ final class PhantomSessionStore {
     /// Called once, at launch, before the app would otherwise open a
     /// default window.
     func restoreIfNeeded() {
-        guard !isRestoring else { return }
+        guard !isRestoring, !Self.isRunningTests else { return }
 
         // Respect the explicit "never restore" choice, matching the check
         // macOS restoration performs.
@@ -195,6 +210,7 @@ final class PhantomSessionStore {
         var anchor: TerminalController?
         var previous: TerminalController?
         var standaloneState: TerminalRestorableState?
+        var restored: [TerminalController] = []
         for state in ordered {
             let controller = TerminalController.init(
                 appDelegate.ghostty,
@@ -236,19 +252,42 @@ final class PhantomSessionStore {
                 }
             }
 
-            if let anchorWindow = anchor?.window {
-                if window.tabbingMode != .disallowed {
-                    // Join the tab group while the window is still off
-                    // screen, mirroring how `newWindow` creates tabs.
-                    previous?.window?.addTabbedWindowSafely(window, ordered: .above)
-                } else {
-                    // Tabbing is disabled for this window: it stands alone.
-                    window.orderFrontRegardless()
-                }
-            } else {
+            if anchor == nil {
                 anchor = controller
+            } else if window.tabbingMode == .disallowed {
+                // Tabbing is disabled for this window: it stands alone.
+                window.orderFrontRegardless()
+            } else {
+                // Join the tab group while the window is still off screen,
+                // mirroring how `newWindow` creates tabs.
+                //
+                // The result is checked rather than discarded: when AppKit
+                // refuses the grouping, the window has been created and is
+                // holding a live shell but is on no screen and in no tab
+                // bar. Showing it loose is a visible degradation; dropping
+                // it is a terminal that silently doesn't exist.
+                let joined = previous?.window?
+                    .addTabbedWindowSafely(window, ordered: .above) ?? false
+                if !joined { window.orderFrontRegardless() }
             }
             previous = controller
+            restored.append(controller)
+        }
+
+        // Each sidebar was built before its window had joined the group: a
+        // controller (and its sidebar) exists a moment before the tab is
+        // added, so every one of them populated a one-row list. Nothing
+        // observes the group *forming*, so the correction used to arrive
+        // incidentally, on the first click — which is what made the list
+        // visibly rebuild from one row to N in front of the user. Telling
+        // them once the group is complete is that missing signal.
+        //
+        // A turn later, because AppKit's tab group bookkeeping is not
+        // consistent until the next runloop cycle.
+        DispatchQueue.main.async {
+            for controller in restored {
+                controller.sidebarTabManager?.scheduleRefresh()
+            }
         }
 
         // Bring only the selected tab forward; the rest are hidden tabs.
@@ -264,6 +303,16 @@ final class PhantomSessionStore {
             // window, so AppKit never gets the chance to group it. Frame and
             // fullscreen are applied here too, after the window is on screen.
             DispatchQueue.main.async {
+                // Restored, not adopted: the lock lasts exactly as long as
+                // the window is appearing. Leaving it on is worse than the
+                // merge it prevents — `TerminalController.newTab` refuses to
+                // make a tab in a `.disallowed` window, so every terminal
+                // opened in a restored window afterwards came back as
+                // another loose window, for the rest of the session. The
+                // previous value is put back rather than `.automatic`
+                // assumed, because a hidden-titlebar window disallows
+                // tabbing on purpose and must keep doing so.
+                let tabbingBeforeReveal = anchorWindow.tabbingMode
                 anchorWindow.tabbingMode = .disallowed
                 anchorWindow.orderFrontRegardless()
 
@@ -273,6 +322,10 @@ final class PhantomSessionStore {
                 }
                 if let mode = standaloneState.effectiveFullscreenMode {
                     anchor?.toggleFullscreen(mode: mode)
+                }
+
+                DispatchQueue.main.async {
+                    anchorWindow.tabbingMode = tabbingBeforeReveal
                 }
             }
         } else {

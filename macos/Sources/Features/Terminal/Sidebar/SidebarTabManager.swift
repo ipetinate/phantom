@@ -191,8 +191,18 @@ final class SidebarTabManager: ObservableObject {
     }
 
     /// Coalesces bursts of notifications into a single pass per runloop turn.
+    ///
+    /// Deliberately **not** gated on the sidebar being visible, unlike the
+    /// metadata pass below. A hidden tab's sidebar still has to be *correct*
+    /// when it appears: skipping the reconciliation while hidden is what let
+    /// a background tab sit on a one-row list until the moment it was
+    /// selected, and then catch up all at once — the list visibly unfolding
+    /// from one row to the whole group, in front of whoever just clicked it.
+    /// Reconciling costs a walk over the group's windows and only reassigns
+    /// `models` when membership actually changed, so paying it for a hidden
+    /// tab is cheap; being wrong when it is shown is not.
     func scheduleRefresh() {
-        guard !pendingRefresh, isSidebarVisible else { return }
+        guard !pendingRefresh else { return }
         pendingRefresh = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
