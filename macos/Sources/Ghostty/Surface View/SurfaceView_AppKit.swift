@@ -1883,16 +1883,20 @@ extension Ghostty {
                 }
             }
 
-            // If a coding agent session was live in this surface when the
-            // app quit (tab state file still present), resume it in place.
+            // If a coding agent session was live in this surface when the app
+            // quit (tab state file still present), resume it in place — the
+            // agent that was running, and the conversation it was having.
+            // Which conversation is the point: resuming by directory alone
+            // put two tabs open on the same project into the same session.
             if let uuid,
                UserDefaults.standard.object(forKey: "SidebarRestoreAgentSessions") as? Bool ?? true,
-               let rawState = try? String(
-                   contentsOf: TabStateCenter.stateFileURL(for: uuid),
-                   encoding: .utf8
-               ),
-               rawState.trimmingCharacters(in: .whitespacesAndNewlines) != "ended" {
-                ClaudeSession.run("claude --continue", in: self)
+               let command = AgentTabRecord.resumeCommand(
+                   forStateFileContents: try? String(
+                       contentsOf: TabStateCenter.stateFileURL(for: uuid),
+                       encoding: .utf8
+                   )
+               ) {
+                ClaudeSession.run(command, in: self)
             }
         }
 

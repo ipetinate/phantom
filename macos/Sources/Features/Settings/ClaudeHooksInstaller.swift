@@ -41,7 +41,13 @@ enum ClaudeHooksInstaller {
         ("SessionEnd", "ended"),
     ]
 
-    private static let scriptBody = """
+    /// Not private, so that a test can run the real script against a real
+    /// payload. The id extraction is shell, and the only honest way to check
+    /// shell is to execute it.
+    ///
+    /// A raw literal: the script is dense with backslashes that mean
+    /// something to `sed` and to the shell, and nothing to Swift.
+    static let scriptBody = #"""
     #!/bin/bash
     # Reports the Claude Code session state to the Phantom sidebar.
     # No-op outside Phantom (env var only exists in Phantom terminals).
@@ -50,11 +56,48 @@ enum ClaudeHooksInstaller {
 
     STATE="$1"
 
-    printf '%s' "$STATE" > "$GHOSTTY_TAB_STATE_FILE.tmp" \\
+    # Claude Code hands each hook its payload as JSON on stdin, and the
+    # session id lives there and nowhere else the hook can see. Read it only
+    # when stdin is not a terminal, so running this script by hand cannot sit
+    # waiting for input that will never arrive.
+    PAYLOAD=""
+    if [ ! -t 0 ]; then
+      PAYLOAD=$(cat 2>/dev/null)
+    fi
+
+    # Deliberately not jq: a hook that needs jq is a hook that silently stops
+    # reporting on every machine without it. Lifting one string out of a flat
+    # JSON object is within sed's reach, and anything sed cannot make sense
+    # of degrades to reporting the state alone.
+    SESSION=$(printf '%s' "$PAYLOAD" | tr -d '\n' \
+      | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+
+    # Refuse anything a shell would read as more than one word, and anything
+    # starting with a dash: this value is eventually typed at a prompt after
+    # `claude --resume`, where an id spelled like a flag is a flag.
+    case "$SESSION" in
+      -*|*[!A-Za-z0-9._-]*) SESSION="" ;;
+    esac
+
+    # An event arriving without an id must not erase the one on record. The
+    # last write before a quit is the one a restore reads, and nothing says
+    # that write will be an event that carried the id.
+    if [ -z "$SESSION" ] && [ -f "$GHOSTTY_TAB_STATE_FILE" ]; then
+      SESSION=$(sed -n 's/^session=//p' "$GHOSTTY_TAB_STATE_FILE" | head -n 1)
+    fi
+
+    # State stays alone on the first line: a Phantom old enough to read only
+    # that line keeps reading this file correctly.
+    {
+      printf '%s\nagent=claude\n' "$STATE"
+      if [ -n "$SESSION" ]; then
+        printf 'session=%s\n' "$SESSION"
+      fi
+    } > "$GHOSTTY_TAB_STATE_FILE.tmp" \
       && mv "$GHOSTTY_TAB_STATE_FILE.tmp" "$GHOSTTY_TAB_STATE_FILE"
     exit 0
 
-    """
+    """#
 
     /// Human-readable detail of the last failure, for the settings UI.
     static private(set) var lastError: String?

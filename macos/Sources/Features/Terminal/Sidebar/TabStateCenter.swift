@@ -32,11 +32,20 @@ enum AgentTabState: String {
 /// after its UUID inside this directory. External hooks (e.g. Claude Code
 /// hooks) write `working` / `awaiting` / `done` into that file atomically
 /// (write to a temp name, then `mv`), and the sidebar reflects it live.
+///
+/// The same files carry the agent and session id a restored tab resumes
+/// with, which is why nothing here deletes one that still holds them.
 @MainActor
 final class TabStateCenter: ObservableObject {
     static let shared = TabStateCenter()
 
     @Published private(set) var states: [UUID: AgentTabState] = [:]
+
+    /// The full parsed contents behind `states`, kept so that the writes this
+    /// class makes back to a state file — consuming an attention marker,
+    /// clearing a seen `done` — can put the agent and session id back rather
+    /// than truncating the file to the one word they needed.
+    private(set) var records: [UUID: AgentTabRecord] = [:]
 
     static let stateDir: URL = FileManager.default
         .homeDirectoryForCurrentUser
@@ -98,55 +107,95 @@ final class TabStateCenter: ObservableObject {
         )) ?? []
 
         var result: [UUID: AgentTabState] = [:]
+        var parsed: [UUID: AgentTabRecord] = [:]
         for url in entries {
             guard let id = UUID(uuidString: url.lastPathComponent),
                   let raw = try? String(contentsOf: url, encoding: .utf8)
             else { continue }
 
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let record = AgentTabRecord(fileContents: raw)
+            parsed[id] = record
 
             // The Notification hook's attention marker: fire the system
             // notification, then hand the file back to its previous state
             // so the marker is consumed exactly once.
-            if trimmed == Self.notifyMarker {
-                handleAttentionMarker(for: id)
-                if let previous = states[id] {
-                    result[id] = previous
-                }
+            if record.stateWord == Self.notifyMarker {
+                let restored = handleAttentionMarker(for: id, carrying: record)
+                parsed[id] = restored
+                if let previous = restored?.state { result[id] = previous }
                 continue
             }
 
-            guard let state = AgentTabState(rawValue: trimmed) else { continue }
+            guard let state = record.state else { continue }
             if state == .ended { continue }
             result[id] = state
         }
 
         notifyTransitions(from: states, to: result)
+        records = parsed
         if result != states { states = result }
     }
 
     /// Clears a `done` marker once its tab has been seen (selected).
+    ///
+    /// The indicator goes, but the file only goes with it when there is
+    /// nothing else in it. Deleting a file that still names the tab's agent
+    /// and session would mean that glancing at a finished task costs you the
+    /// ability to resume it after a restart — the single most likely moment
+    /// for a tab to be both finished and worth coming back to. What is left
+    /// is a stateless record: no word on the first line, so no indicator, and
+    /// enough identity to come back.
     func clearDone(surfaceId: UUID) {
         guard states[surfaceId] == .done else { return }
-        try? FileManager.default.removeItem(at: Self.stateFileURL(for: surfaceId))
+        let url = Self.stateFileURL(for: surfaceId)
+        let record = records[surfaceId] ?? AgentTabRecord(stateWord: "")
+
+        if record.carriesIdentity {
+            let cleared = AgentTabRecord(
+                stateWord: "",
+                agent: record.agent,
+                sessionID: record.sessionID
+            )
+            try? cleared.fileContents.write(to: url, atomically: true, encoding: .utf8)
+            records[surfaceId] = cleared
+        } else {
+            try? FileManager.default.removeItem(at: url)
+            records.removeValue(forKey: surfaceId)
+        }
         states.removeValue(forKey: surfaceId)
     }
 
     /// Consumes the Notification hook's attention marker: posts a system
     /// notification for an unfocused tab, then hands the state file back to
-    /// its previous contents (or deletes it) so the marker fires exactly once.
-    private func handleAttentionMarker(for surfaceId: UUID) {
+    /// its previous state (or deletes it) so the marker fires exactly once.
+    ///
+    /// The identity written back is the *marker's*, not the one on record:
+    /// the notifying write is the freshest word on which agent and session
+    /// this tab is running, and rolling it back with the state would cost the
+    /// tab its resume. Returns what was written, or nil if the file went.
+    @discardableResult
+    private func handleAttentionMarker(
+        for surfaceId: UUID,
+        carrying record: AgentTabRecord
+    ) -> AgentTabRecord? {
         let info = tabInfo(for: surfaceId)
         if info?.isFocused != true {
             deliver(message: "Agent needs your attention", tabTitle: info?.title)
         }
 
         let url = Self.stateFileURL(for: surfaceId)
-        if let previous = states[surfaceId] {
-            try? previous.rawValue.write(to: url, atomically: true, encoding: .utf8)
-        } else {
+        let restored = AgentTabRecord(
+            stateWord: states[surfaceId]?.rawValue ?? "",
+            agent: record.agent,
+            sessionID: record.sessionID
+        )
+
+        guard restored.state != nil || restored.carriesIdentity else {
             try? FileManager.default.removeItem(at: url)
+            return nil
         }
+        try? restored.fileContents.write(to: url, atomically: true, encoding: .utf8)
+        return restored
     }
 
     /// Posts a system notification when an unfocused tab's agent needs
