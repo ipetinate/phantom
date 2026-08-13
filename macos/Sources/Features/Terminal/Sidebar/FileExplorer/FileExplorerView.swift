@@ -308,6 +308,11 @@ struct FileExplorerView: View {
             }
             .focusable()
             .focused($treeFocused)
+            // Focusable for the keys, without the ring: selecting a file put
+            // a blue outline around the entire tree, which reads as the list
+            // being a control you are editing rather than a place you are
+            // looking at. The selected row already says where focus is.
+            .backport.focusEffectDisabled()
             .backport.onKeyPress { press in handleKeyPress(press) }
             .dropDestination(for: URL.self) { urls, _ in
                 handleDrop(urls, into: model.root?.path ?? "")
@@ -364,7 +369,17 @@ struct FileExplorerView: View {
         return .ignored
     }
 
+    /// Both commits ask the model whether the edit they belong to is still
+    /// the live one.
+    ///
+    /// A field's focus loss arrives after the row it belonged to is gone, so
+    /// a cancelled create and an already-committed rename can each deliver
+    /// one more commit — against a placeholder that was never written, or a
+    /// name that has already moved. The row only knows what it was told when
+    /// it was last drawn; the model knows what is being asked for now.
     private func commitRename(_ row: FileRow, to name: String) {
+        guard model.isEditing(.rename(path: row.node.path)) else { return }
+
         let result = model.commitRename(path: row.node.path, to: name)
         if case .success(let target) = result, target.path != row.node.path {
             editorCenter.repath(from: row.node.path, to: target.path)
@@ -373,6 +388,8 @@ struct FileExplorerView: View {
     }
 
     private func commitCreate(parent: String, isFolder: Bool, name: String) {
+        guard model.isEditing(.create(parent: parent, isFolder: isFolder)) else { return }
+
         model.commitCreate(parent: parent, isFolder: isFolder, name: name)
         treeFocused = true
     }
@@ -391,13 +408,17 @@ struct FileExplorerView: View {
         treeFocused = true
     }
 
-    /// Moves dropped items into a folder: the tree background into the root,
+    /// Takes dropped items into a folder: the tree background into the root,
     /// a folder row into that folder.
+    ///
+    /// Only a move carries an open tab with it — see
+    /// `FileExplorerModel.drop(path:into:)` for which drags move and which
+    /// copy.
     private func handleDrop(_ urls: [URL], into directory: String) {
         guard !directory.isEmpty else { return }
         for url in urls where url.isFileURL {
-            let result = model.move(path: url.path, into: directory)
-            if case .success(let target) = result, target.path != url.path {
+            let result = model.drop(path: url.path, into: directory)
+            if case .success(.moved(let target)) = result, target.path != url.path {
                 editorCenter.repath(from: url.path, to: target.path)
             }
         }
@@ -468,7 +489,17 @@ private struct FileExplorerRow: View {
     private var accent: Color { palette.accent ?? .accentColor }
 
     private var isRenaming: Bool { editing == .rename(path: row.node.path) }
-    private var isCreateField: Bool { row.isCreatePlaceholder }
+
+    /// True only while the model is still asking for this name.
+    ///
+    /// Derived from `editing` rather than from the row alone: a placeholder
+    /// row keeps saying it is one after Esc, and the field's focus loss then
+    /// arrives at a `commit()` that took itself for a rename — of a file
+    /// that was never created.
+    private var isCreateField: Bool {
+        guard row.isCreatePlaceholder, case .create(let parent, _) = editing else { return false }
+        return parent == (row.node.path as NSString).deletingLastPathComponent
+    }
 
     var body: some View {
         if row.isTruncationNotice {
@@ -488,7 +519,26 @@ private struct FileExplorerRow: View {
             .padding(.vertical, 3)
     }
 
+    /// Only a folder can be dropped into.
+    ///
+    /// The drop target used to be every row, so releasing a drag half a row
+    /// low asked the filesystem to move a file *inside* another file and
+    /// surfaced whatever `FileManager` said about that — an error message
+    /// about a gesture the tree should never have accepted in the first
+    /// place.
+    @ViewBuilder
     private var content: some View {
+        if row.node.isDirectory {
+            label.dropDestination(for: URL.self) { urls, _ in
+                onDropInto(urls)
+                return true
+            }
+        } else {
+            label
+        }
+    }
+
+    private var label: some View {
         Button(action: onTap) {
             HStack(spacing: 4) {
                 disclosure
@@ -530,10 +580,6 @@ private struct FileExplorerRow: View {
         .contextMenu { menu }
         .help(row.node.path)
         .draggable(row.node.url)
-        .dropDestination(for: URL.self) { urls, _ in
-            onDropInto(urls)
-            return true
-        }
     }
 
     /// The row drawn while a name is being given: the text field that
@@ -575,10 +621,13 @@ private struct FileExplorerRow: View {
         }
     }
 
+    /// Commits whichever edit this row is showing, and nothing when it is
+    /// showing none — the `else` that used to fall through to a rename is
+    /// how a cancelled create ended up renaming a file that never existed.
     private func commit() {
         if isCreateField, case .create(let parent, let isFolder) = editing {
             onCommitCreate(parent, isFolder, draftName)
-        } else {
+        } else if isRenaming {
             onCommitRename(draftName)
         }
     }
