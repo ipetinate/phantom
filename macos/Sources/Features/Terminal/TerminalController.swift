@@ -1328,8 +1328,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         let layout = SidebarLayoutModel()
         layout.onNewTab = { [weak self] in
-            guard let self, let window = self.window else { return }
-            _ = Self.newTab(self.ghostty, from: window)
+            self?.newSidebarTab(in: nil)
         }
         layout.onNewClaudeTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningClaude: true)
@@ -1628,8 +1627,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// manual groups start at the pwd of the tab selected *inside the
     /// group*, falling back to the group's first terminal; the ungrouped
     /// section starts at the configured default home (`~/` unless changed
-    /// in Behaviors). The new surface is pinned to the group so later
-    /// `cd`s never move it out.
+    /// in Behaviors). The new surface is pinned to the group it was created
+    /// in — including to *no* group — so later `cd`s never move it in or
+    /// out.
     @discardableResult
     private func newSidebarTab(
         in group: SidebarGroup?,
@@ -1669,8 +1669,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             ClaudeSession.run("opencode", in: surface)
         }
 
-        guard let group, let surface else { return surface }
-        SidebarGroupStore.shared.assign(surfaceId: surface.id, to: group.id)
+        guard let surface else { return nil }
+
+        // Record the group the tab was *created in*, including when that is
+        // no group at all. Leaving the ungrouped case unrecorded is not
+        // neutral: `resolveGroup` then falls through to its pwd claim, and
+        // any project group whose root contains this terminal's directory
+        // adopts it. Opening a terminal outside every group and watching it
+        // jump into one is the bug that behavior produces.
+        SidebarGroupStore.shared.assign(surfaceId: surface.id, to: group?.id)
         sidebarTabManager?.scheduleRefresh()
         controller.sidebarTabManager?.scheduleRefresh()
         return surface
