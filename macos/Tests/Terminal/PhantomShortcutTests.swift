@@ -1,0 +1,486 @@
+import AppKit
+import Foundation
+@testable import Ghostty
+import SwiftUI
+import Testing
+
+/// The configurable shortcut value type: what it reads from a key event,
+/// how it spells and serializes itself, and how it matches presses.
+struct PhantomShortcutTests {
+    private func shortcut(_ key: String, _ modifiers: Set<PhantomShortcutModifier>) -> PhantomShortcut {
+        PhantomShortcut(key: key, modifiers: modifiers)
+    }
+
+    @Test func lowercasesItsKey() {
+        #expect(shortcut("N", [.command, .shift]).key == "n")
+    }
+
+    @Test func displayStringSpellsModifiersInMacOrder() {
+        #expect(shortcut("n", [.command, .shift]).displayString == "⇧⌘N")
+        #expect(shortcut("f", [.command, .option]).displayString == "⌥⌘F")
+        #expect(shortcut("g", [.command, .control]).displayString == "⌃⌘G")
+    }
+
+    @Test func aShortcutWithNoModifiersShowsJustTheKey() {
+        #expect(shortcut("z", []).displayString == "Z")
+    }
+
+    @Test func serializationRoundTrips() {
+        let original = shortcut("n", [.command, .shift])
+        #expect(original.serialized == "shift+command+n")
+        #expect(PhantomShortcut(serialized: original.serialized) == original)
+    }
+
+    @Test func serializationWithoutModifiersIsJustTheKey() {
+        #expect(shortcut("z", []).serialized == "z")
+    }
+
+    @Test func aSerializedStringWithABadModifierRefuses() {
+        #expect(PhantomShortcut(serialized: "super+n") == nil)
+        #expect(PhantomShortcut(serialized: "") == nil)
+    }
+
+    @Test func matchingIgnoresKeyCase() {
+        let target = shortcut("n", [.command, .shift])
+        #expect(target.matches(modifiers: [.command, .shift], key: "n"))
+        #expect(target.matches(modifiers: [.command, .shift], key: "N"))
+    }
+
+    @Test func matchingRequiresTheSameModifierSet() {
+        let target = shortcut("n", [.command, .shift])
+        #expect(!target.matches(modifiers: [.command], key: "n"))
+        #expect(!target.matches(modifiers: [.command, .shift, .option], key: "n"))
+    }
+
+    @Test func readingARegularKeyEvent() throws {
+        let event = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command, .shift],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "N",
+            charactersIgnoringModifiers: "n",
+            isARepeat: false,
+            keyCode: 45
+        ))
+        #expect(PhantomShortcut(event: event) == shortcut("n", [.command, .shift]))
+    }
+
+    @Test func aModifierAloneIsNotAShortcut() throws {
+        let event = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.shift],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 56
+        ))
+        #expect(PhantomShortcut(event: event) == nil)
+    }
+
+    @Test func modifiersFromAPressIgnoreCapsLockAndFunction() {
+        let flags: EventModifiers = [.command, .shift, .capsLock]
+        let modifiers = PhantomShortcut.modifiers(from: flags)
+        #expect(modifiers == [.command, .shift])
+    }
+}
+
+/// The store that persists the two configurable shortcuts.
+@MainActor
+struct PhantomShortcutStoreTests {
+    private func withDefaults(_ body: (PhantomShortcutStore) -> Void) {
+        let keys = [
+            PhantomShortcutStore.newFileDefaultsKey,
+            PhantomShortcutStore.newFolderDefaultsKey,
+        ]
+        let stored = keys.map { ($0, UserDefaults.standard.string(forKey: $0)) }
+        keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        defer {
+            for (key, value) in stored {
+                if let value {
+                    UserDefaults.standard.set(value, forKey: key)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+        }
+        body(PhantomShortcutStore())
+    }
+
+    @Test func defaultsAreNewFileAndNewFolder() {
+        withDefaults { store in
+            #expect(store.newFile == PhantomShortcutStore.newFileDefault)
+            #expect(store.newFolder == PhantomShortcutStore.newFolderDefault)
+        }
+    }
+
+    @Test func settingPersistsAndIsReadBack() {
+        withDefaults { store in
+            let replaced = PhantomShortcut(key: "f", modifiers: [.command, .shift])
+            store.set(replaced, for: .newFile)
+
+            let fresh = PhantomShortcutStore()
+            #expect(fresh.newFile == replaced)
+            #expect(fresh.newFolder == PhantomShortcutStore.newFolderDefault)
+        }
+    }
+
+    @Test func aStoredShortcutIsReturnedByAction() {
+        withDefaults { store in
+            #expect(store.shortcut(for: .newFile) == store.newFile)
+            #expect(store.shortcut(for: .newFolder) == store.newFolder)
+        }
+    }
+}
+
+/// Whether a proposed shortcut is already taken, by a menu item or by one
+/// of the fixed pane actions.
+@MainActor
+struct ShortcutCollisionCheckerTests {
+    private func menu(_ items: [(title: String, key: String, flags: NSEvent.ModifierFlags)]) -> NSMenu {
+        let menu = NSMenu(title: "Root")
+        for item in items {
+            let entry = NSMenuItem(title: item.title, action: nil, keyEquivalent: item.key)
+            entry.keyEquivalentModifierMask = item.flags
+            menu.addItem(entry)
+        }
+        return menu
+    }
+
+    @Test func anUnclaimedShortcutCollidesWithNothing() {
+        let menu = menu([("New Window", "n", [.command])])
+        let candidate = PhantomShortcut(key: "n", modifiers: [.command, .shift])
+        #expect(ShortcutCollisionChecker.collisions(
+            with: candidate, excluding: nil, otherPhantom: nil, menu: menu
+        ).isEmpty)
+    }
+
+    @Test func aMenuKeyEquivalentCollides() {
+        let menu = menu([("New Window", "n", [.command])])
+        let candidate = PhantomShortcut(key: "n", modifiers: [.command])
+        let collisions = ShortcutCollisionChecker.collisions(
+            with: candidate, excluding: nil, otherPhantom: nil, menu: menu
+        )
+        #expect(collisions == [ShortcutCollision(owner: "New Window", shortcut: candidate)])
+    }
+
+    /// Re-recording the shortcut that is already assigned to this action is
+    /// the same gesture again — it must not warn about itself.
+    @Test func theCurrentShortcutIsExcluded() {
+        let menu = menu([("New Window", "n", [.command])])
+        let current = PhantomShortcut(key: "n", modifiers: [.command])
+        #expect(ShortcutCollisionChecker.collisions(
+            with: current, excluding: current, otherPhantom: nil, menu: menu
+        ).isEmpty)
+    }
+
+    @Test func theOtherPhantomShortcutCollides() {
+        let other = PhantomShortcut(key: "n", modifiers: [.command, .shift])
+        let candidate = PhantomShortcut(key: "n", modifiers: [.command, .shift])
+        let collisions = ShortcutCollisionChecker.collisions(
+            with: candidate,
+            excluding: nil,
+            otherPhantom: (.newFolder, other),
+            menu: nil
+        )
+        #expect(collisions.map(\.owner) == ["New Folder"])
+    }
+
+    @Test func theOtherPhantomShortcutWhenItIsCurrentDoesNotCollide() {
+        let other = PhantomShortcut(key: "n", modifiers: [.command, .shift])
+        let collisions = ShortcutCollisionChecker.collisions(
+            with: other,
+            excluding: other,
+            otherPhantom: (.newFolder, other),
+            menu: nil
+        )
+        #expect(collisions.isEmpty)
+    }
+
+    @Test func fixedPaneShortcutsCollide() {
+        let candidate = PhantomShortcut(key: "\\", modifiers: [.command, .option])
+        let collisions = ShortcutCollisionChecker.collisions(
+            with: candidate, excluding: nil, otherPhantom: nil, menu: nil
+        )
+        #expect(collisions.map(\.owner).contains("Toggle terminal pane"))
+    }
+
+    @Test func submenuItemsAreFound() {
+        let menu = NSMenu(title: "Root")
+        let submenu = NSMenu(title: "File")
+        let entry = NSMenuItem(title: "New File", action: nil, keyEquivalent: "j")
+        entry.keyEquivalentModifierMask = [.command, .option]
+        submenu.addItem(entry)
+        let item = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        menu.addItem(item)
+
+        let candidate = PhantomShortcut(key: "j", modifiers: [.command, .option])
+        #expect(ShortcutCollisionChecker.collisions(
+            with: candidate, excluding: nil, otherPhantom: nil, menu: menu
+        ).map(\.owner) == ["New File"])
+    }
+}
+
+/// The editor's bookkeeping when a file is renamed or moved inside the app.
+struct EditorTabRepathTests {
+    @Test func repathKeepsTheTabInPlaceWithItsDirtyDot() {
+        var tabs = EditorTabSet()
+        ["/a.ts", "/b.ts"].forEach { tabs.open($0) }
+        tabs.setDirty(true, for: "/b.ts")
+
+        tabs.repath(from: "/b.ts", to: "/c.ts")
+
+        #expect(tabs.tabs.map(\.id) == ["/a.ts", "/c.ts"])
+        #expect(tabs.tabs[1].isDirty)
+        #expect(tabs.hasUnsavedChanges)
+    }
+
+    @Test func repathMovesTheSelectionWithTheFile() {
+        var tabs = EditorTabSet()
+        ["/a.ts", "/b.ts"].forEach { tabs.open($0) }
+        tabs.select("/b.ts")
+
+        tabs.repath(from: "/b.ts", to: "/c.ts")
+
+        #expect(tabs.selectedPath == "/c.ts")
+    }
+
+    @Test func repathOfAnUnselectedFileLeavesTheSelectionAlone() {
+        var tabs = EditorTabSet()
+        ["/a.ts", "/b.ts"].forEach { tabs.open($0) }
+        tabs.select("/a.ts")
+
+        tabs.repath(from: "/b.ts", to: "/c.ts")
+
+        #expect(tabs.selectedPath == "/a.ts")
+    }
+
+    @Test func repathToTheSamePathDoesNothing() {
+        var tabs = EditorTabSet()
+        tabs.open("/a.ts")
+        tabs.repath(from: "/a.ts", to: "/a.ts")
+        #expect(tabs.tabs.count == 1)
+    }
+
+    @Test func repathOfSomethingNotOpenChangesNothing() {
+        var tabs = EditorTabSet()
+        tabs.open("/a.ts")
+        tabs.repath(from: "/nope.ts", to: "/yep.ts")
+        #expect(tabs.tabs.map(\.id) == ["/a.ts"])
+    }
+}
+
+/// The filesystem operations behind rename, move, delete and create,
+/// against a real temp directory tree.
+struct FileExplorerFilesystemTests {
+    /// Resolved through `realpath` so the `/var` → `/private/var` symlink
+    /// doesn't make constructed expectations mismatch `FileManager`'s own
+    /// answers. Same reason `FileExplorerTests` does this.
+    private func tempDirectory() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        var buffer = [Int8](repeating: 0, count: Int(PATH_MAX))
+        guard realpath(dir.path, &buffer) != nil else { return dir }
+        return URL(fileURLWithPath: String(cString: buffer), isDirectory: true)
+    }
+
+    private func makeFile(_ base: URL, _ name: String) throws {
+        try Data("content".utf8).write(to: base.appendingPathComponent(name))
+    }
+
+    private func makeDir(_ base: URL, _ name: String) throws {
+        try FileManager.default.createDirectory(
+            at: base.appendingPathComponent(name, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+
+    // MARK: Rename
+
+    @Test func renameMovesTheFileAndKeepsItInItsDirectory() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "old.txt")
+
+        let result = FileExplorerFilesystem.rename(
+            base.appendingPathComponent("old.txt"), to: "new.txt"
+        )
+
+        let target = try result.get()
+        #expect(target.lastPathComponent == "new.txt")
+        #expect(FileManager.default.fileExists(atPath: target.path))
+        #expect(!FileManager.default.fileExists(atPath: base.appendingPathComponent("old.txt").path))
+    }
+
+    @Test func renameRefusesACollision() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "a.txt")
+        try makeFile(base, "b.txt")
+
+        let result = FileExplorerFilesystem.rename(
+            base.appendingPathComponent("a.txt"), to: "b.txt"
+        )
+        #expect(throws: (any Error).self) { try result.get() }
+    }
+
+    @Test func renameRefusesAnEmptyName() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "a.txt")
+        #expect(throws: (any Error).self) {
+            try FileExplorerFilesystem.rename(
+                base.appendingPathComponent("a.txt"), to: "   "
+            ).get()
+        }
+    }
+
+    @Test func renameTrimsTrailingWhitespace() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "a.txt")
+
+        let result = FileExplorerFilesystem.rename(
+            base.appendingPathComponent("a.txt"), to: "b.txt "
+        )
+        #expect(try result.get().lastPathComponent == "b.txt")
+    }
+
+    @Test func renamingToItselfSucceeds() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "a.txt")
+        let url = base.appendingPathComponent("a.txt")
+        #expect(try FileExplorerFilesystem.rename(url, to: "a.txt").get() == url)
+    }
+
+    // MARK: Move
+
+    @Test func movePutsTheFileIntoTheFolder() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "a.txt")
+        try makeDir(base, "folder")
+
+        let result = FileExplorerFilesystem.move(
+            base.appendingPathComponent("a.txt"),
+            into: base.appendingPathComponent("folder", isDirectory: true)
+        )
+
+        let target = try result.get()
+        #expect(target.path == base.appendingPathComponent("folder/a.txt").path)
+        #expect(FileManager.default.fileExists(atPath: target.path))
+    }
+
+    @Test func movingAFolderIntoTargetFolderItselfRefuses() throws {
+        let base = try tempDirectory()
+        try makeDir(base, "a")
+
+        let result = FileExplorerFilesystem.move(
+            base.appendingPathComponent("a"),
+            into: base.appendingPathComponent("a", isDirectory: true)
+        )
+        #expect(throws: (any Error).self) { try result.get() }
+    }
+
+    @Test func movingAFolderIntoItsOwnChildRefuses() throws {
+        let base = try tempDirectory()
+        try makeDir(base, "a")
+        try makeDir(base, "a/sub")
+
+        let result = FileExplorerFilesystem.move(
+            base.appendingPathComponent("a"),
+            into: base.appendingPathComponent("a/sub", isDirectory: true)
+        )
+        #expect(throws: (any Error).self) { try result.get() }
+    }
+
+    @Test func moveRefusesANameClash() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "a.txt")
+        try makeDir(base, "folder")
+        try makeFile(base, "folder/a.txt")
+
+        let result = FileExplorerFilesystem.move(
+            base.appendingPathComponent("a.txt"),
+            into: base.appendingPathComponent("folder", isDirectory: true)
+        )
+        #expect(throws: (any Error).self) { try result.get() }
+    }
+
+    // MARK: Create
+
+    @Test func createFileMakesAnEmptyFile() throws {
+        let base = try tempDirectory()
+        let url = base.appendingPathComponent("notes.txt")
+        #expect(try FileExplorerFilesystem.createFile(at: url).get() == url)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test func createFolderMakesADirectory() throws {
+        let base = try tempDirectory()
+        let url = base.appendingPathComponent("src", isDirectory: true)
+        #expect(try FileExplorerFilesystem.createFolder(at: url).get() == url)
+
+        var isDirectory: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        #expect(isDirectory.boolValue)
+    }
+
+    @Test func createRefusesAnExistingName() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "a.txt")
+        #expect(throws: (any Error).self) {
+            try FileExplorerFilesystem.createFile(at: base.appendingPathComponent("a.txt")).get()
+        }
+    }
+
+    @Test func createRefusesANameWithAPathSeparator() throws {
+        let base = try tempDirectory()
+        #expect(throws: (any Error).self) {
+            try FileExplorerFilesystem.createFile(at: base.appendingPathComponent("a/b.txt")).get()
+        }
+    }
+
+    // MARK: Unique and proposed names
+
+    @Test func proposedNamesFollowTheUntitledConvention() {
+        #expect(FileExplorerFilesystem.proposedName(isFolder: false) == "untitled.txt")
+        #expect(FileExplorerFilesystem.proposedName(isFolder: true) == "untitled folder")
+    }
+
+    @Test func uniqueNameKeepsTheNameWhenFree() throws {
+        let base = try tempDirectory()
+        let url = base.appendingPathComponent("untitled.txt")
+        #expect(FileExplorerFilesystem.uniqueName(for: url) == url)
+    }
+
+    @Test func uniqueNameNumberedTheFirstCollision() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "untitled.txt")
+
+        let url = base.appendingPathComponent("untitled.txt")
+        #expect(FileExplorerFilesystem.uniqueName(for: url).lastPathComponent == "untitled 2.txt")
+    }
+
+    @Test func uniqueNameWalksPastOccupiedNumbers() throws {
+        let base = try tempDirectory()
+        try makeFile(base, "untitled.txt")
+        try makeFile(base, "untitled 2.txt")
+        try makeFile(base, "untitled 3.txt")
+
+        let url = base.appendingPathComponent("untitled.txt")
+        #expect(FileExplorerFilesystem.uniqueName(for: url).lastPathComponent == "untitled 4.txt")
+    }
+
+    @Test func uniqueNameForAFolderDropsTheExtension() throws {
+        let base = try tempDirectory()
+        try makeDir(base, "untitled folder")
+
+        let url = base.appendingPathComponent("untitled folder", isDirectory: true)
+        #expect(FileExplorerFilesystem.uniqueName(for: url).lastPathComponent == "untitled folder 2")
+    }
+}

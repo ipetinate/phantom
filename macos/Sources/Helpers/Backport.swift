@@ -24,6 +24,14 @@ enum BackportKeyPressResult {
     case ignored
 }
 
+/// A key press delivered to a focused view: which key, and which
+/// modifiers were held with it.
+struct BackportKeyPress {
+    let key: Character
+    let modifiers: EventModifiers
+    let characters: String?
+}
+
 extension Backport where Content: View {
     func pointerVisibility(_ v: BackportVisibility) -> some View {
         #if canImport(AppKit)
@@ -55,6 +63,30 @@ extension Backport where Content: View {
         if #available(macOS 14, *) {
             return content.onKeyPress(key, phases: .down, action: { keyPress in
                 switch action(keyPress.modifiers) {
+                case .handled: return .handled
+                case .ignored: return .ignored
+                }
+            })
+        } else {
+            return content
+        }
+        #else
+        return content
+        #endif
+    }
+
+    /// Backported free-form onKeyPress that works on macOS 14+ and is a
+    /// no-op on macOS 13. Unlike the keyed variant this reports *which* key
+    /// was pressed, which is what a user-configurable shortcut needs.
+    func onKeyPress(_ action: @escaping (BackportKeyPress) -> BackportKeyPressResult) -> some View {
+        #if canImport(AppKit)
+        if #available(macOS 14, *) {
+            return content.onKeyPress(phases: .down, action: { press in
+                switch action(BackportKeyPress(
+                    key: press.key.character,
+                    modifiers: press.modifiers,
+                    characters: press.characters
+                )) {
                 case .handled: return .handled
                 case .ignored: return .ignored
                 }

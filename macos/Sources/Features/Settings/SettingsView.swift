@@ -15,6 +15,7 @@ struct SettingsRootView: View {
         case sidebar
         case files
         case behaviors
+        case keyboardShortcuts
         case languageServers
         case agents
 
@@ -28,6 +29,7 @@ struct SettingsRootView: View {
             case .sidebar: return "Sidebar"
             case .files: return "Files"
             case .behaviors: return "Behaviors"
+            case .keyboardShortcuts: return "Keyboard Shortcuts"
             case .languageServers: return "Language Servers"
             case .agents: return "Agents"
             }
@@ -41,6 +43,7 @@ struct SettingsRootView: View {
             case .sidebar: return "sidebar.left"
             case .files: return "doc.text"
             case .behaviors: return "slider.horizontal.3"
+            case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
             case .agents: return "sparkles"
             }
@@ -71,6 +74,8 @@ struct SettingsRootView: View {
                 FilesSettingsView()
             case .behaviors:
                 BehaviorsSettingsView(ghostty: ghostty, store: store)
+            case .keyboardShortcuts:
+                KeyboardShortcutsSettingsView()
             case .languageServers:
                 LanguageServersSettingsView()
             case .agents:
