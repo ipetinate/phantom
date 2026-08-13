@@ -141,6 +141,16 @@ struct EditorTabSet: Equatable {
         paths.forEach { close($0) }
     }
 
+    /// A file renamed or moved inside the app: the tab follows it, staying
+    /// in place and keeping its dirty dot, rather than closing and
+    /// reappearing at the end of the bar.
+    mutating func repath(from oldPath: String, to newPath: String) {
+        guard oldPath != newPath else { return }
+        guard let index = tabs.firstIndex(where: { $0.path == oldPath }) else { return }
+        tabs[index] = EditorTab(path: newPath, isDirty: tabs[index].isDirty)
+        if selection == .file(oldPath) { selection = .file(newPath) }
+    }
+
     /// Whether two open tabs share a name, which is when the directory has
     /// to be shown to tell them apart.
     func needsDirectory(for tab: EditorTab) -> Bool {

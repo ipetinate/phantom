@@ -26,6 +26,14 @@ struct FileExplorerView: View {
     @ObservedObject private var palette: ThemePalette = .shared
     @ObservedObject private var icons: FileIconProvider = .shared
     @ObservedObject private var refresh: FileExplorerRefresh = .shared
+    @ObservedObject private var shortcuts: PhantomShortcutStore = .shared
+
+    /// Whether the tree owns the keyboard. Keys like Return and Delete only
+    /// mean rename and trash while the explorer is the one being typed at.
+    @FocusState private var treeFocused: Bool
+
+    /// The path waiting for the "Move to Trash" confirmation.
+    @State private var pendingDelete: String?
 
     private var selectedTab: SidebarTabModel? {
         tabManager.models.first { $0.isSelected }
@@ -59,6 +67,35 @@ struct FileExplorerView: View {
         ) { _ in
             DispatchQueue.main.async { syncRoot() }
         }
+        .confirmationDialog(
+            deleteTitle,
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Move to Trash", role: .destructive) { confirmDelete() }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text("You can restore it from the Trash later.")
+        }
+        .alert(
+            "Couldn't do that",
+            isPresented: Binding(
+                get: { model.errorMessage != nil },
+                set: { if !$0 { model.errorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { model.errorMessage = nil }
+        } message: {
+            Text(model.errorMessage ?? "")
+        }
+    }
+
+    private var deleteTitle: String {
+        guard let pendingDelete else { return "Move to the Trash?" }
+        return "Move “\((pendingDelete as NSString).lastPathComponent)” to the Trash?"
     }
 
     // MARK: Header
@@ -71,6 +108,11 @@ struct FileExplorerView: View {
                 .truncationMode(.head)
 
             Spacer(minLength: 0)
+
+            SidebarIconMenu(help: "New File or Folder", icon: "plus") {
+                Button("New File") { model.beginCreateDefault(isFolder: false) }
+                Button("New Folder") { model.beginCreateDefault(isFolder: true) }
+            }
 
             SidebarIconMenu(help: model.rootMode.detail) {
                 Picker("Root", selection: $model.rootMode) {
@@ -216,11 +258,23 @@ struct FileExplorerView: View {
                     ForEach(visibleRows) { row in
                         FileExplorerRow(
                             row: row,
+                            editing: model.editing,
                             isExpanded: model.isExpanded(row.node),
                             isCurrent: row.node.path == model.currentDirectory,
+                            isSelected: row.node.path == model.selection,
                             ghostPath: ghostPath(for: row),
                             isOpenInEditor: row.node.path == editorCenter.tabs.selectedPath,
-                            onTap: { handleTap(row) }
+                            onTap: { handleTap(row) },
+                            onBeginRename: { model.beginRename(path: row.node.path) },
+                            onCommitRename: { name in commitRename(row, to: name) },
+                            onCommitCreate: { parent, isFolder, name in
+                                commitCreate(parent: parent, isFolder: isFolder, name: name)
+                            },
+                            onCancelEdit: { model.cancelEditing() },
+                            onDelete: { requestDelete(row.node.path) },
+                            onCreateFile: { model.beginCreate(in: row.node.path, isFolder: false) },
+                            onCreateFolder: { model.beginCreate(in: row.node.path, isFolder: true) },
+                            onDropInto: { urls in handleDrop(urls, into: row.node.path) }
                         )
                         .id(row.id)
                     }
@@ -240,6 +294,25 @@ struct FileExplorerView: View {
                     proxy.scrollTo(path, anchor: .center)
                 }
             }
+            .onChange(of: model.editing) { _ in
+                guard let id = model.createPlaceholderID else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
+            // A create field lands at the end of a possibly long folder, so
+            // it can start below the fold; make sure the keys the explorer
+            // answers for have somewhere to land.
+            .onChange(of: model.editing) { editing in
+                if editing != nil { treeFocused = true }
+            }
+            .focusable()
+            .focused($treeFocused)
+            .backport.onKeyPress { press in handleKeyPress(press) }
+            .dropDestination(for: URL.self) { urls, _ in
+                handleDrop(urls, into: model.root?.path ?? "")
+                return true
+            }
         }
     }
 
@@ -247,6 +320,8 @@ struct FileExplorerView: View {
 
     private func handleTap(_ row: FileRow) {
         guard !row.isTruncationNotice else { return }
+        model.select(row.node.path)
+        treeFocused = true
 
         if row.node.isDirectory {
             model.toggle(row.node)
@@ -260,6 +335,72 @@ struct FileExplorerView: View {
             spawnTerminal: onSpawnTerminal,
             openInEditor: onOpenInEditor
         )
+    }
+
+    /// The keys the explorer answers for while it has focus: the configured
+    /// create shortcuts, Return to rename the selection, Delete to trash it.
+    private func handleKeyPress(_ press: BackportKeyPress) -> BackportKeyPressResult {
+        guard model.editing == nil else { return .ignored }
+        let modifiers = PhantomShortcut.modifiers(from: press.modifiers)
+
+        if shortcuts.newFile.matches(modifiers: modifiers, key: press.key) {
+            model.beginCreateDefault(isFolder: false)
+            return .handled
+        }
+        if shortcuts.newFolder.matches(modifiers: modifiers, key: press.key) {
+            model.beginCreateDefault(isFolder: true)
+            return .handled
+        }
+        if press.key == KeyEquivalent.return.character {
+            guard let selection = model.selection else { return .ignored }
+            model.beginRename(path: selection)
+            return .handled
+        }
+        if press.key == KeyEquivalent.delete.character {
+            guard let selection = model.selection else { return .ignored }
+            requestDelete(selection)
+            return .handled
+        }
+        return .ignored
+    }
+
+    private func commitRename(_ row: FileRow, to name: String) {
+        let result = model.commitRename(path: row.node.path, to: name)
+        if case .success(let target) = result, target.path != row.node.path {
+            editorCenter.repath(from: row.node.path, to: target.path)
+        }
+        treeFocused = true
+    }
+
+    private func commitCreate(parent: String, isFolder: Bool, name: String) {
+        model.commitCreate(parent: parent, isFolder: isFolder, name: name)
+        treeFocused = true
+    }
+
+    private func requestDelete(_ path: String) {
+        guard model.editing == nil else { return }
+        pendingDelete = path
+    }
+
+    private func confirmDelete() {
+        guard let path = pendingDelete else { return }
+        pendingDelete = nil
+        if case .success = model.delete(path: path) {
+            editorCenter.didDelete(path: path)
+        }
+        treeFocused = true
+    }
+
+    /// Moves dropped items into a folder: the tree background into the root,
+    /// a folder row into that folder.
+    private func handleDrop(_ urls: [URL], into directory: String) {
+        guard !directory.isEmpty else { return }
+        for url in urls where url.isFileURL {
+            let result = model.move(path: url.path, into: directory)
+            if case .success(let target) = result, target.path != url.path {
+                editorCenter.repath(from: url.path, to: target.path)
+            }
+        }
     }
 
     /// Recomputes the root from the selected terminal, then points the
@@ -287,8 +428,13 @@ struct FileExplorerView: View {
 /// One row of the tree.
 private struct FileExplorerRow: View {
     let row: FileRow
+
+    /// What the explorer is asking for a name for, if anything — lets this
+    /// row know whether it is the one showing a field.
+    let editing: FileEditState?
     let isExpanded: Bool
     let isCurrent: Bool
+    let isSelected: Bool
 
     /// The containing folder, shown only when the name alone is ambiguous.
     let ghostPath: String?
@@ -301,16 +447,34 @@ private struct FileExplorerRow: View {
     /// "here is where you are".
     let isOpenInEditor: Bool
     let onTap: () -> Void
+    let onBeginRename: () -> Void
+    let onCommitRename: (String) -> Void
+    let onCommitCreate: (String, Bool, String) -> Void
+    let onCancelEdit: () -> Void
+    let onDelete: () -> Void
+    let onCreateFile: () -> Void
+    let onCreateFolder: () -> Void
+    let onDropInto: ([URL]) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
     @ObservedObject private var icons: FileIconProvider = .shared
     @State private var isHovered = false
 
+    /// What the rename/create field holds while it is open.
+    @State private var draftName = ""
+    @State private var draftSelection: Range<String.Index>?
+    @FocusState private var fieldFocused: Bool
+
     private var accent: Color { palette.accent ?? .accentColor }
+
+    private var isRenaming: Bool { editing == .rename(path: row.node.path) }
+    private var isCreateField: Bool { row.isCreatePlaceholder }
 
     var body: some View {
         if row.isTruncationNotice {
             notice
+        } else if isRenaming || isCreateField {
+            field
         } else {
             content
         }
@@ -332,7 +496,7 @@ private struct FileExplorerRow: View {
                 Text(row.node.name)
                     .font(palette.font(
                         size: 11,
-                        weight: isCurrent || isOpenInEditor ? .semibold : .regular
+                        weight: isCurrent || isOpenInEditor || isSelected ? .semibold : .regular
                     ))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -365,6 +529,62 @@ private struct FileExplorerRow: View {
         }
         .contextMenu { menu }
         .help(row.node.path)
+        .draggable(row.node.url)
+        .dropDestination(for: URL.self) { urls, _ in
+            onDropInto(urls)
+            return true
+        }
+    }
+
+    /// The row drawn while a name is being given: the text field that
+    /// replaces the label, and nothing else that can swallow a key.
+    private var field: some View {
+        HStack(spacing: 4) {
+            disclosure
+            FileIconView(icon: icon)
+            BackportSelectionTextField("", text: $draftName, selection: $draftSelection)
+                .textFieldStyle(.plain)
+                .font(palette.font(size: 11))
+                .focused($fieldFocused)
+                .onAppear { startEditing() }
+                .onSubmit { commit() }
+                .onExitCommand { cancel() }
+                .onChange(of: fieldFocused) { focused in
+                    guard !focused else { return }
+                    if isRenaming || isCreateField { commit() }
+                }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, indent)
+        .padding(.trailing, 6)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(accent.opacity(0.45))
+        )
+    }
+
+    /// Puts the field into "type to replace the base name" state: focus it
+    /// and select everything up to the extension, the way Finder does.
+    private func startEditing() {
+        draftName = row.node.name
+        fieldFocused = true
+        DispatchQueue.main.async {
+            draftSelection = Self.baseNameRange(in: draftName, isFolder: row.node.isDirectory)
+        }
+    }
+
+    private func commit() {
+        if isCreateField, case .create(let parent, let isFolder) = editing {
+            onCommitCreate(parent, isFolder, draftName)
+        } else {
+            onCommitRename(draftName)
+        }
+    }
+
+    private func cancel() {
+        onCancelEdit()
     }
 
     @ViewBuilder
@@ -382,6 +602,15 @@ private struct FileExplorerRow: View {
 
     @ViewBuilder
     private var menu: some View {
+        if row.node.isDirectory {
+            Button("New File") { onCreateFile() }
+            Button("New Folder") { onCreateFolder() }
+            Divider()
+        }
+        Button("Rename") { onBeginRename() }
+        Button("Delete") { onDelete() }
+            .foregroundStyle(.red)
+        Divider()
         Button("Reveal in Finder") {
             NSWorkspace.shared.activateFileViewerSelecting([row.node.url])
         }
@@ -398,8 +627,10 @@ private struct FileExplorerRow: View {
     }
 
     private var background: Color {
-        // The file on screen reads strongest, then the terminal's directory.
-        // Hover stays the faintest so it never competes with a real state.
+        // The item being acted on reads strongest, then the file on screen,
+        // then the terminal's directory. Hover stays the faintest so it
+        // never competes with a real state.
+        if isSelected { return accent.opacity(0.45) }
         if isOpenInEditor { return accent.opacity(0.34) }
         if isCurrent { return accent.opacity(0.28) }
         return isHovered ? accent.opacity(0.12) : .clear
@@ -407,5 +638,14 @@ private struct FileExplorerRow: View {
 
     private var indent: CGFloat {
         CGFloat(row.depth) * 12
+    }
+
+    /// The range to select when a name field opens: the whole name for a
+    /// folder, everything before the extension for a file, so typing
+    /// replaces just the meaningful part.
+    private static func baseNameRange(in name: String, isFolder: Bool) -> Range<String.Index>? {
+        let length = isFolder ? (name as NSString).length : (name as NSString).deletingPathExtension.count
+        let nsRange = NSRange(location: 0, length: length)
+        return Range(nsRange, in: name)
     }
 }

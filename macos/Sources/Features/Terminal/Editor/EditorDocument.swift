@@ -178,6 +178,19 @@ final class EditorDocument: ObservableObject, Identifiable {
         watcher = nil
     }
 
+    /// A copy of this document living at a new path, carrying the buffer,
+    /// dirty state and conflict state with it — a rename or move must not
+    /// cost the reader their edits.
+    func transferred(to newURL: URL) -> EditorDocument {
+        let copy = EditorDocument(url: newURL, text: text)
+        copy.liveText = liveText
+        copy.diskText = diskText
+        copy.isDirty = isDirty
+        copy.hasConflict = hasConflict
+        copy.loadError = loadError
+        return copy
+    }
+
     private func diskDidChange() {
         guard let data = try? Data(contentsOf: url),
               let onDisk = String(data: data, encoding: .utf8)

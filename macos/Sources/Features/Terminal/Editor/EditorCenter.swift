@@ -168,6 +168,43 @@ final class EditorCenter: ObservableObject {
         lastSelectedFile = path
     }
 
+    /// A file renamed or moved in the file explorer while open here.
+    ///
+    /// The buffer travels with it — renaming a file you are editing should
+    /// not throw the edits away — and the tab keeps its place in the bar.
+    /// The language server hears the old document close and the new one
+    /// open through the pane's existing appear/disappear calls.
+    func repath(from oldPath: String, to newPath: String) {
+        guard oldPath != newPath else { return }
+        guard let document = documents.removeValue(forKey: oldPath) else { return }
+
+        document.stopWatching()
+        documentObservers.removeValue(forKey: oldPath)
+
+        let moved = document.transferred(to: URL(fileURLWithPath: newPath))
+        documents[newPath] = moved
+        moved.startWatching()
+        documentObservers[newPath] = moved.objectWillChange
+            .sink { [weak self, weak moved] (_: Void) in
+                DispatchQueue.main.async {
+                    guard let self, let moved else { return }
+                    self.tabs.setDirty(moved.isDirty, for: newPath)
+                }
+            }
+        if moved.isDirty { tabs.setDirty(true, for: newPath) }
+
+        tabs.repath(from: oldPath, to: newPath)
+        if lastSelectedFile == oldPath { lastSelectedFile = newPath }
+    }
+
+    /// A file deleted in the file explorer stops being a tab, and the
+    /// language server stops hearing about it.
+    func didDelete(path: String) {
+        guard documents[path] != nil else { return }
+        LSPCenter.shared.didClose(path: path)
+        close(path)
+    }
+
     // MARK: Saving
 
     @discardableResult

@@ -20,7 +20,34 @@ struct FileRow: Identifiable, Equatable {
     /// than being a real file.
     var isTruncationNotice: Bool = false
 
+    /// True when this is the "untitled file" row a create action draws
+    /// inside the target folder until the name is committed.
+    var isCreatePlaceholder: Bool = false
+
     var id: String { isTruncationNotice ? "\(node.path)#more" : node.path }
+}
+
+/// What the explorer is asking for a name for, if anything.
+enum FileEditState: Equatable {
+    /// Renaming the item at `path`.
+    case rename(path: String)
+
+    /// Creating a file or folder inside `parent`.
+    case create(parent: String, isFolder: Bool)
+
+    /// The path a row should compare itself against to know it's the one
+    /// showing the field.
+    var targetPath: String? {
+        switch self {
+        case .rename(let path): return path
+        case .create(let parent, _): return parent
+        }
+    }
+
+    var isCreate: Bool {
+        guard case .create = self else { return false }
+        return true
+    }
 }
 
 /// The file explorer's tree: which folder is the root, what's expanded, and
@@ -41,6 +68,17 @@ final class FileExplorerModel: ObservableObject {
     /// The path to scroll to and highlight — the terminal's current folder,
     /// updated as the user `cd`s around.
     @Published private(set) var currentDirectory: String?
+
+    /// The path of the item the user last clicked, which anchors rename,
+    /// delete and create actions. Not tied to what's on screen: it can
+    /// point at a row that scrolled away, and that's fine.
+    @Published private(set) var selection: String?
+
+    /// The rename or create field currently open, if any.
+    @Published var editing: FileEditState?
+
+    /// A friendly explanation of the last filesystem operation that failed.
+    @Published var errorMessage: String?
 
     /// What the search field holds.
     ///
@@ -122,6 +160,8 @@ final class FileExplorerModel: ObservableObject {
         children.removeAll()
         loading.removeAll()
         expanded = url.map { store.expanded(forRoot: $0.path) } ?? []
+        editing = nil
+        selection = nil
 
         guard let url else {
             rows = []
@@ -183,6 +223,151 @@ final class FileExplorerModel: ObservableObject {
         expanded.contains(node.path)
     }
 
+    // MARK: Selection and editing
+
+    /// Marks the item the user is acting on.
+    func select(_ path: String?) {
+        guard selection != path else { return }
+        selection = path
+    }
+
+    /// The folder a create action should target: the selected folder, or
+    /// the folder holding the selected file, or the root when nothing is
+    /// selected.
+    func createTargetParent() -> String? {
+        guard let root else { return nil }
+        guard let selection else { return root.path }
+
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: selection, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return selection
+        }
+        return (selection as NSString).deletingLastPathComponent
+    }
+
+    /// Opens a create field inside `parent`. The name is prefilled with the
+    /// next free "untitled" name; the field owns the text until commit.
+    func beginCreate(in parent: String, isFolder: Bool) {
+        guard editing == nil else { return }
+        editing = .create(parent: parent, isFolder: isFolder)
+        selection = parent
+        rebuildRows()
+    }
+
+    /// Creates inside wherever the selection points, or the root.
+    func beginCreateDefault(isFolder: Bool) {
+        guard let parent = createTargetParent() else { return }
+        beginCreate(in: parent, isFolder: isFolder)
+    }
+
+    /// Puts the row for `path` into rename mode.
+    func beginRename(path: String) {
+        guard editing == nil else { return }
+        editing = .rename(path: path)
+        rebuildRows()
+    }
+
+    func cancelEditing() {
+        guard editing != nil else { return }
+        editing = nil
+        rebuildRows()
+    }
+
+    /// Commits a rename field. Returns the new path on success.
+    @discardableResult
+    func commitRename(path: String, to name: String) -> Result<URL, FileExplorerError> {
+        editing = nil
+
+        let source = URL(fileURLWithPath: path)
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let result = FileExplorerFilesystem.rename(source, to: trimmed)
+        switch result {
+        case .success(let target):
+            if selection == path { selection = target.path }
+            reloaded(source.deletingLastPathComponent().path)
+            rebuildRows()
+        case .failure(let error):
+            errorMessage = error.message
+            rebuildRows()
+        }
+        return result
+    }
+
+    /// Commits a create field.
+    @discardableResult
+    func commitCreate(parent: String, isFolder: Bool, name: String) -> Result<URL, FileExplorerError> {
+        editing = nil
+
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let target = URL(fileURLWithPath: parent, isDirectory: true)
+            .appendingPathComponent(trimmed)
+        let result = isFolder
+            ? FileExplorerFilesystem.createFolder(at: target)
+            : FileExplorerFilesystem.createFile(at: target)
+        switch result {
+        case .success:
+            selection = target.path
+            reloaded(parent)
+            rebuildRows()
+        case .failure(let error):
+            errorMessage = error.message
+            rebuildRows()
+        }
+        return result
+    }
+
+    /// Sends the item at `path` to the Trash.
+    @discardableResult
+    func delete(path: String) -> Result<Void, FileExplorerError> {
+        let result = FileExplorerFilesystem.delete(URL(fileURLWithPath: path))
+        switch result {
+        case .success:
+            if selection == path { selection = nil }
+            reloaded((path as NSString).deletingLastPathComponent)
+            rebuildRows()
+        case .failure(let error):
+            errorMessage = error.message
+        }
+        return result
+    }
+
+    /// Moves the item at `path` into `directory`. Returns the new path on
+    /// success.
+    @discardableResult
+    func move(path: String, into directory: String) -> Result<URL, FileExplorerError> {
+        let source = URL(fileURLWithPath: path)
+        let result = FileExplorerFilesystem.move(
+            source,
+            into: URL(fileURLWithPath: directory, isDirectory: true)
+        )
+        switch result {
+        case .success(let target):
+            if selection == path { selection = target.path }
+            reloaded(source.deletingLastPathComponent().path)
+            reloaded(directory)
+            rebuildRows()
+        case .failure(let error):
+            errorMessage = error.message
+        }
+        return result
+    }
+
+    /// The id of the create placeholder row, for scrolling it into view.
+    var createPlaceholderID: String? {
+        guard case .create(let parent, let isFolder) = editing else { return nil }
+        let proposed = URL(fileURLWithPath: parent, isDirectory: true)
+            .appendingPathComponent(FileExplorerFilesystem.proposedName(isFolder: isFolder))
+        return FileExplorerFilesystem.uniqueName(for: proposed).path
+    }
+
+    /// Reloads a directory that a filesystem operation just changed.
+    private func reloaded(_ directory: String) {
+        if directory == root?.path || expanded.contains(directory) || children[directory] != nil {
+            load(directory)
+        }
+    }
+
     /// Reloads every directory currently on screen — the refresh button,
     /// and how a hidden-files toggle takes effect.
     func reloadVisible() {
@@ -193,7 +378,7 @@ final class FileExplorerModel: ObservableObject {
 
     // MARK: Loading
 
-    private func load(_ path: String) {
+    func load(_ path: String) {
         guard !loading.contains(path) else { return }
         loading.insert(path)
 
@@ -341,6 +526,19 @@ final class FileExplorerModel: ObservableObject {
             result.append(FileRow(node: node, depth: depth))
             guard node.isDirectory, expanded.contains(node.path) else { continue }
             append(directory: node.path, depth: depth + 1, into: &result)
+        }
+
+        // The create field lives at the end of the folder it targets, so
+        // the new name appears where the new item will.
+        if case .create(let parent, let isFolder) = editing, parent == directory {
+            let proposed = URL(fileURLWithPath: directory, isDirectory: true)
+                .appendingPathComponent(FileExplorerFilesystem.proposedName(isFolder: isFolder))
+            let target = FileExplorerFilesystem.uniqueName(for: proposed)
+            result.append(FileRow(
+                node: FileNode(url: target, name: target.lastPathComponent, isDirectory: isFolder),
+                depth: depth,
+                isCreatePlaceholder: true
+            ))
         }
 
         let hidden = nodes.count - Self.childLimit
