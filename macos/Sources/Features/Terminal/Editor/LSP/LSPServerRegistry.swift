@@ -137,6 +137,31 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
         }
     }
 
+    /// The reverse of `installCommand`, or nil when nothing sensible can be
+    /// uninstalled automatically — `go install` has no inverse, and Xcode's
+    /// bundled tools should not be removed.
+    var uninstallCommand: String? {
+        switch command {
+        case "typescript-language-server": return "npm rm -g typescript-language-server typescript"
+        case "vue-language-server": return "npm rm -g @vue/language-server"
+        case "pyright-langserver": return "npm rm -g pyright"
+        case "vscode-langservers-extracted": return "npm rm -g vscode-langservers-extracted"
+        case "yaml-language-server": return "npm rm -g yaml-language-server"
+        case "bash-language-server": return "npm rm -g bash-language-server"
+        case "intelephense": return "npm rm -g intelephense"
+        case "kotlin-language-server": return "brew uninstall kotlin-language-server"
+        case "zls": return "brew uninstall zls"
+        case "jdtls": return "brew uninstall jdtls"
+        case "terraform-ls": return "brew uninstall hashicorp/tap/terraform-ls"
+        case "marksman": return "brew uninstall marksman"
+        case "ruby-lsp": return "gem uninstall ruby-lsp"
+        case "rust-analyzer": return "rustup component remove rust-analyzer"
+        case "sourcekit-lsp", "clangd", "gopls":
+            return nil
+        default: return nil
+        }
+    }
+
     /// Official project documentation, when the server has a stable public
     /// home. Kept next to the definition so Settings does not need a second
     /// table that can drift out of sync with the registry.

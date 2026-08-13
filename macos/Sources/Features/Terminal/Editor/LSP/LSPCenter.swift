@@ -140,6 +140,13 @@ final class LSPCenter: ObservableObject {
     /// into an append-only list and nothing ever looked again, so the
     /// banner outlived the install and only a restart cleared it — the
     /// signature of a cache with no invalidation.
+    /// The Settings install/uninstall flow calls this when a server binary
+    /// appears or disappears, so the "Install"/"Uninstall" toggle and any
+    /// "not installed" banner re-check from a fresh locate.
+    func noteAvailabilityChanged() {
+        availabilityGeneration += 1
+    }
+
     func recheckMissingServers() {
         let notInstalledCommands = Set(status.compactMap { key, value -> String? in
             guard case .notInstalled = value else { return nil }

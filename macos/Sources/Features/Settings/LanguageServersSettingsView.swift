@@ -213,11 +213,22 @@ private struct LanguageServerSection: Identifiable {
 /// fresh `@State` per server — without it, switching the sidebar selection
 /// would keep editing the previous server's override in place, since
 /// SwiftUI would otherwise reuse the same view identity and its state.
+/// Whether the install/uninstall button is doing something, so its label
+/// can swap for progress.
+private enum ServerInstallOperation: Equatable {
+    case none
+    case installing
+    case uninstalling
+}
+
 private struct LanguageServerOverrideForm: View {
     let server: LSPServerDefinition
+    @ObservedObject private var lsp = LSPCenter.shared
     @State private var override: LSPServerOverride
-    @State private var installing = false
-    @State private var installError: String?
+    @State private var operation: ServerInstallOperation = .none
+    @State private var operationError: String?
+    @State private var operationOutput: [String] = []
+    @State private var showUninstallConfirmation = false
 
     init(server: LSPServerDefinition) {
         self.server = server
@@ -231,11 +242,7 @@ private struct LanguageServerOverrideForm: View {
                 Text(server.displayName)
                     .font(.title2.weight(.semibold))
                 Spacer()
-                if let url = server.documentationURL {
-                    Link(destination: url) {
-                        Label("Documentation", systemImage: "book.closed")
-                    }
-                }
+                operationButton
             }
             .padding(.horizontal, 20)
             .padding(.top, 8)
@@ -246,7 +253,14 @@ private struct LanguageServerOverrideForm: View {
                     HStack {
                         Text("Status")
                         Spacer()
-                        LSPStatusBadge(status: LSPCenter.shared.status(for: server), detailed: true)
+                        LSPStatusBadge(status: lsp.status(for: server), detailed: true)
+                    }
+
+                    if let url = server.documentationURL {
+                        Link(destination: url) {
+                            Label("Documentation", systemImage: "book.closed")
+                        }
+                        .buttonStyle(.link)
                     }
                 }
 
@@ -254,9 +268,9 @@ private struct LanguageServerOverrideForm: View {
                     CopyableValueRow(title: "Default Command", value: server.invocation)
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Install")
+                            Text(commandTitle)
                                 .font(.headline)
-                            Text(server.installCommand)
+                            Text(activeCommand)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                             if let helper = server.installHelper {
@@ -264,26 +278,25 @@ private struct LanguageServerOverrideForm: View {
                                     .font(.caption)
                                     .foregroundStyle(.tertiary)
                             }
-                            if let installError {
-                                Text(installError)
+                            if operation != .none, !operationOutput.isEmpty {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    ForEach(recentOutput, id: \.self) { line in
+                                        Text(line)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .padding(.top, 2)
+                            }
+                            if let operationError {
+                                Text(operationError)
                                     .font(.caption)
                                     .foregroundStyle(.red)
                             }
                         }
                         Spacer(minLength: 8)
-                        Button {
-                            runInstall()
-                        } label: {
-                            if installing {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Label("Install", systemImage: "arrow.down.circle")
-                            }
-                        }
-                        .disabled(installing)
-                        .help("Runs the install command above in a terminal with your login environment")
-                        CopyButton(text: server.installCommand, label: "Copy")
+                        CopyButton(text: activeCommand, label: "Copy")
                     }
                 }
 
@@ -327,6 +340,18 @@ private struct LanguageServerOverrideForm: View {
                 }
             }
             .formStyle(.grouped)
+            .confirmationDialog(
+                "Uninstall \(server.displayName)?",
+                isPresented: $showUninstallConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Uninstall", role: .destructive) {
+                    runOperation(.uninstalling)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Runs `\(server.uninstallCommand ?? "")` in a terminal with your login environment.")
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: override) { value in
@@ -334,33 +359,142 @@ private struct LanguageServerOverrideForm: View {
         }
     }
 
-    /// Runs the install command through the user's login shell so `npm`,
-    /// `go`, `brew`, `gem` — whichever the hint uses — are on `PATH`. Runs
-    /// off the main actor; the result lands back on it.
-    private func runInstall() {
-        installing = true
-        installError = nil
+    /// The install/uninstall button at the top of the screen. While an
+    /// operation runs it becomes a progress bar — determinate once a
+    /// percentage can be parsed from the live output, an indeterminate
+    /// spinner before that.
+    @ViewBuilder
+    private var operationButton: some View {
+        switch operation {
+        case .installing, .uninstalling:
+            HStack(spacing: 8) {
+                if let progress {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .frame(width: 140)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Text(operationLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
-        let command = server.installCommand
+        case .none:
+            if isInstalled {
+                Button(role: .destructive) {
+                    showUninstallConfirmation = true
+                } label: {
+                    Label("Uninstall", systemImage: "trash")
+                }
+                .disabled(server.uninstallCommand == nil)
+                .help(server.uninstallCommand == nil
+                    ? "No automatic uninstall for this server."
+                    : "Removes the server and its packages")
+            } else {
+                Button {
+                    runOperation(.installing)
+                } label: {
+                    Label("Install", systemImage: "arrow.down.circle")
+                }
+                .help("Runs the install command in a terminal with your login environment")
+            }
+        }
+    }
+
+    /// Whether the server's binary is currently reachable, regardless of
+    /// whether a server process is actually running for any workspace.
+    private var isInstalled: Bool {
+        switch lsp.status(for: server).state {
+        case .installed, .starting, .running, .error: return true
+        case .unknown, .notInstalled: return false
+        }
+    }
+
+    /// The command the section shows and the copy button copies: the
+    /// uninstall command when the server is installed and one exists, the
+    /// install command otherwise.
+    private var activeCommand: String {
+        if isInstalled, let uninstall = server.uninstallCommand {
+            return uninstall
+        }
+        return server.installCommand
+    }
+
+    private var commandTitle: String {
+        switch operation {
+        case .none: return isInstalled ? "Uninstall" : "Install"
+        case .installing: return "Installing"
+        case .uninstalling: return "Uninstalling"
+        }
+    }
+
+    private var operationLabel: String {
+        operation == .installing ? "Installing…" : "Uninstalling…"
+    }
+
+    /// The most recent live output lines while an operation runs, so the
+    /// user sees real progress rather than an unexplained spinner.
+    private var recentOutput: [String] {
+        operationOutput.suffix(4).map { String($0) }
+    }
+
+    /// Best-effort percentage parsed from the live output. npm and
+    /// Homebrew both print a running percentage while they work; before
+    /// the first one arrives there is nothing to fill a determinate bar
+    /// with, and the spinner shows instead.
+    private var progress: Double? {
+        for line in operationOutput.reversed() {
+            guard let match = line.firstMatch(of: /(\d+(?:\.\d+)?)\s*%/),
+                  let value = Double(match.output.1)
+            else { continue }
+            return min(max(value / 100.0, 0), 1)
+        }
+        return nil
+    }
+
+    /// Runs an install or uninstall through the user's login shell so
+    /// `npm`, `brew`, `gem` — whichever the hint uses — are on `PATH`.
+    /// Streams the output to the view as it arrives; the result lands back
+    /// on the main actor.
+    private func runOperation(_ operation: ServerInstallOperation) {
+        guard operation != .none else { return }
+        let command = operation == .installing
+            ? server.installCommand
+            : server.uninstallCommand
+        guard let command else { return }
+
+        self.operation = operation
+        operationError = nil
+        operationOutput = []
+
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         Task { [self] in
-            let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
             let environment = await Task.detached(priority: .userInitiated) {
                 LoginEnvironment.executableEnvironment()
             }.value
             let result = await Task.detached(priority: .userInitiated) {
-                ShellCommand.runResult(
+                ShellCommand.runStreaming(
                     shell,
                     ["-lic", command],
                     environment: environment,
                     timeout: 300
-                )
+                ) { line in
+                    DispatchQueue.main.async {
+                        operationOutput.append(line)
+                        if operationOutput.count > 12 {
+                            operationOutput.removeFirst(operationOutput.count - 12)
+                        }
+                    }
+                }
             }.value
 
-            installing = false
+            self.operation = .none
             if result.succeeded {
-                LSPCenter.shared.recheckMissingServers()
+                LSPCenter.shared.noteAvailabilityChanged()
             } else {
-                installError = result.message
+                operationError = result.message
             }
         }
     }

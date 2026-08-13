@@ -18,6 +18,46 @@ enum ShellCommand {
         func store(_ data: Data) {
             lock.withLock { storage = data }
         }
+
+        func append(_ data: Data) {
+            lock.withLock { storage.append(data) }
+        }
+    }
+
+    /// Buffers incoming chunks and emits whole lines to `onLine`, appending
+    /// the raw data to `sink` for the final `Result`.
+    private final class LineSplitter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending = ""
+        private let sink: Output
+        private let onLine: (String) -> Void
+
+        init(sink: Output, onLine: @escaping (String) -> Void) {
+            self.sink = sink
+            self.onLine = onLine
+        }
+
+        func ingest(_ data: Data) {
+            sink.append(data)
+            lock.withLock {
+                pending += String(data: data, encoding: .utf8) ?? ""
+                var lines = pending.split(separator: "\n", omittingEmptySubsequences: false)
+                if let last = lines.popLast() {
+                    pending = String(last)
+                }
+                for line in lines {
+                    onLine(String(line))
+                }
+            }
+        }
+
+        func flush() {
+            lock.withLock {
+                guard !pending.isEmpty else { return }
+                onLine(pending)
+                pending = ""
+            }
+        }
     }
 
     /// Returns the command's stdout, or nil when it can't be launched,
@@ -159,6 +199,81 @@ enum ShellCommand {
             process.terminate()
         }
 
+        _ = group.wait(timeout: .now() + 2)
+
+        return Result(
+            status: timedOut ? nil : process.terminationStatus,
+            stdout: String(data: outData.data, encoding: .utf8) ?? "",
+            stderr: String(data: errData.data, encoding: .utf8) ?? ""
+        )
+    }
+
+    /// Like `runResult`, but forwards output to `onOutput` as it arrives,
+    /// line by line, while still returning the full `Result` when done.
+    ///
+    /// The callback runs on a background dispatch queue — hop to the main
+    /// actor inside it before touching any UI. Blocks the calling thread;
+    /// background tasks only.
+    static func runStreaming(
+        _ launchPath: String,
+        _ arguments: [String],
+        cwd: String? = nil,
+        environment: [String: String]? = nil,
+        timeout: TimeInterval,
+        onOutput: @escaping (String) -> Void
+    ) -> Result {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launchPath)
+        process.arguments = arguments
+        if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+        if let environment { process.environment = environment }
+        process.standardInput = FileHandle.nullDevice
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        do {
+            try process.run()
+        } catch {
+            return Result(status: nil, stdout: "", stderr: error.localizedDescription)
+        }
+
+        let outData = Output()
+        let errData = Output()
+        let outLines = LineSplitter(sink: outData, onLine: onOutput)
+        let errLines = LineSplitter(sink: errData, onLine: onOutput)
+        let group = DispatchGroup()
+
+        for (pipe, splitter) in [(outPipe, outLines), (errPipe, errLines)] {
+            group.enter()
+            let handle = pipe.fileHandleForReading
+            handle.readabilityHandler = { handle in
+                let data = handle.availableData
+                if data.isEmpty {
+                    handle.readabilityHandler = nil
+                    splitter.flush()
+                    group.leave()
+                } else {
+                    splitter.ingest(data)
+                }
+            }
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            usleep(50_000)
+        }
+
+        var timedOut = false
+        if process.isRunning {
+            timedOut = true
+            process.terminate()
+        }
+
+        // The pipes drain asynchronously; give the readers a moment to hit
+        // EOF before assembling the result.
         _ = group.wait(timeout: .now() + 2)
 
         return Result(
