@@ -48,7 +48,7 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
         "swiftinterface": .swift,
         "kt": .kotlin, "kts": .kotlin, "java": .kotlin,
         "rs": .rust,
-        "go": .go,
+        "go": .go, "mod": .go, "sum": .go,
         "py": .python, "pyi": .python,
         "rb": .ruby,
         "sh": .shell, "bash": .shell, "zsh": .shell, "fish": .shell,

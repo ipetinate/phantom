@@ -159,6 +159,8 @@ struct CodeLanguageTests {
         #expect(CodeLanguage.resolve(fileName: "vite.config.mts") == .javascript)
         #expect(CodeLanguage.resolve(fileName: "GitCenter.swift") == .swift)
         #expect(CodeLanguage.resolve(fileName: "build.zig") == .zig)
+        #expect(CodeLanguage.resolve(fileName: "go.mod") == .go)
+        #expect(CodeLanguage.resolve(fileName: "go.sum") == .go)
         #expect(CodeLanguage.resolve(fileName: "Info.plist") == .plain)
     }
 

@@ -94,6 +94,8 @@ struct LSPServerRegistryTests {
         #expect(LSPServerRegistry.languageID(forPath: "/x/HomeView.vue") == "vue")
         #expect(LSPServerRegistry.languageID(forPath: "GitStatus.SWIFT") == "swift")
         #expect(LSPServerRegistry.languageID(forPath: "build.zig") == "zig")
+        #expect(LSPServerRegistry.languageID(forPath: "go.mod") == "go")
+        #expect(LSPServerRegistry.languageID(forPath: "go.sum") == "go")
         #expect(LSPServerRegistry.languageID(forPath: "docker-compose.yml") == "yaml")
     }
 
@@ -141,6 +143,46 @@ struct LSPServerRegistryTests {
                 definition.initializationOptionsKind == .none,
                 "\(definition.languageID) shouldn't need initializationOptions"
             )
+        }
+    }
+
+    /// Every server gets a category. An unclassified default exists, but a
+    /// registry entry that falls into it is a review miss, not a choice.
+    @Test func everyServerHasACategory() {
+        for definition in LSPServerRegistry.all {
+            switch definition.command {
+            case "typescript-language-server", "vue-language-server",
+                 "pyright-langserver", "bash-language-server",
+                 "intelephense", "ruby-lsp":
+                #expect(definition.category == .script, "\(definition.command)")
+            case "sourcekit-lsp", "kotlin-language-server", "rust-analyzer",
+                 "gopls", "zls", "jdtls", "clangd":
+                #expect(definition.category == .compiled, "\(definition.command)")
+            case "vscode-html-language-server", "marksman":
+                #expect(definition.category == .markup, "\(definition.command)")
+            case "vscode-css-language-server":
+                #expect(definition.category == .styles, "\(definition.command)")
+            case "vscode-json-language-server", "yaml-language-server":
+                #expect(definition.category == .data, "\(definition.command)")
+            case "terraform-ls":
+                #expect(definition.category == .infrastructure, "\(definition.command)")
+            default:
+                Issue.record("\(definition.command) falls into the default category")
+            }
+        }
+    }
+
+    /// Two language ids that share a binary must agree on the category — the
+    /// settings list groups by binary, so a disagreement would split one
+    /// row across two sections.
+    @Test func sharedBinariesAgreeOnCategory() {
+        let byCommand: [String: Set<LSPServerCategory>] = Dictionary(
+            grouping: LSPServerRegistry.all,
+            by: \.command
+        ).mapValues { Set($0.map(\.category)) }
+
+        for (command, categories) in byCommand {
+            #expect(categories.count == 1, "\(command) spans \(categories.count) categories")
         }
     }
 }

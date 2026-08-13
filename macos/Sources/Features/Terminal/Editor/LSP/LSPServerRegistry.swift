@@ -386,6 +386,10 @@ enum LSPServerRegistry {
         "pyi": "python",
         "rs": "rust",
         "go": "go",
+        // Go module manifests use their own extensions, but are handled by
+        // gopls with the same language id as Go source files.
+        "mod": "go",
+        "sum": "go",
         "zig": "zig",
         "json": "json",
         "jsonc": "json",
