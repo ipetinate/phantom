@@ -69,6 +69,10 @@ struct LanguageServersSettingsView: View {
         }
         .navigationTitle("Language Servers")
         .frame(minWidth: 720, minHeight: 420)
+        // Opening this screen is the moment the answer matters, and it is
+        // also the moment after which the user most often installs something
+        // in the terminal next to it.
+        .task { lsp.refreshInstalledCommands() }
     }
 
     /// A server matches the query when any of the words a user would type
@@ -382,7 +386,18 @@ private struct LanguageServerOverrideForm: View {
             }
 
         case .none:
-            if isInstalled {
+            if !lsp.hasProbedInstalls {
+                // The probe runs off the main actor and lands in a moment.
+                // Guessing "Install" until it does is how a user ends up
+                // reinstalling something they already have.
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Checking…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if isInstalled {
                 Button(role: .destructive) {
                     showUninstallConfirmation = true
                 } label: {
@@ -403,28 +418,39 @@ private struct LanguageServerOverrideForm: View {
         }
     }
 
-    /// Whether the server's binary is currently reachable, regardless of
-    /// whether a server process is actually running for any workspace.
-    private var isInstalled: Bool {
-        switch lsp.status(for: server).state {
-        case .installed, .starting, .running, .error: return true
-        case .unknown, .notInstalled: return false
-        }
+    /// Whether the server's binary is on disk, which is the only thing the
+    /// Install/Uninstall choice is about.
+    ///
+    /// Not derived from the runtime status any more: a crashed server used
+    /// to count as installed and a server uninstalled elsewhere kept
+    /// offering to be uninstalled, because `error` is a fact about a process
+    /// and this is a question about a file. The probe behind it is cached
+    /// and resolved off the main actor — see `LSPCenter.installedCommands`.
+    private var isInstalled: Bool { lsp.isInstalled(server) }
+
+    /// Whether this row is offering removal rather than installation: the
+    /// binary has to be there *and* have an automatic uninstall. gopls and
+    /// the Xcode-bundled servers have neither an inverse nor any business
+    /// being removed by us, so they keep offering their install command.
+    private var showsUninstall: Bool {
+        isInstalled && server.uninstallCommand != nil
     }
 
-    /// The command the section shows and the copy button copies: the
-    /// uninstall command when the server is installed and one exists, the
-    /// install command otherwise.
+    /// The command the section shows and the copy button copies.
     private var activeCommand: String {
-        if isInstalled, let uninstall = server.uninstallCommand {
-            return uninstall
+        guard showsUninstall, let uninstall = server.uninstallCommand else {
+            return server.installCommand
         }
-        return server.installCommand
+        return uninstall
     }
 
+    /// The heading over `activeCommand`, which has to name what that command
+    /// does. Reading `isInstalled` instead put "Uninstall" over
+    /// `go install golang.org/x/tools/gopls@latest`, and had Copy hand the
+    /// user an install while promising the opposite.
     private var commandTitle: String {
         switch operation {
-        case .none: return isInstalled ? "Uninstall" : "Install"
+        case .none: return showsUninstall ? "Uninstall" : "Install"
         case .installing: return "Installing"
         case .uninstalling: return "Uninstalling"
         }

@@ -140,12 +140,21 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
     /// The reverse of `installCommand`, or nil when nothing sensible can be
     /// uninstalled automatically — `go install` has no inverse, and Xcode's
     /// bundled tools should not be removed.
+    ///
+    /// Keyed off `command`, which is the *binary*: the case that named the
+    /// npm package `vscode-langservers-extracted` matched no server at all,
+    /// because the three servers that package ships are three separate
+    /// binaries — and each of them was left with a permanently disabled
+    /// Uninstall button. Removing any one of them removes the package, and
+    /// so the other two with it.
     var uninstallCommand: String? {
         switch command {
         case "typescript-language-server": return "npm rm -g typescript-language-server typescript"
         case "vue-language-server": return "npm rm -g @vue/language-server"
         case "pyright-langserver": return "npm rm -g pyright"
-        case "vscode-langservers-extracted": return "npm rm -g vscode-langservers-extracted"
+        case "vscode-css-language-server", "vscode-html-language-server",
+             "vscode-json-language-server":
+            return "npm rm -g vscode-langservers-extracted"
         case "yaml-language-server": return "npm rm -g yaml-language-server"
         case "bash-language-server": return "npm rm -g bash-language-server"
         case "intelephense": return "npm rm -g intelephense"

@@ -172,6 +172,42 @@ struct LSPServerRegistryTests {
         }
     }
 
+    /// `uninstallCommand` switches on the *binary*, and the three servers
+    /// that ship inside `vscode-langservers-extracted` are three separate
+    /// binaries. The case was written against the package name instead, so
+    /// it matched no server at all and CSS, HTML and JSON each got a
+    /// permanently disabled Uninstall button.
+    @Test func theServersSharingAnNpmPackageCanBeUninstalled() {
+        for command in [
+            "vscode-css-language-server",
+            "vscode-html-language-server",
+            "vscode-json-language-server",
+        ] {
+            let server = LSPServerRegistry.all.first { $0.command == command }
+            #expect(server?.uninstallCommand == "npm rm -g vscode-langservers-extracted", "\(command)")
+        }
+    }
+
+    /// The general form of the same bug: anything this offers to install
+    /// with a package manager can be removed with one. The servers that
+    /// legitimately have no inverse — `go install`, and the two that ship
+    /// with Xcode — are listed rather than inferred, so adding a server
+    /// without an uninstall is a decision somebody has to write down.
+    @Test func everyPackageManagedServerCanBeUninstalled() {
+        let withoutAnInverse: Set<String> = ["gopls", "sourcekit-lsp", "clangd"]
+
+        for definition in LSPServerRegistry.distinctServers {
+            guard !withoutAnInverse.contains(definition.command) else {
+                #expect(definition.uninstallCommand == nil, "\(definition.command)")
+                continue
+            }
+            #expect(
+                definition.uninstallCommand != nil,
+                "\(definition.command) can be installed but never removed"
+            )
+        }
+    }
+
     /// Two language ids that share a binary must agree on the category — the
     /// settings list groups by binary, so a disagreement would split one
     /// row across two sections.
