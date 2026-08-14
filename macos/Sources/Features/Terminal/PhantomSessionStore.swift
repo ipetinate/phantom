@@ -110,39 +110,106 @@ final class PhantomSessionStore {
     ///
     /// `isVisible` was the next attempt and it was wrong too, because it is
     /// false for a window in the Dock and nothing about it separates
-    /// minimized from closed. Measured against a probe window: shown,
-    /// `isVisible=true isMiniaturized=false`; minimized, `isVisible=false
-    /// isMiniaturized=true`; ordered out and closed, both false; and a
-    /// background tab of a settled tab group, `isVisible=true`. Minimizing
-    /// any one tab minimizes the whole group, so every window in it reports
-    /// `isMiniaturized`.
+    /// minimized from closed. `isVisible || isMiniaturized` was the third,
+    /// and it was wrong in a way that only showed up in use: **a background
+    /// tab does not reliably report `isVisible`**. An earlier version of this
+    /// comment claimed it did. It does not, and the claim was never measured.
     ///
-    /// Recording only `isVisible` windows therefore dropped a minimized
-    /// window and every tab in it — agent conversations included — from the
-    /// saved session, without the set ever being empty enough for the guard
-    /// in `shouldWrite` to notice. Reading it the other way round, as "is
-    /// anything open", it claimed nothing was: minimizing every window and
-    /// pressing New Window restored the whole session on top of itself, two
-    /// tabs to a conversation, two agent processes writing one tab-state
-    /// file.
+    /// This is the table, from a probe that builds real windows, groups them,
+    /// minimizes, closes and reads the properties back:
     ///
-    /// So: `isVisible || isMiniaturized`, in one place, used by everything
-    /// that asks either question. Spelled over the two booleans rather than
-    /// over `NSWindow` so it can be exercised without a window server.
-    static func isOpen(isVisible: Bool, isMiniaturized: Bool) -> Bool {
+    /// | state                     | isVisible | isMiniaturized | tabGroup |
+    /// |---------------------------|-----------|----------------|----------|
+    /// | shown, alone              | true      | false          | nil      |
+    /// | selected tab of a group   | true      | false          | set      |
+    /// | background tab            | **either**| false          | set      |
+    /// | any tab, group minimized  | false     | true           | set      |
+    /// | closed                    | false     | false          | **nil**  |
+    ///
+    /// Two rows carry the answer. Background tabs disagree with each other —
+    /// one reported `true` and its neighbour `false` in the same group — so
+    /// no reading of `isVisible` can include them all. And a closed window's
+    /// `tabGroup` is nil, which is what makes group membership safe to trust:
+    /// it says "alive and in a window" without letting a released window back
+    /// in.
+    ///
+    /// What each mistake cost, in order: counting controllers meant the
+    /// session was never restored and a blank window opened over it. Reading
+    /// only `isVisible` dropped a minimized window and every tab in it, and
+    /// claimed nothing was open when everything was in the Dock — restoring
+    /// the session on top of itself, two tabs to a conversation. Missing
+    /// background tabs collapsed the file to the one selected tab: a restore
+    /// scheduled a save, the save saw one window of four, and the next
+    /// reopen brought back a single terminal. Every restore quietly threw the
+    /// rest of the session away.
+    ///
+    /// The fourth mistake was believing one predicate could answer both, and
+    /// it is the reason this comment is long. **These are two questions.**
+    ///
+    /// *What should the session record?* Every window the reader still has,
+    /// background tabs included — a tab they cannot see right now is one
+    /// they expect back tomorrow. That needs the group term.
+    ///
+    /// *Is anything open?* Whether the reader can reach a window at all,
+    /// which decides if New Window and a Dock click restore or open blank.
+    /// That must **not** use the group term: after a window closes, its tabs
+    /// linger in `NSApp.windows` long enough to still answer yes, and a yes
+    /// there means the reopen does nothing at all — the Dock lists the
+    /// terminals, clicking the icon produces no window, and the app looks
+    /// wedged. Reachability is about the screen and the Dock, and nothing
+    /// else.
+    ///
+    /// Spelled over booleans rather than over `NSWindow` so both can be
+    /// exercised without a window server, and with explicit arguments and no
+    /// defaults, because a predicate wrong this many times should not let a
+    /// caller silently forget a term.
+    static func isPartOfSession(
+        isVisible: Bool,
+        isMiniaturized: Bool,
+        isInTabGroup: Bool
+    ) -> Bool {
+        isVisible || isMiniaturized || isInTabGroup
+    }
+
+    /// Whether the reader can reach this window: on screen, or in the Dock.
+    /// See `isPartOfSession` for why this deliberately ignores tab-group
+    /// membership.
+    static func isReachable(isVisible: Bool, isMiniaturized: Bool) -> Bool {
         isVisible || isMiniaturized
     }
 
-    /// Whether a window is still part of the session. See `isOpen`.
+    /// Whether a window is still part of the session. See `isPartOfSession`.
     static func isOpen(_ window: NSWindow?) -> Bool {
         guard let window else { return false }
-        return isOpen(isVisible: window.isVisible, isMiniaturized: window.isMiniaturized)
+        return isPartOfSession(
+            isVisible: window.isVisible,
+            isMiniaturized: window.isMiniaturized,
+            isInTabGroup: window.tabGroup != nil)
     }
 
-    /// Whether any terminal window is still part of the session — on screen
-    /// or in the Dock. See `isOpen`.
-    static var hasOpenTerminalWindows: Bool {
-        TerminalController.all.contains { isOpen($0.window) }
+    /// Whether the reader can reach this window. See `isReachable`.
+    static func isReachable(_ window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        return isReachable(
+            isVisible: window.isVisible,
+            isMiniaturized: window.isMiniaturized)
+    }
+
+    /// Whether the reader can reach any terminal window at all — one on
+    /// screen, or one in the Dock.
+    ///
+    /// Named for reachability rather than for being "open" on purpose: the
+    /// ambiguity of *open* is what put the wrong predicate here. This decides
+    /// whether New Window and a Dock click restore the session or open a
+    /// blank window, so it must answer no the moment the reader has nothing
+    /// left to look at — including while the tabs of a just-closed window are
+    /// still listed in `NSApp.windows`. Answering yes there is what made the
+    /// Dock icon do nothing while its menu still listed every terminal.
+    ///
+    /// Deliberately **not** the predicate the save filter uses. See
+    /// `isPartOfSession`.
+    static var hasReachableTerminalWindows: Bool {
+        TerminalController.all.contains { isReachable($0.window) }
     }
 
     // MARK: The Session File
@@ -491,7 +558,7 @@ final class PhantomSessionStore {
         // creating more would duplicate them. This is also what keeps a
         // second New Window from restoring the session again: once the
         // first one brought it back, windows are on screen.
-        guard !Self.hasOpenTerminalWindows else { return false }
+        guard !Self.hasReachableTerminalWindows else { return false }
 
         guard let states = load(), !states.isEmpty else { return false }
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return false }

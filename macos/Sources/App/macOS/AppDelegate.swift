@@ -492,7 +492,7 @@ class AppDelegate: NSObject,
         /// — or on a first ever launch — clicking the dock icon did nothing
         /// at all, and went on doing nothing. See
         /// `PhantomSessionStore.isOpen`.
-        guard !PhantomSessionStore.hasOpenTerminalWindows else { return true }
+        guard !PhantomSessionStore.hasReachableTerminalWindows else { return true }
 
         _ = TerminalController.newWindow(ghostty)
         return false

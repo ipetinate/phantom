@@ -23,19 +23,87 @@ struct PhantomSessionStoreTests {
     /// the whole session on top of the windows still sitting in the Dock, two
     /// tabs to an agent conversation.
     @Test func aMinimizedWindowIsStillPartOfTheSession() {
-        #expect(PhantomSessionStore.isOpen(isVisible: false, isMiniaturized: true))
+        #expect(PhantomSessionStore.isPartOfSession(
+            isVisible: false, isMiniaturized: true, isInTabGroup: false))
     }
 
     @Test func anOnScreenWindowIsPartOfTheSession() {
-        #expect(PhantomSessionStore.isOpen(isVisible: true, isMiniaturized: false))
+        #expect(PhantomSessionStore.isPartOfSession(
+            isVisible: true, isMiniaturized: false, isInTabGroup: false))
     }
 
-    /// The protection that has to survive the fix above: a closed window is
-    /// neither visible nor minimized, and AppKit leaves it in `NSApp.windows`
-    /// long after its close. Counting those is what made "is anything open"
-    /// answer yes forever.
+    /// The protection that has to survive every fix above: a closed window is
+    /// neither visible nor minimized, AppKit leaves it in `NSApp.windows` long
+    /// after its close, **and its `tabGroup` is nil** — measured, and the
+    /// property that lets group membership be trusted at all. Counting closed
+    /// windows is what made "is anything open" answer yes forever.
     @Test func aClosedWindowIsNotPartOfTheSession() {
-        #expect(!PhantomSessionStore.isOpen(isVisible: false, isMiniaturized: false))
+        #expect(!PhantomSessionStore.isPartOfSession(
+            isVisible: false, isMiniaturized: false, isInTabGroup: false))
+    }
+
+    /// The third wrong predicate, and the one that did the most damage: a
+    /// background tab does not reliably report `isVisible`. Two tabs of the
+    /// same group were measured disagreeing — one `true`, its neighbour
+    /// `false` — so no reading of that flag includes them all.
+    ///
+    /// What it cost: restoring schedules a save, the save saw one window of
+    /// four, and `session.json` was rewritten with the selected tab alone.
+    /// Every restore threw the rest of the session away, and the next reopen
+    /// brought back a single terminal.
+    @Test func aBackgroundTabIsPartOfTheSessionEvenWhenItReportsInvisible() {
+        #expect(PhantomSessionStore.isPartOfSession(
+            isVisible: false, isMiniaturized: false, isInTabGroup: true))
+    }
+
+    /// The other half of the same group, which does report visible. Both must
+    /// count, which is the whole point of not deciding this on `isVisible`.
+    @Test func aVisibleTabIsPartOfTheSession() {
+        #expect(PhantomSessionStore.isPartOfSession(
+            isVisible: true, isMiniaturized: false, isInTabGroup: true))
+    }
+
+    /// Minimizing one tab minimizes the group, so every window in it reports
+    /// miniaturized *and* keeps its group. Belt and braces, and it must not
+    /// take a special case to stay true.
+    @Test func aMinimizedTabGroupIsEntirelyPartOfTheSession() {
+        #expect(PhantomSessionStore.isPartOfSession(
+            isVisible: false, isMiniaturized: true, isInTabGroup: true))
+    }
+
+    // MARK: Whether The Reader Can Reach Anything
+
+    /// The fourth mistake, and the one that made the app look wedged: these
+    /// are two questions, and one predicate cannot answer both.
+    ///
+    /// A window's tabs stay in `NSApp.windows` after it closes, and their
+    /// group membership outlives the close for long enough to matter. Asking
+    /// "can the reader reach a window" with the session predicate therefore
+    /// answered yes with nothing on screen — so New Window and a Dock click
+    /// restored nothing and opened nothing. The Dock menu listed every
+    /// terminal while clicking the icon did nothing at all.
+    @Test func aLingeringTabOfAClosedWindowIsNotReachable() {
+        #expect(!PhantomSessionStore.isReachable(isVisible: false, isMiniaturized: false))
+
+        /// The same window, asked the other question: it still belongs to the
+        /// session, which is why the two must not share a predicate.
+        #expect(PhantomSessionStore.isPartOfSession(
+            isVisible: false, isMiniaturized: false, isInTabGroup: true))
+    }
+
+    @Test func anOnScreenWindowIsReachable() {
+        #expect(PhantomSessionStore.isReachable(isVisible: true, isMiniaturized: false))
+    }
+
+    /// A window in the Dock is reachable — the reader clicks it and it comes
+    /// back. This is what stops New Window from restoring the session on top
+    /// of windows that were only minimized.
+    @Test func aMinimizedWindowIsReachable() {
+        #expect(PhantomSessionStore.isReachable(isVisible: false, isMiniaturized: true))
+    }
+
+    @Test func aClosedWindowIsNotReachable() {
+        #expect(!PhantomSessionStore.isReachable(isVisible: false, isMiniaturized: false))
     }
 
     // MARK: Deciding Whether To Write
