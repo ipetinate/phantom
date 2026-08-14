@@ -7,13 +7,14 @@ import Foundation
 /// than as string literals at the restore site. Adding a fourth agent is then
 /// a case with a command, not another branch threaded through the decoder.
 ///
-/// ⚠️ Only the `claude` forms are verified against a running binary — it is
-/// the one of the three installed on the machine this was written on, and
-/// `claude --help` lists `-r, --resume [value]  Resume a conversation by
-/// session ID`. The `codex` and `opencode` forms are taken from those
-/// projects' published CLI references (`codex resume <SESSION_ID>` and
-/// `opencode --session <id>`, each with a "most recent" variant) and have
-/// never been executed here. Treat them as documented, not proven.
+/// All three spellings are now verified against running binaries rather than
+/// against documentation: each CLI's own `--help` was read for the resume
+/// syntax (`claude --resume <id>`, `codex resume <SESSION_ID>`,
+/// `opencode --session <id>`), and each was then started and its session id
+/// read back out of the store it keeps — UUIDs from Claude Code and Codex,
+/// a `ses_`-prefixed token from OpenCode. Those are the shapes
+/// `AgentTabRecord.sanitized(sessionID:)` has to pass through untouched, and
+/// the ones `AgentSessionStore` reads back when no hook reported an id.
 enum CodingAgent: String, Sendable {
     case claude
     case codex
@@ -134,6 +135,28 @@ struct AgentTabRecord: Equatable, Sendable {
         agent != nil || sessionID != nil
     }
 
+    /// Whether an id from the agent's own on-disk store is worth going to look
+    /// for — see `AgentSessionStore`, which does the looking.
+    ///
+    /// Three conditions, each of which is a reason not to bother:
+    ///
+    /// - **No named agent**, and there is nothing to query. A file with no
+    ///   `agent=` line predates the metadata entirely; it is read as Claude's
+    ///   for the resume, but guessing an agent and then hunting through that
+    ///   agent's sessions on the strength of the guess is a different thing
+    ///   from falling back to `claude --continue`.
+    /// - **An id already**, and it wins outright. The hook that reported it
+    ///   was inside the conversation this tab was holding; the store only
+    ///   knows what was newest in the directory, which is a weaker claim.
+    /// - **`ended`**, where the fallback is deliberately nothing at all. The
+    ///   store cannot improve on that, because it is keyed by directory and so
+    ///   inherits the exact imprecision the `ended` rule exists to refuse:
+    ///   for a session somebody finished on purpose, "whatever is newest here"
+    ///   is a guess whether it comes from a flag or from a file.
+    var needsSessionLookup: Bool {
+        agent != nil && sessionID == nil && state != .ended
+    }
+
     /// The on-disk form. The state word stays on the first line so that a
     /// Phantom old enough to read only that line still reads it correctly.
     var fileContents: String {
@@ -187,12 +210,52 @@ struct AgentTabRecord: Equatable, Sendable {
     ///   this directory" — which for a session somebody deliberately ended is
     ///   a guess, and possibly somebody else's conversation.
     ///
+    /// Registering a session-start hook strengthens that second rule rather
+    /// than weakening it. It was written when "no id" mostly meant "no event
+    /// ever carried one", so refusing to resume was the cautious reading of an
+    /// ambiguous file. Now that an id arrives when the session opens, an
+    /// `ended` record without one is far more likely to mean what it says: no
+    /// session was ever there. The two remaining ways to reach it — a user who
+    /// has not picked up the new hook registration yet, and a start payload
+    /// that carried no id — are both cases where the only alternative is still
+    /// the directory-scoped guess. So the answer stays no, for the same reason
+    /// and with better evidence behind it.
+    ///
     /// A file with no `agent=` line is Claude's: it is the only agent Phantom
     /// ever resumed before this metadata existed.
     static func resumeCommand(forStateFileContents contents: String?) -> String? {
+        resumeCommand(forStateFileContents: contents, fallbackSessionID: nil)
+    }
+
+    /// The same decision, offered an id that came from somewhere other than
+    /// the file — the agent's own session store, read because no hook ever
+    /// got to report one.
+    ///
+    /// A separate entry point rather than a lookup inside the existing one, so
+    /// that the decision stays a function of its arguments: whether to resume,
+    /// and as what, is worth being able to check without a home directory in
+    /// the room. The disk work lives at the call site
+    /// (`AgentSessionResume.resume`), which is also where it can be got off
+    /// the main thread.
+    ///
+    /// `fallbackSessionID` is taken only when `needsSessionLookup` says it
+    /// would have been asked for. Gating it here as well as there means a
+    /// caller that resolved an id eagerly, or resolved one for the wrong
+    /// record, cannot slip it past the rules the record itself sets — the
+    /// hook's id still wins, and `ended` still declines.
+    static func resumeCommand(
+        forStateFileContents contents: String?,
+        fallbackSessionID: String?
+    ) -> String? {
         guard let contents else { return nil }
         let record = AgentTabRecord(fileContents: contents)
         if record.state == .ended, record.sessionID == nil { return nil }
-        return (record.agent ?? .claude).resumeCommand(sessionID: record.sessionID)
+
+        let sessionID = record.sessionID ?? (
+            record.needsSessionLookup
+                ? fallbackSessionID.flatMap(Self.sanitized(sessionID:))
+                : nil
+        )
+        return (record.agent ?? .claude).resumeCommand(sessionID: sessionID)
     }
 }

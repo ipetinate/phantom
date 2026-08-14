@@ -193,6 +193,75 @@ struct AgentTabRecordTests {
         #expect(record.state == nil)
         #expect(record.sessionID == id)
     }
+
+    // MARK: - An id recovered from the agent's own store
+
+    /// The gap the store fills: an agent was started and nothing was asked of
+    /// it, so no hook ever fired and the file names the agent alone.
+    @Test func anAgentWithNoIdIsWorthLookingUp() {
+        #expect(AgentTabRecord(fileContents: "\nagent=codex\n").needsSessionLookup)
+        #expect(AgentTabRecord(fileContents: "working\nagent=claude\n").needsSessionLookup)
+        #expect(AgentTabRecord(fileContents: "notify\nagent=opencode\n").needsSessionLookup)
+    }
+
+    /// Three reasons not to go looking, each of which the restore path relies
+    /// on to avoid touching the filesystem at all.
+    @Test func nothingWorthLookingUpIsNotLookedUp() {
+        #expect(!AgentTabRecord(
+            fileContents: "working\nagent=codex\nsession=\(id)").needsSessionLookup)
+        #expect(!AgentTabRecord(fileContents: "working").needsSessionLookup)
+        #expect(!AgentTabRecord(fileContents: "ended\nagent=codex\n").needsSessionLookup)
+    }
+
+    @Test func aRecoveredIdMakesTheResumePrecise() {
+        #expect(AgentTabRecord.resumeCommand(
+            forStateFileContents: "\nagent=codex\n", fallbackSessionID: id)
+            == "codex resume \(id)")
+        #expect(AgentTabRecord.resumeCommand(
+            forStateFileContents: "working\nagent=opencode\n", fallbackSessionID: id)
+            == "opencode --session \(id)")
+    }
+
+    /// The hook's id wins outright: it was reported from inside the
+    /// conversation this tab was holding, where the store only knows what was
+    /// newest in the directory.
+    @Test func theHooksIdBeatsAnythingFoundOnDisk() {
+        #expect(AgentTabRecord.resumeCommand(
+            forStateFileContents: "working\nagent=codex\nsession=\(id)",
+            fallbackSessionID: "01a00090-b0b0-7a52-9698-fa5adf53e115")
+            == "codex resume \(id)")
+    }
+
+    /// `ended` with no id resumes nothing, and a recovered id does not change
+    /// that. The store is keyed by directory, so it inherits the exact
+    /// imprecision the rule exists to refuse.
+    @Test func anEndedSessionIsNotRevivedByADiskLookupEither() {
+        #expect(AgentTabRecord.resumeCommand(
+            forStateFileContents: "ended\nagent=codex\n", fallbackSessionID: id) == nil)
+    }
+
+    /// A file with no `agent=` line predates the metadata; it still resumes as
+    /// Claude's, but on the fallback rather than on an id found by guessing
+    /// which agent to go looking for.
+    @Test func aFileWithNoAgentLineTakesNoRecoveredId() {
+        #expect(AgentTabRecord.resumeCommand(
+            forStateFileContents: "working", fallbackSessionID: id) == "claude --continue")
+    }
+
+    /// An id off disk becomes a shell argument exactly as one out of the file
+    /// does, so it goes through the same sanitizer on the way in.
+    @Test(arguments: [
+        "abc; rm -rf ~",
+        "$(whoami)",
+        "--dangerously-skip-permissions",
+        "abc def",
+        "",
+    ])
+    func aHostileRecoveredIdIsRefused(_ hostile: String) {
+        #expect(AgentTabRecord.resumeCommand(
+            forStateFileContents: "\nagent=codex\n", fallbackSessionID: hostile)
+            == "codex resume --last")
+    }
 }
 
 /// Runs the hook script Phantom actually installs.
@@ -463,6 +532,95 @@ struct UninstallableAgentHookTests {
         check.waitUntilExit()
 
         #expect(check.terminationStatus == 0)
+    }
+
+    /// OpenCode's answer to a session-start hook is the `session.created`
+    /// event, which fires before the user has asked for anything. Driving the
+    /// real plugin under node is the only way to check it: the id extraction is
+    /// a chain of optional property reads across two SDK generations, and a
+    /// Swift restatement of that chain would prove nothing about the JS that
+    /// OpenCode loads.
+    @Test(.enabled(if: nodeIsAvailable), arguments: [
+        // The `sessionID` shape, and the `info.id` shape. The plugin reads both
+        // because the two live SDK generations disagree, and which one is in
+        // play is not Phantom's to decide.
+        #"{"sessionID":"ses_abc123","info":{"id":"ses_abc123","directory":"/tmp"}}"#,
+        #"{"info":{"id":"ses_abc123","directory":"/tmp"}}"#,
+    ])
+    func aCreatedSessionRecordsIdentityWithoutAnIndicator(_ properties: String) throws {
+        let written = try #require(try driveOpenCodePlugin(events: [
+            #"{"type":"session.created","properties":\#(properties)}"#
+        ]))
+
+        let record = AgentTabRecord(fileContents: written)
+        #expect(record.stateWord.isEmpty)
+        #expect(record.state == nil, "a created session must show no indicator")
+        #expect(record.agent == .opencode)
+        #expect(record.sessionID == "ses_abc123")
+    }
+
+    /// A subagent runs in a child session, and resuming by its id opens that
+    /// thread rather than the conversation the tab holds. `parentID` is what
+    /// separates them.
+    @Test(.enabled(if: nodeIsAvailable))
+    func aSubagentSessionDoesNotBecomeTheTabsIdentity() throws {
+        let written = try #require(try driveOpenCodePlugin(events: [
+            #"{"type":"session.created","properties":{"sessionID":"ses_parent","info":{"id":"ses_parent","directory":"/tmp"}}}"#,
+            #"{"type":"session.created","properties":{"sessionID":"ses_child","info":{"id":"ses_child","parentID":"ses_parent","directory":"/tmp"}}}"#,
+        ]))
+
+        #expect(AgentTabRecord(fileContents: written).sessionID == "ses_parent")
+    }
+
+    @Test(.enabled(if: nodeIsAvailable))
+    func aSubagentStartingFirstLeavesTheTabWithoutAnId() throws {
+        let written = try #require(try driveOpenCodePlugin(events: [
+            #"{"type":"session.created","properties":{"sessionID":"ses_child","info":{"id":"ses_child","parentID":"ses_parent","directory":"/tmp"}}}"#,
+        ]))
+
+        let record = AgentTabRecord(fileContents: written)
+        #expect(record.sessionID == nil)
+        #expect(record.agent == .opencode)
+        #expect(record.needsSessionLookup, "the disk lookup is what finishes this record")
+    }
+
+    /// Loads the generated plugin under node, feeds it the given events in
+    /// order, and returns whatever it left in the state file.
+    private func driveOpenCodePlugin(events: [String]) throws -> String? {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("phantom-opencode-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let plugin = dir.appendingPathComponent("phantom-integration.mjs")
+        try OpenCodeHooksInstaller.pluginBody.write(to: plugin, atomically: true, encoding: .utf8)
+
+        let stateFile = dir.appendingPathComponent("state")
+        // The plugin serializes its writes through a promise chain, so the
+        // driver has to let that chain drain before reading.
+        let driver = dir.appendingPathComponent("drive.mjs")
+        try """
+        import { PhantomPlugin } from "./phantom-integration.mjs";
+        const plugin = await PhantomPlugin();
+        for (const event of [\(events.joined(separator: ","))]) {
+          await plugin.event({ event });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        """.write(to: driver, atomically: true, encoding: .utf8)
+
+        let run = Process()
+        run.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        run.arguments = ["node", driver.path]
+        var environment = ProcessInfo.processInfo.environment
+        environment["GHOSTTY_TAB_STATE_FILE"] = stateFile.path
+        run.environment = environment
+        run.standardOutput = FileHandle.nullDevice
+        run.standardError = FileHandle.nullDevice
+        try run.run()
+        run.waitUntilExit()
+        #expect(run.terminationStatus == 0)
+
+        return try? String(contentsOf: stateFile, encoding: .utf8)
     }
 }
 

@@ -1861,7 +1861,8 @@ extension Ghostty {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             let uuid = UUID(uuidString: try container.decode(String.self, forKey: .uuid))
             var config = Ghostty.SurfaceConfiguration()
-            config.workingDirectory = try container.decode(String?.self, forKey: .pwd)
+            let workingDirectory = try container.decode(String?.self, forKey: .pwd)
+            config.workingDirectory = workingDirectory
             let savedTitle = try container.decodeIfPresent(String.self, forKey: .title)
             let isUserSetTitle = try container.decodeIfPresent(Bool.self, forKey: .isUserSetTitle) ?? false
 
@@ -1888,15 +1889,15 @@ extension Ghostty {
             // agent that was running, and the conversation it was having.
             // Which conversation is the point: resuming by directory alone
             // put two tabs open on the same project into the same session.
-            if let uuid,
-               UserDefaults.standard.object(forKey: "SidebarRestoreAgentSessions") as? Bool ?? true,
-               let command = AgentTabRecord.resumeCommand(
-                   forStateFileContents: try? String(
-                       contentsOf: TabStateCenter.stateFileURL(for: uuid),
-                       encoding: .utf8
-                   )
-               ) {
-                ClaudeSession.run(command, in: self)
+            // The working directory goes along because a tab whose hook never
+            // reported an id can still have one recovered from the agent's own
+            // session store, and that store is indexed by directory.
+            if let uuid {
+                AgentSessionResume.resume(
+                    surfaceId: uuid,
+                    workingDirectory: workingDirectory,
+                    in: self
+                )
             }
         }
 
