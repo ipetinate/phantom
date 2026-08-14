@@ -909,6 +909,20 @@ final class CodeNSTextView: NSTextView {
     private var hoverOffset: Int?
     private var hoverTask: Task<Void, Never>?
 
+    /// How long the pointer must rest before a look-up is asked for.
+    ///
+    /// A property rather than a literal so a test can state its own timing
+    /// contract. The behaviour worth testing here is that a superseded
+    /// look-up is abandoned, and observing that needs the first request to
+    /// still be pending when the pointer moves on — which with a fixed 450ms
+    /// meant a test sleeping 100ms between moves was betting that 100ms of
+    /// wall clock stays under 450ms. On a machine running the rest of the
+    /// suite in parallel that bet loses, the first request fires, and the
+    /// test fails for a fact about the host rather than about cancellation.
+    /// Widening the ratio is what makes it deterministic, and only the test
+    /// knows what ratio it needs.
+    var hoverFetchDelay: Duration = .milliseconds(450)
+
     /// The pending close. Separate from `hoverTask` because the two run at
     /// once: one card is on its way out while the next one is being fetched.
     private var dismissTask: Task<Void, Never>?
@@ -989,8 +1003,8 @@ final class CodeNSTextView: NSTextView {
         scheduleHoverDismissal()
 
         hoverTask?.cancel()
-        hoverTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(450))
+        hoverTask = Task { [weak self, hoverFetchDelay] in
+            try? await Task.sleep(for: hoverFetchDelay)
             guard !Task.isCancelled else { return }
             let info = await hoverProvider(offset)
             guard !Task.isCancelled, let info, !info.isEmpty else { return }

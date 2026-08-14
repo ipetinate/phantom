@@ -136,9 +136,17 @@ struct PhantomStateFileTests {
         let group = before.createGroup(name: "Aurora")
         before.registerNewTab(surfaceId: surfaceId, atStart: false)
 
-        /// The store's writes are debounced by 500ms; this waits for the one
-        /// the two calls above coalesce into.
-        try await Task.sleep(for: .milliseconds(700))
+        /// The store's writes are debounced by 500ms, and this waits for the
+        /// one the two calls above coalesce into — by polling for the file
+        /// rather than by sleeping past the deadline. A fixed wait has to bet
+        /// that 500ms of debounce plus a write finishes inside it, and that is
+        /// the dangerous direction for a timing bet: a loaded machine stretches
+        /// the deadline, the wait does not stretch with it, and the migration
+        /// then copies a file that is not there yet. Bounded, so a write that
+        /// never lands fails the test instead of hanging the suite.
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: shared.path) {
+            try await Task.sleep(for: .milliseconds(50))
+        }
 
         PhantomStateFile.migrate(from: shared, to: mine)
         let after = SidebarGroupStore(fileURL: mine)
