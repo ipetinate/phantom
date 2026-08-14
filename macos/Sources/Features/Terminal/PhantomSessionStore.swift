@@ -112,6 +112,15 @@ final class PhantomSessionStore {
                 tabIndex: tabIndex)
         }
 
+        // Having no windows is not the same as having no session. Closing
+        // the last window leaves the app running with nothing open, and
+        // recording that erased the very thing the next window should come
+        // back to — the session was gone before anything could restore it.
+        // An empty set is therefore never written over a session that has
+        // something in it; the last real arrangement stands until another
+        // real one replaces it.
+        if states.isEmpty, let existing = load(), !existing.isEmpty { return }
+
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
@@ -139,23 +148,32 @@ final class PhantomSessionStore {
     /// windows (the store is empty on the first launch after this feature
     /// lands) or when the saved session is empty.
     ///
-    /// Called once, at launch, before the app would otherwise open a
-    /// default window.
-    func restoreIfNeeded() {
-        guard !isRestoring, !Self.isRunningTests else { return }
+    /// Called at launch before the app would otherwise open a default
+    /// window, and again wherever a window is asked for while none exist —
+    /// quitting is not the only way to end up with nothing open, and a
+    /// session is worth as much after closing the last window as it is
+    /// after a relaunch.
+    ///
+    /// - Returns: whether it produced any windows, so a caller that would
+    ///   otherwise open an empty one can stand down.
+    @discardableResult
+    func restoreIfNeeded() -> Bool {
+        guard !isRestoring, !Self.isRunningTests else { return false }
 
         // Respect the explicit "never restore" choice, matching the check
         // macOS restoration performs.
         guard (NSApplication.shared.delegate as? AppDelegate)?.ghostty.config.windowSaveState != "never" else {
-            return
+            return false
         }
 
         // If macOS already restored windows there is nothing for us to do,
-        // and creating more would duplicate them.
-        guard TerminalController.all.isEmpty else { return }
+        // and creating more would duplicate them. This is also what keeps a
+        // second New Window from restoring the session again: once the
+        // first one brought it back, windows exist.
+        guard TerminalController.all.isEmpty else { return false }
 
-        guard let states = load(), !states.isEmpty else { return }
-        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return }
+        guard let states = load(), !states.isEmpty else { return false }
+        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return false }
 
         isRestoring = true
         defer {
@@ -189,6 +207,8 @@ final class PhantomSessionStore {
         for state in standalones {
             restoreWindows(in: [state], appDelegate: appDelegate)
         }
+
+        return !TerminalController.all.isEmpty
     }
 
     /// Creates the controllers for the states of one window (a tab group's

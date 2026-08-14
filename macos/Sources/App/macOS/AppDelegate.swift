@@ -467,7 +467,10 @@ class AppDelegate: NSObject,
         // but I haven't seen it happen in releases. I'm unsure why.
         guard applicationHasBecomeActive else { return true }
 
-        // No visible windows, open a new one.
+        // No visible windows. The session, if there is one, is what the
+        // reader is reopening the app to get back — see `newWindow`.
+        if PhantomSessionStore.shared.restoreIfNeeded() { return false }
+
         _ = TerminalController.newWindow(ghostty)
         return false
     }
@@ -966,6 +969,18 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func newWindow(_ sender: Any?) {
+        // Asking for a window with none open is the same request as
+        // launching with none open, and deserves the same answer: the
+        // session comes back. Quitting is not the only way to end up with
+        // nothing on screen — closing the last window leaves the app
+        // running, and a blank window there loses the arrangement just as
+        // completely as a lost restore would. Once it has been brought
+        // back, windows exist, so the next New Window is an ordinary one.
+        if TerminalController.all.isEmpty,
+           PhantomSessionStore.shared.restoreIfNeeded() {
+            return
+        }
+
         _ = TerminalController.newWindow(ghostty)
     }
 
