@@ -422,8 +422,6 @@ enum LSPServerRegistry {
         "go": "go",
         // Go module manifests use their own extensions, but are handled by
         // gopls with the same language id as Go source files.
-        "mod": "go",
-        "sum": "go",
         "zig": "zig",
         "json": "json",
         "jsonc": "json",
@@ -465,7 +463,20 @@ enum LSPServerRegistry {
         return server(forLanguage: languageID)
     }
 
+    /// Files whose *name* decides the language, because their extension
+    /// does not. `.mod` and `.sum` belong to plenty of things that are not
+    /// Go — a Fortran module, a checksum list — and matching on the
+    /// extension started gopls for every one of them.
+    private static let languageIDByFileName: [String: String] = [
+        "go.mod": "go",
+        "go.sum": "go",
+        "go.work": "go",
+    ]
+
     static func languageID(forPath path: String) -> String? {
+        let name = (path as NSString).lastPathComponent
+        if let byName = languageIDByFileName[name.lowercased()] { return byName }
+
         let ext = (path as NSString).pathExtension.lowercased()
         guard !ext.isEmpty else { return nil }
         return languageIDByExtension[ext]

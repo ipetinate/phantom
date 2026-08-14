@@ -250,7 +250,14 @@ final class SidebarTabManager: ObservableObject {
             models = ordered
         }
 
-        if windows.count > 1, ordered.count == windows.count {
+        // The list has settled once every window it knows about has a row.
+        // Deliberately not `windows.count > 1`: a window that is not in a
+        // tab group reports a group of one, so that spelling never became
+        // true and its sidebar animated nothing for the rest of the session
+        // — a whole class of user (one window, several splits, no tabs) lost
+        // the animations entirely. What the burst needed protecting from was
+        // the *first* settle, not the absence of tabs.
+        if ordered.count == windows.count {
             if hasSeenFullGroup {
                 animationsEnabled = true
             } else {

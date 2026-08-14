@@ -291,14 +291,21 @@ final class PhantomSessionStore {
             if anchor == nil {
                 if group.count == 1 {
                     standaloneState = state
-                } else if let mode = state.effectiveFullscreenMode, mode != .native {
+                } else {
                     // A native-fullscreen window saves its fullscreen bounds
                     // as the frame; restoring those onto a windowed window
                     // produces a giant, broken-looking window.
-                    if let frame = state.frame {
+                    if let frame = state.frame,
+                       state.effectiveFullscreenMode != .native {
                         window.setFrame(frame, display: false)
                     }
-                    controller.toggleFullscreen(mode: mode)
+                    // The frame used to be applied only on the way to a
+                    // fullscreen mode, so an ordinary window of tabs — the
+                    // common case — came back at the default size wherever
+                    // macOS felt like putting it, however it had been left.
+                    if let mode = state.effectiveFullscreenMode, mode != .native {
+                        controller.toggleFullscreen(mode: mode)
+                    }
                 }
             }
 

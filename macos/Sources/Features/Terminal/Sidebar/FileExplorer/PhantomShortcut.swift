@@ -71,16 +71,56 @@ struct PhantomShortcut: Equatable, Codable {
     }
 
     init?(serialized: String) {
-        let parts = serialized.split(separator: "+").map(String.init)
-        guard let last = parts.last, last.count == 1 else { return nil }
+        // The key is whatever follows the last separator, taken by position
+        // rather than by splitting. `+` is a perfectly ordinary key, and
+        // splitting on it made ⌘+ serialize to "command++" and read back as
+        // "command" with no key at all — so the shortcut silently reverted
+        // to its default on the next launch.
+        guard let lastSeparator = serialized.lastIndex(of: "+") else {
+            guard serialized.count == 1 else { return nil }
+            self.init(key: serialized, modifiers: [])
+            return
+        }
 
+        let key = String(serialized[serialized.index(after: lastSeparator)...])
+        let modifierPart = String(serialized[serialized.startIndex..<lastSeparator])
+
+        // A trailing separator means the key *is* `+`, and the modifiers are
+        // everything before the separator that precedes it.
+        if key.isEmpty {
+            guard let previous = modifierPart.lastIndex(of: "+") else {
+                guard let onlyModifier = PhantomShortcutModifier(rawValue: modifierPart)
+                else { return nil }
+                self.init(key: "+", modifiers: [onlyModifier])
+                return
+            }
+            let head = String(modifierPart[modifierPart.startIndex..<previous])
+            let tail = String(modifierPart[modifierPart.index(after: previous)...])
+            guard tail.isEmpty || PhantomShortcutModifier(rawValue: tail) != nil
+            else { return nil }
+            var modifiers = Self.parseModifiers(head)
+            if let tailModifier = PhantomShortcutModifier(rawValue: tail) {
+                modifiers?.insert(tailModifier)
+            }
+            guard let modifiers else { return nil }
+            self.init(key: "+", modifiers: modifiers)
+            return
+        }
+
+        guard key.count == 1, let modifiers = Self.parseModifiers(modifierPart)
+        else { return nil }
+        self.init(key: key, modifiers: modifiers)
+    }
+
+    /// Nil when any component is not a modifier this app knows.
+    private static func parseModifiers(_ raw: String) -> Set<PhantomShortcutModifier>? {
+        guard !raw.isEmpty else { return [] }
         var modifiers: Set<PhantomShortcutModifier> = []
-        for part in parts.dropLast() {
+        for part in raw.split(separator: "+").map(String.init) {
             guard let modifier = PhantomShortcutModifier(rawValue: part) else { return nil }
             modifiers.insert(modifier)
         }
-
-        self.init(key: last, modifiers: modifiers)
+        return modifiers
     }
 
     /// Whether a key press the explorer saw is this shortcut. `modifiers`

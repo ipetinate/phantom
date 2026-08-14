@@ -60,6 +60,24 @@ enum ShellCommand {
         }
     }
 
+    /// Ends a process that outlived its timeout, and makes sure it ended.
+    ///
+    /// `terminate()` is SIGTERM, which a process is free to ignore — and a
+    /// login shell sourcing someone's rc files does exactly that often
+    /// enough to matter. Observed after a burst of PATH probes: several
+    /// `zsh -lic` still resident minutes later, one per abandoned call.
+    /// SIGKILL cannot be caught, so it is what actually closes the door.
+    private static func kill(_ process: Process) {
+        process.terminate()
+        let deadline = Date().addingTimeInterval(0.5)
+        while process.isRunning && Date() < deadline {
+            usleep(50_000)
+        }
+        if process.isRunning {
+            Foundation.kill(process.processIdentifier, SIGKILL)
+        }
+    }
+
     /// Returns the command's stdout, or nil when it can't be launched,
     /// exits non-zero, or outlives `timeout`.
     ///
@@ -98,7 +116,7 @@ enum ShellCommand {
             usleep(50_000)
         }
         if process.isRunning {
-            process.terminate()
+            Self.kill(process)
             return nil
         }
 
@@ -196,7 +214,7 @@ enum ShellCommand {
         var timedOut = false
         if process.isRunning {
             timedOut = true
-            process.terminate()
+            Self.kill(process)
         }
 
         _ = group.wait(timeout: .now() + 2)
@@ -269,7 +287,7 @@ enum ShellCommand {
         var timedOut = false
         if process.isRunning {
             timedOut = true
-            process.terminate()
+            Self.kill(process)
         }
 
         // The pipes drain asynchronously; give the readers a moment to hit

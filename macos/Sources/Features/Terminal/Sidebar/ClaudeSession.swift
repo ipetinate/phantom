@@ -35,7 +35,13 @@ enum ClaudeSession {
             return
         }
         guard Date() < deadline else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + shellPollInterval) {
+
+        // Weakly, so a tab closed while its shell is still starting can go.
+        // Held strongly, the poll kept the surface — and the terminal behind
+        // it — alive for the rest of the ten seconds, redispatching every
+        // 50ms at a target nobody can see any more.
+        DispatchQueue.main.asyncAfter(deadline: .now() + shellPollInterval) { [weak surface] in
+            guard let surface else { return }
             sendWhenShellReady(command, in: surface, deadline: deadline)
         }
     }
