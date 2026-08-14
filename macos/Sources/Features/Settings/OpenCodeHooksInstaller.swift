@@ -17,18 +17,21 @@ enum OpenCodeHooksInstaller {
             .appendingPathComponent(pluginName)
     }
 
-    /// ⚠️ The session-id half of this plugin is written blind: OpenCode is
-    /// not installed on the machine this was written on, so which property
-    /// an event actually carries the id in could not be checked. The lookup
-    /// below tries the plausible spellings and settles for none of them —
-    /// in which case the file keeps its state line, exactly as before, and
-    /// the tab resumes with `opencode --continue`.
+    /// The session-id half of this plugin has since been run against a real
+    /// OpenCode: it reports ids of the shape `ses_fff4fad66ffew9XwYrbmxeGqEb`,
+    /// and one of the spellings below does find them. Which one is left
+    /// unpinned on purpose — the events are the plugin API's, not a contract
+    /// with Phantom, and trying the alternatives costs a property access each.
+    /// All of them failing stays a supported outcome: the file keeps its state
+    /// line, exactly as before, and the tab resumes without an id — from
+    /// `AgentSessionStore` if the session is still in OpenCode's database, and
+    /// from `opencode --continue` if it is not.
     ///
-    /// Not private so a test can at least put it through a parser: nothing
-    /// here can run OpenCode, but shipping a plugin that does not parse is a
-    /// failure worth catching without it.
+    /// Not private so a test can put it through a parser: shipping a plugin
+    /// that does not parse is a failure worth catching without OpenCode in the
+    /// room to catch it.
     static let pluginBody = #"""
-    import { writeFileSync, renameSync } from "fs";
+    import { writeFileSync, renameSync, unlinkSync, readFileSync } from "fs";
 
     let writeChain = Promise.resolve();
     let sessionId = "";
@@ -48,9 +51,41 @@ enum OpenCodeHooksInstaller {
         props.info?.sessionID || props.info?.id || props.session?.id || "";
     }
 
+    // A subagent runs in a session of its own, a child of the tab's, and
+    // resuming by a child's id opens that thread rather than the conversation
+    // the tab was holding. `Session.parentID` is what separates them, and the
+    // events that carry a whole `info` object are the ones that can be asked.
+    function isSubSession(event) {
+      const info = event?.properties?.info;
+      return Boolean(info && (info.parentID || info.parentId));
+    }
+
+    // The id already on record, for a process that has not learned one yet.
+    //
+    // Every write here rewrites the whole file, so without this the first write
+    // of a freshly loaded plugin drops the `session=` line that was in it — and
+    // several of the handlers below report a state without any event having
+    // carried an id first. The write that follows a restore is exactly that
+    // shape, and the id it would drop is the only record of which conversation
+    // the tab was resumed into. Passing it back through `remember` rather than
+    // straight into the file means the value read off disk faces the same
+    // filter a value off the wire does, so a corrupt line cannot be copied
+    // forward indefinitely.
+    function carriedSession(file) {
+      try {
+        const carried = readFileSync(file, "utf8")
+          .split("\n")
+          .find((line) => line.startsWith("session="));
+        return carried ? carried.slice("session=".length).trim() : "";
+      } catch {
+        return "";
+      }
+    }
+
     function state(value) {
       const file = process.env.GHOSTTY_TAB_STATE_FILE;
       if (!file) return;
+      if (!sessionId) remember(carriedSession(file));
       // State stays alone on the first line: a Phantom old enough to read
       // only that line keeps reading this file correctly.
       const lines = [value, "agent=opencode"];
@@ -59,11 +94,23 @@ enum OpenCodeHooksInstaller {
       // OpenCode can emit busy -> idle -> idle in one turn. Serialize the
       // atomic writes so a late busy event cannot leave Phantom spinning.
       writeChain = writeChain.then(() => {
+        // A temp name private to this process. Serializing the chain orders
+        // this plugin's own writes, and does nothing about anyone else's: a
+        // fixed `.tmp` is one path shared with whatever else writes this tab —
+        // a Claude or Codex hook in the same terminal, another integration on
+        // the same events — and two writers truncating that one file
+        // interleave their bytes, so the rename that wins carries the mixture
+        // and a `session=` line comes back cut in half.
+        //
+        // The name still cannot be mistaken for a state file: TabStateCenter
+        // reads only entries whose whole name parses as a UUID.
+        const tmp = `${file}.${process.pid}.tmp`;
         try {
-          const tmp = `${file}.tmp`;
           writeFileSync(tmp, body, "utf8");
           renameSync(tmp, file);
-        } catch {}
+        } catch {
+          try { unlinkSync(tmp); } catch {}
+        }
       }).catch(() => {});
     }
 
@@ -73,9 +120,21 @@ enum OpenCodeHooksInstaller {
 
     export const PhantomPlugin = async () => ({
       event: async ({ event }) => {
-        remember(sessionIdFrom(event));
+        if (!isSubSession(event)) remember(sessionIdFrom(event));
         const type = event?.type || "";
-        if (type === "session.status") {
+        if (type === "session.created") {
+          // OpenCode's answer to a session-start hook. It carries the id in
+          // `properties.sessionID` on one SDK generation and
+          // `properties.info.id` on the other, both of which `sessionIdFrom`
+          // already reads, and it fires before the user has asked for
+          // anything — so the tab holds its id from the moment it opens
+          // rather than from its first prompt.
+          //
+          // Written with no state word: a session that has just been created
+          // is not working, and this is the record saying which conversation
+          // the tab holds, not what it is doing.
+          state("");
+        } else if (type === "session.status") {
           const status = statusType(event);
           if (status === "busy" || status === "retry") state("working");
           else if (status === "idle") state("done");

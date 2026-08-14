@@ -65,7 +65,36 @@ final class TabStateCenter: ObservableObject {
     static let notifyMarker = "notify"
 
     /// State files older than this are stale leftovers from closed tabs.
-    private static let maxAge: TimeInterval = 2 * 24 * 60 * 60
+    ///
+    /// Thirty days, matching `SidebarGroupStore.assignmentMaxAge` — the other
+    /// per-surface record kept beside a tab, and the same question about how
+    /// long a tab may sit untouched and still be a tab.
+    ///
+    /// Two days was the number, and it was measured against how long a *file*
+    /// stays interesting rather than how long a *tab* does. A state file's
+    /// modification date only moves when a hook writes, so an agent tab left
+    /// idle across a long weekend, or any tab at all on a machine that was off
+    /// for three days, aged out while still open. The next launch then found no
+    /// file, `resumeCommand(forStateFileContents: nil)` returned nil, and the
+    /// tab came back as a bare shell without so much as attempting the
+    /// imprecise resume — a silent loss of exactly the conversations most worth
+    /// coming back to. Sixty bytes per closed tab is not a cost worth that.
+    ///
+    /// Still bounded rather than kept forever, because `refresh()` reads every
+    /// entry in this directory on each change to it: an unbounded directory
+    /// makes every hook write cost more than the one before.
+    private static let maxAge: TimeInterval = 30 * 24 * 60 * 60
+
+    /// How long a half-finished write may sit before it counts as abandoned.
+    ///
+    /// These are never identity and nothing reads them — `refresh()` skips any
+    /// name that does not parse as a UUID — but they are still listed on every
+    /// change to this directory, so they are swept on their own horizon instead
+    /// of waiting out `maxAge` alongside the records that matter. An hour,
+    /// because no hook's write takes one: shorter risks deleting a fragment
+    /// out from under a hook that is mid-rename, which costs that hook its
+    /// write.
+    private static let fragmentMaxAge: TimeInterval = 60 * 60
 
     private var source: DispatchSourceFileSystemObject?
 
@@ -136,15 +165,6 @@ final class TabStateCenter: ObservableObject {
         if result != states { states = result }
     }
 
-    /// Clears a `done` marker once its tab has been seen (selected).
-    ///
-    /// The indicator goes, but the file only goes with it when there is
-    /// nothing else in it. Deleting a file that still names the tab's agent
-    /// and session would mean that glancing at a finished task costs you the
-    /// ability to resume it after a restart — the single most likely moment
-    /// for a tab to be both finished and worth coming back to. What is left
-    /// is a stateless record: no word on the first line, so no indicator, and
-    /// enough identity to come back.
     /// Records that a tab was started with an agent, before that agent has
     /// had a chance to say anything.
     ///
@@ -177,6 +197,15 @@ final class TabStateCenter: ObservableObject {
         records[surfaceId] = record
     }
 
+    /// Clears a `done` marker once its tab has been seen (selected).
+    ///
+    /// The indicator goes, but the file only goes with it when there is
+    /// nothing else in it. Deleting a file that still names the tab's agent
+    /// and session would mean that glancing at a finished task costs you the
+    /// ability to resume it after a restart — the single most likely moment
+    /// for a tab to be both finished and worth coming back to. What is left
+    /// is a stateless record: no word on the first line, so no indicator, and
+    /// enough identity to come back.
     func clearDone(surfaceId: UUID) {
         guard states[surfaceId] == .done else { return }
         let url = Self.stateFileURL(for: surfaceId)
@@ -307,6 +336,8 @@ final class TabStateCenter: ObservableObject {
         }
     }
 
+    /// Sweeps the directory: abandoned write fragments quickly, spent records
+    /// slowly, and never a record the saved session still points at.
     private func pruneStale() {
         let fm = FileManager.default
         let entries = (try? fm.contentsOfDirectory(
@@ -314,14 +345,66 @@ final class TabStateCenter: ObservableObject {
             includingPropertiesForKeys: [.contentModificationDateKey]
         )) ?? []
 
-        let cutoff = Date().addingTimeInterval(-Self.maxAge)
+        let referenced = PhantomSessionStore.referencedSurfaceIDs
+        let now = Date()
         for url in entries {
             let modified = (try? url.resourceValues(
                 forKeys: [.contentModificationDateKey]
             ))?.contentModificationDate ?? .distantPast
-            if modified < cutoff {
+            if Self.shouldPrune(
+                url, modified: modified, now: now, referencedSurfaceIDs: referenced
+            ) {
                 try? fm.removeItem(at: url)
             }
         }
+    }
+
+    /// Whether one entry in the state directory has outlived its usefulness.
+    ///
+    /// Age is asked first and always, and reference only ever *spares*. That
+    /// order is the whole contract, because `referencedSurfaceIDs` returns an
+    /// empty set for a session file that is missing, unreadable, or written by
+    /// a build newer than this one — and an empty set means "this tells you
+    /// nothing", never "nothing is referenced". Read the other way round, the
+    /// moment the saved session were in trouble would be the moment every
+    /// session id got deleted, which is precisely when they are least
+    /// replaceable. So emptiness degrades to the age horizon alone — exactly
+    /// the behavior before the reference check existed — and can never widen
+    /// what goes.
+    ///
+    /// What the reference buys, on top of age: a tab open long enough to go
+    /// quiet still has its conversation when it comes back. A state file's
+    /// modification date moves only when a hook writes, so an agent tab left
+    /// idle for a month, or any tab at all on a machine that spent one
+    /// switched off, used to age out while still being a tab — and the next
+    /// launch, finding no file, came up as a bare shell without even
+    /// attempting a resume. Being named in `session.json` is the honest answer
+    /// to the question age was standing in for: this surface is about to be
+    /// restored.
+    ///
+    /// A write fragment is exempt from all of that. It is never identity —
+    /// nothing reads it and no session is named in it — so it answers to its
+    /// own short horizon and is never spared by reference.
+    static func shouldPrune(
+        _ url: URL,
+        modified: Date,
+        now: Date,
+        referencedSurfaceIDs: Set<UUID>
+    ) -> Bool {
+        if isWriteFragment(url) {
+            return modified < now.addingTimeInterval(-fragmentMaxAge)
+        }
+        guard modified < now.addingTimeInterval(-maxAge) else { return false }
+        guard let surfaceId = UUID(uuidString: url.lastPathComponent) else { return true }
+        return !referencedSurfaceIDs.contains(surfaceId)
+    }
+
+    /// Whether an entry is a hook's half-finished write rather than a record.
+    ///
+    /// The hooks write to a name of their own and rename it into place, so one
+    /// of these only survives when the hook was killed between the two steps —
+    /// which is what quitting Phantom does to an agent mid-turn.
+    static func isWriteFragment(_ url: URL) -> Bool {
+        url.pathExtension == "tmp" && UUID(uuidString: url.lastPathComponent) == nil
     }
 }
