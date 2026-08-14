@@ -456,20 +456,23 @@ class AppDelegate: NSObject,
         // of focusing one of them.
         guard !flag else { return true }
 
-        // If we have any windows in our terminal manager we don't do anything.
-        // This is possible with flag set to false if there a race where the
-        // window is still initializing and is not visible but the user clicked
-        // the dock icon.
-        guard TerminalController.all.isEmpty else { return true }
-
         // If the application isn't active yet then we don't want to process
         // this because we're not ready. This happens sometimes in Xcode runs
         // but I haven't seen it happen in releases. I'm unsure why.
         guard applicationHasBecomeActive else { return true }
 
         // No visible windows. The session, if there is one, is what the
-        // reader is reopening the app to get back — see `newWindow`.
+        // reader is reopening the app to get back — see `newWindow`. This
+        // is asked before the controller-count check below because that
+        // count includes windows that have been closed and not yet
+        // released, which is every window here.
         if PhantomSessionStore.shared.restoreIfNeeded() { return false }
+
+        // If we have any windows in our terminal manager we don't do anything.
+        // This is possible with flag set to false if there a race where the
+        // window is still initializing and is not visible but the user clicked
+        // the dock icon.
+        guard TerminalController.all.isEmpty else { return true }
 
         _ = TerminalController.newWindow(ghostty)
         return false
@@ -976,10 +979,7 @@ class AppDelegate: NSObject,
         // running, and a blank window there loses the arrangement just as
         // completely as a lost restore would. Once it has been brought
         // back, windows exist, so the next New Window is an ordinary one.
-        if TerminalController.all.isEmpty,
-           PhantomSessionStore.shared.restoreIfNeeded() {
-            return
-        }
+        if PhantomSessionStore.shared.restoreIfNeeded() { return }
 
         _ = TerminalController.newWindow(ghostty)
     }

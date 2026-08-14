@@ -90,7 +90,14 @@ final class PhantomSessionStore {
         var nextGroupID = 0
 
         let states = TerminalController.all.compactMap { controller -> TerminalRestorableState? in
-            guard let window = controller.window else { return nil }
+            // Only what is actually on screen. A closed window stays in
+            // `NSApp.windows` until it is released, and recording those
+            // wrote the same terminals back into the session over and over
+            // — as *standalones*, since a closed window has no tab group —
+            // so the file grew every cycle and restored a pile of separate
+            // windows that had been tabs. Measured: eight terminals became
+            // twenty-two entries in a handful of open/close rounds.
+            guard let window = controller.window, window.isVisible else { return nil }
 
             var tabGroupID: Int?
             var tabIndex: Int?
@@ -137,6 +144,20 @@ final class PhantomSessionStore {
 
     // MARK: Restoring
 
+    /// Whether any terminal window is actually on screen.
+    ///
+    /// Not `TerminalController.all.isEmpty`, which is the obvious spelling
+    /// and the wrong one. That list is derived from `NSApp.windows`, and
+    /// AppKit keeps a closed window in there until it is released — a
+    /// window controller holds one well past its close. Measured right
+    /// after closing every window: ten controllers still listed, twelve
+    /// windows in the app. Asking it whether anything is open answers yes
+    /// forever after the first close, so the session was never restored and
+    /// a blank window was opened over the top of it instead.
+    private static var hasVisibleTerminalWindows: Bool {
+        TerminalController.all.contains { $0.window?.isVisible == true }
+    }
+
     /// True when a non-empty session is on disk. `restoreWindow` consults
     /// this to stand macOS's own restore down in favor of ours.
     var hasSavedSession: Bool {
@@ -166,11 +187,11 @@ final class PhantomSessionStore {
             return false
         }
 
-        // If macOS already restored windows there is nothing for us to do,
-        // and creating more would duplicate them. This is also what keeps a
+        // If windows are already up there is nothing for us to do, and
+        // creating more would duplicate them. This is also what keeps a
         // second New Window from restoring the session again: once the
-        // first one brought it back, windows exist.
-        guard TerminalController.all.isEmpty else { return false }
+        // first one brought it back, windows are on screen.
+        guard !Self.hasVisibleTerminalWindows else { return false }
 
         guard let states = load(), !states.isEmpty else { return false }
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return false }
