@@ -895,14 +895,48 @@ final class CodeNSTextView: NSTextView {
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
     var completionProvider: ((Int) async -> [String])?
 
-    /// The last answer from `completionProvider`.
+    /// How long the caret rests before the list asks for suggestions.
     ///
-    /// AppKit asks for completions **synchronously**, and a language server
-    /// answers over a pipe. The only way to bridge the two is to fetch
-    /// first and open the list afterwards, serving it from here — which is
-    /// what `complete(_:)` below does.
-    private var pendingCompletions: [String] = []
-    private var isFetchingCompletions = false
+    /// A `var` for the same reason `hoverFetchDelay` is one: a timing test
+    /// has to be able to state its own ratio rather than bet that a fixed
+    /// value stays comfortably larger than a sleep on a machine running the
+    /// rest of the suite in parallel.
+    ///
+    /// 120ms sits under the ~150ms where a suggestion starts reading as late,
+    /// and above one keystroke interval for a fast typist — so a burst
+    /// coalesces into one request instead of one per character. An explicit
+    /// request and a trigger character both skip it: each is already a pause.
+    var completionFetchDelay: Duration = .milliseconds(120)
+
+    /// How many identifier characters open the list on their own.
+    ///
+    /// One, matching VS Code, and chosen deliberately over the safer two: at
+    /// a single character the list is large, so the *ordering* is the entire
+    /// experience. That is why `CodeCompletionFilter` scores a word-boundary
+    /// match so highly and handicaps buffer words against server answers.
+    var completionMinimumPrefix = 1
+
+    /// Trigger characters the server advertised — `.` almost everywhere,
+    /// plus `"`, `'`, `/`, `@` and `<` for TypeScript.
+    ///
+    /// Supplied as a value rather than hardcoded, because it is a fact about
+    /// the language server and the engine is not allowed to know which one is
+    /// running. The default keeps the dot working when nothing supplies it.
+    var completionTriggers: Set<Character> = ["."]
+
+    /// The list currently on screen, if any.
+    private var completionSession: CompletionSession?
+
+    /// The in-flight fetch. Cancelled on every new one, rather than dropped —
+    /// dropping the *new* request is what the version this replaces did, and
+    /// it meant the answer on screen was always the one for a prefix the
+    /// reader had already moved past.
+    private var completionTask: Task<Void, Never>?
+
+    /// Bumped by every open and every close, so an answer that arrives after
+    /// the world moved can be recognised and discarded. The caret alone is
+    /// not enough: it can return to where it was.
+    private var completionGeneration = 0
 
     /// The offset the pointer last rested on, so the card describes what is
     /// under it rather than what the cursor happens to be near.
@@ -1200,52 +1234,155 @@ final class CodeNSTextView: NSTextView {
         super.keyDown(with: event)
     }
 
-    /// Fetches, then opens the list.
+    /// One open completion list.
     ///
-    /// Re-entrant by design: the first call fetches and returns without a
-    /// popup, then calls itself once the answer is in. The flag is what
-    /// stops that second call from starting another fetch and never
-    /// showing anything.
+    /// `prefix` is the range the list was built for, and it is what makes
+    /// deleting a character a *refilter* rather than a close: the list stays
+    /// while the caret is still inside the word it opened on, and closes when
+    /// the word empties or the caret leaves. `CodeCompletionTrigger.decide`
+    /// deliberately cannot make that call — a single typed character does not
+    /// say which range the list on screen belongs to.
+    struct CompletionSession {
+        var prefix: NSRange
+        var items: [CodeCompletionItem]
+        var selection: Int
+    }
+
+    /// Asked for on purpose — ⌃Space, and `cancelOperation:` (AppKit binds
+    /// Escape to it, which is why Escape has always opened this list).
+    ///
+    /// Unlike a typed character this ignores both the delay and the minimum
+    /// prefix: someone who asks explicitly has already paused, and asking
+    /// inside a string is a request rather than an accident.
     override func complete(_ sender: Any?) {
-        guard let completionProvider, !isFetchingCompletions else {
-            super.complete(sender)
+        requestCompletions(explicitly: true)
+    }
+
+    /// Every printable character, funnelled from `insertText` so the four
+    /// auto-closing early returns cannot skip it.
+    func completionDidType(_ typed: Character) {
+        let isTrigger = completionTriggers.contains(typed)
+        let decision = completionDecision(typed: typed)
+
+        switch decision {
+        case .close:
+            dismissCompletions()
+        case .ignore:
+            break
+        case .open, .refilter:
+            requestCompletions(explicitly: false, immediate: isTrigger)
+        }
+    }
+
+    /// Backspace, funnelled the same way.
+    ///
+    /// Refilters rather than closing, which is what VS Code does and what
+    /// makes the list usable while correcting a typo. The list survives only
+    /// while the caret is still inside the word it opened on; `prefixRange`
+    /// returning something shorter is a narrowing, and returning nothing at
+    /// all is the word being gone.
+    func completionDidDelete() {
+        guard completionSession != nil else { return }
+        guard case .refilter = completionDecision(typed: nil) else {
+            dismissCompletions()
             return
         }
+        requestCompletions(explicitly: false, immediate: true)
+    }
 
-        isFetchingCompletions = true
+    /// The trigger policy, asked over the caret's line only — a per-keystroke
+    /// path cannot afford to tokenize the document to find out whether it is
+    /// inside a string.
+    private func completionDecision(typed: Character?) -> CodeCompletionTrigger.Decision {
+        let content = string as NSString
+        let caret = selectedRange().location
+        let lineRange = content.lineRange(for: NSRange(location: min(caret, content.length), length: 0))
+        let line = content.substring(with: lineRange)
+        let caretInLine = caret - lineRange.location
+
+        let suppressed = SyntaxHighlighter(language: hoverLanguage)
+            .tokens(in: line, range: NSRange(location: 0, length: (line as NSString).length))
+            .contains { token in
+                (token.kind == .string || token.kind == .comment)
+                    && NSLocationInRange(max(caretInLine - 1, 0), token.range)
+            }
+
+        let context = CodeCompletionTrigger.Context(
+            line: line,
+            caretInLine: caretInLine,
+            typed: typed,
+            isInStringOrComment: suppressed,
+            triggerCharacters: completionTriggers,
+            minimumPrefix: completionMinimumPrefix)
+
+        return CodeCompletionTrigger.decide(
+            context,
+            isListOpen: completionSession != nil,
+            isExplicit: false)
+    }
+
+    /// Fetches and shows, debounced and cancellable.
+    ///
+    /// The shape is the one `mouseMoved` established for hover — cancel the
+    /// previous task, sleep, check cancellation, await, check again, hop to
+    /// the main actor and re-check that the world has not moved — with one
+    /// addition hover does not need: the buffer moves under a completion, so
+    /// a generation counter guards it as well as the offset.
+    private func requestCompletions(explicitly: Bool, immediate: Bool = false) {
+        guard let completionProvider else { return }
+
+        completionGeneration += 1
+        let generation = completionGeneration
         let offset = selectedRange().location
-        Task { [weak self] in
+        let delay = immediate || explicitly ? Duration.zero : completionFetchDelay
+
+        completionTask?.cancel()
+        completionTask = Task { [weak self, delay] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            guard !Task.isCancelled else { return }
             let words = await completionProvider(offset)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self else { return }
-                self.pendingCompletions = words
-                self.isFetchingCompletions = false
-                guard !words.isEmpty else { return }
-                self.openCompletionList(sender)
+                guard let self, self.completionGeneration == generation else { return }
+                self.showCompletions(words, requestedAt: offset)
             }
         }
     }
 
-    /// Reaches `super.complete` from inside the fetch's closure, which Swift
-    /// will not let a captured `self` do directly.
-    private func openCompletionList(_ sender: Any?) {
-        super.complete(sender)
+    /// Ranks an answer and puts it on screen.
+    ///
+    /// ⚠️ The panel itself lands separately, so today this keeps the session
+    /// without drawing it. That is deliberate rather than forgotten: the
+    /// ranking, the trigger policy and the cancellation are all exercised by
+    /// this path, and wiring a half-built panel in would make a display bug
+    /// and a logic bug indistinguishable while both were still moving.
+    private func showCompletions(_ words: [String], requestedAt offset: Int) {
+        guard case .open(let prefix) = completionDecision(typed: nil)
+            ?? .open(prefix: NSRange(location: offset, length: 0))
+        else { return }
+
+        let query = (string as NSString).substring(with: prefix)
+        let items = words.map {
+            CodeCompletionItem(kind: .text, label: $0, insertText: $0, source: .server)
+        }
+        let ranked = CodeCompletionFilter.rank(items, query: query)
+        guard !ranked.isEmpty else {
+            dismissCompletions()
+            return
+        }
+        completionSession = CompletionSession(prefix: prefix, items: ranked, selection: 0)
     }
 
-    /// Serves what the last fetch returned, narrowed to what is typed.
-    override func completions(
-        forPartialWordRange charRange: NSRange,
-        indexOfSelectedItem index: UnsafeMutablePointer<Int>
-    ) -> [String]? {
-        guard completionProvider != nil else {
-            return super.completions(forPartialWordRange: charRange, indexOfSelectedItem: index)
-        }
-        let partial = (string as NSString).substring(with: charRange)
-        guard !partial.isEmpty else { return pendingCompletions }
-        return pendingCompletions.filter {
-            $0.range(of: partial, options: [.caseInsensitive, .anchored]) != nil
-        }
+    /// Closes the list and invalidates anything still in flight for it.
+    func dismissCompletions() {
+        completionTask?.cancel()
+        completionTask = nil
+        completionSession = nil
+        completionGeneration += 1
     }
+
+    /// Whether a list is open, for the key-handling table.
+    var isCompletionListOpen: Bool { completionSession != nil }
 
     /// What each opener closes with. Quotes map to themselves: typing one
     /// is either "open a string" or "step over the one already there"
@@ -1263,6 +1400,32 @@ final class CodeNSTextView: NSTextView {
         return Character(UnicodeScalar(content.character(at: index)) ?? " ")
     }
 
+    /// Every printable character the reader types arrives here, so this is
+    /// where both features that react to typing hang: auto-closing, and the
+    /// completion list.
+    ///
+    /// They are split into two calls rather than one body for a reason worth
+    /// keeping: the auto-closing half has **four** early returns — a
+    /// non-single-character insert, stepping over an existing closer, a quote
+    /// touching a word, and the pair insertion itself — and a completion hook
+    /// written at the bottom of that body would be skipped by all four. Which
+    /// is to say it would fail on exactly the keystrokes where a bracket or a
+    /// quote was involved, and work everywhere else, which is the shape of bug
+    /// that survives a whole afternoon of testing by hand.
+    ///
+    /// So auto-closing runs first, unconditionally, on its own paths; the
+    /// completion hook runs after, on all of them.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        insertTextClosingBrackets(string, replacementRange: replacementRange)
+
+        /// `last`, not `first`: an input method commits a whole word at once,
+        /// and what the list should react to is the character the caret now
+        /// sits behind.
+        if let typed = (string as? String)?.last {
+            completionDidType(typed)
+        }
+    }
+
     /// Closes a bracket or quote as it is typed, and steps over one that is
     /// already there instead of stacking a second — the two halves every
     /// editor with this feature needs before it feels usable rather than
@@ -1272,7 +1435,7 @@ final class CodeNSTextView: NSTextView {
     /// the caret: `it's` and `5'` are an apostrophe and a prime mark, not
     /// the start of a string, and auto-closing them anyway is exactly the
     /// kind of wrong guess that gets this feature turned back off.
-    override func insertText(_ string: Any, replacementRange: NSRange) {
+    private func insertTextClosingBrackets(_ string: Any, replacementRange: NSRange) {
         guard let text = string as? String,
               text.count == 1,
               let typed = text.first,
@@ -1309,11 +1472,19 @@ final class CodeNSTextView: NSTextView {
         super.insertText(string, replacementRange: replacementRange)
     }
 
+    /// Deleting backwards, with the same split as `insertText` and for the
+    /// same reason: the pair-removal below returns early, and the completion
+    /// list has to hear about the deletion either way.
+    override func deleteBackward(_ sender: Any?) {
+        deleteBackwardClosingPair(sender)
+        completionDidDelete()
+    }
+
     /// Backspacing between an empty auto-closed pair removes both halves in
     /// one step. Without this, closing a bracket auto-close put there for
     /// you — and that you then changed your mind about — takes two
     /// backspaces where every other editor with this feature takes one.
-    override func deleteBackward(_ sender: Any?) {
+    private func deleteBackwardClosingPair(_ sender: Any?) {
         let caret = selectedRange().location
         if selectedRange().length == 0, caret > 0 {
             let content = self.string as NSString

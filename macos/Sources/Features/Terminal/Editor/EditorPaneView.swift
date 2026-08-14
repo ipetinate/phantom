@@ -208,11 +208,19 @@ private struct DocumentView: View {
                 },
                 underlines: underlines,
                 hoverProvider: { offset in await hoverInfo(at: offset) },
+                /// Still flattened to `[String]`, and deliberately so for now:
+                /// the engine's completion list is being built alongside this,
+                /// and widening the closure before it exists would leave the
+                /// editor with a richer answer and nowhere to put it. `.items`
+                /// is empty for every outcome that is not a list, which is the
+                /// same thing this closure did when a failure was spelled `[]`
+                /// — the difference is that the outcome can now be *told apart*
+                /// from an empty answer, which is what the panel will need.
                 completionProvider: { offset in
                     await lsp.completions(
                         path: document.url.path,
                         position: position(at: offset)
-                    ).map(\.insertText)
+                    ).items.map(\.insertText)
                 },
                 reveal: revealRange,
                 onJumpToDefinition: { offset in jump(from: offset) },
