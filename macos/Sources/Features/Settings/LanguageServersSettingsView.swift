@@ -601,7 +601,14 @@ private struct LSPStatusBadge: View {
             Text(status.label)
                 .foregroundStyle(detailed ? .primary : (color == .secondary ? .secondary : color))
             if detailed, status.activeWorkspaceCount > 0 {
-                Text("· \\(status.activeWorkspaceCount) workspace\\(status.activeWorkspaceCount == 1 ? \"\" : \"s\")")
+                // `verbatim` for the same reason the dev-server chip uses it:
+                // interpolating a number into a `Text` goes through
+                // `LocalizedStringKey`, which formats it for the locale — the
+                // count would read "1.000" past a thousand, the way a port
+                // number once read "4.201". The escaping was doubled here, so
+                // the expression itself was being printed on screen.
+                Text(verbatim: "· \(status.activeWorkspaceCount) workspace"
+                    + (status.activeWorkspaceCount == 1 ? "" : "s"))
                     .foregroundStyle(.secondary)
             }
         }

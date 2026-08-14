@@ -19,6 +19,15 @@ enum CodingAgent: String, Sendable {
     case codex
     case opencode
 
+    /// What starts a fresh session with this agent.
+    ///
+    /// Here rather than at the call site so that starting an agent and
+    /// resuming it cannot come to disagree about which agent a tab holds:
+    /// the sidebar records the case and asks it for both commands.
+    var launchCommand: String {
+        rawValue
+    }
+
     /// The command that resumes `sessionID` — or, when no id was ever
     /// captured, the closest thing the CLI offers.
     ///

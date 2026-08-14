@@ -145,6 +145,38 @@ final class TabStateCenter: ObservableObject {
     /// for a tab to be both finished and worth coming back to. What is left
     /// is a stateless record: no word on the first line, so no indicator, and
     /// enough identity to come back.
+    /// Records that a tab was started with an agent, before that agent has
+    /// had a chance to say anything.
+    ///
+    /// Phantom starts these sessions itself, and until now it threw that
+    /// away: whether a tab had an agent in it was known only from a file the
+    /// *hook* writes. So a tab whose hook was not installed, or whose agent
+    /// exited before reaching a hook event, left nothing behind — and a
+    /// restore had no reason to believe there was ever a session there. It
+    /// did not fail to resume; it never tried.
+    ///
+    /// Written with no state word, so it shows no indicator: this says which
+    /// agent the tab is running, not what it is doing. Any id a hook captures
+    /// later is merged on top, and an id already on record survives — being
+    /// asked to start an agent in a tab that already has a conversation must
+    /// not lose the conversation.
+    func recordAgentStart(surfaceId: UUID, agent: CodingAgent) {
+        let existing = records[surfaceId]
+        let record = AgentTabRecord(
+            stateWord: existing?.stateWord ?? "",
+            agent: agent,
+            sessionID: existing?.sessionID
+        )
+
+        let url = Self.stateFileURL(for: surfaceId)
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? record.fileContents.write(to: url, atomically: true, encoding: .utf8)
+        records[surfaceId] = record
+    }
+
     func clearDone(surfaceId: UUID) {
         guard states[surfaceId] == .done else { return }
         let url = Self.stateFileURL(for: surfaceId)

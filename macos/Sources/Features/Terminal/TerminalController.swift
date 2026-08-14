@@ -1659,14 +1659,17 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             controller.sidebarLayout?.selectedPane = pane
         }
 
-        if runningClaude, let surface {
-            ClaudeSession.run("claude", in: surface)
-        }
-        if runningCodex, let surface {
-            ClaudeSession.run("codex", in: surface)
-        }
-        if runningOpenCode, let surface {
-            ClaudeSession.run("opencode", in: surface)
+        // Recorded before the agent is even typed, because *we* know which
+        // one it is and the hook might never say. A tab whose hook is not
+        // installed used to leave no trace of having run an agent, so a
+        // restore had nothing to resume from — see `recordAgentStart`.
+        if let surface, let agent = startingAgent(
+            claude: runningClaude,
+            codex: runningCodex,
+            openCode: runningOpenCode
+        ) {
+            TabStateCenter.shared.recordAgentStart(surfaceId: surface.id, agent: agent)
+            ClaudeSession.run(agent.launchCommand, in: surface)
         }
 
         guard let surface else { return nil }
@@ -1681,6 +1684,23 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         sidebarTabManager?.scheduleRefresh()
         controller.sidebarTabManager?.scheduleRefresh()
         return surface
+    }
+
+    /// Which agent a new-tab request is asking for, if any.
+    ///
+    /// Three booleans arrive from three separate sidebar buttons; this is
+    /// where they become the one thing the rest of the flow needs, so that
+    /// recording the agent and launching it cannot disagree about which it
+    /// was.
+    private func startingAgent(
+        claude: Bool,
+        codex: Bool,
+        openCode: Bool
+    ) -> CodingAgent? {
+        if claude { return .claude }
+        if codex { return .codex }
+        if openCode { return .opencode }
+        return nil
     }
 
     /// Resolves the working directory for a new sidebar terminal, per the
