@@ -45,7 +45,16 @@ final class PhantomSessionStore {
 
     /// Membership changes arrive in bursts (a window close, a tab open, a
     /// macOS restore); only the final state matters.
-    private static let saveDebounce: TimeInterval = 0.4
+    ///
+    /// Long enough to outlast a whole window closing. A window's tabs close
+    /// one at a time, each announcing itself, and at 0.4s the burst outran
+    /// the coalescing: the saves landed one per tab and ate the session on
+    /// the way down — three terminals recorded as three, then two, then
+    /// one, so "closed the window" left a session of one. Waiting for the
+    /// teardown to finish means the save that lands sees no windows at all,
+    /// which is the case the guard in `saveNow` refuses to write. Nothing is
+    /// lost by waiting: termination saves synchronously.
+    private static let saveDebounce: TimeInterval = 1.5
 
     private init() {
         fileURL = Self.defaultFileURL()
