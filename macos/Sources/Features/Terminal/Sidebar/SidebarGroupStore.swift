@@ -80,14 +80,12 @@ final class SidebarGroupStore: ObservableObject {
         load()
     }
 
+    /// Per build, so a debug run cannot spend this store's 300-entry
+    /// `tabOrder` window on surfaces the release build has never heard of.
+    /// See `PhantomStateFile` for what that cost the reader, and for why the
+    /// release build's own path does not move.
     private static func defaultFileURL() -> URL {
-        let base = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first!
-        return base
-            .appendingPathComponent("com.ipetinate.phantom", isDirectory: true)
-            .appendingPathComponent("sidebar-groups.json")
+        PhantomStateFile.migratedURL(named: "sidebar-groups.json")
     }
 
     // MARK: Group CRUD
