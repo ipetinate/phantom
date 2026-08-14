@@ -109,6 +109,16 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// own content doesn't reach.
     private var terminalTitlebarFiller: NSView?
 
+    /// The two constraints that place the right pane's chrome against the
+    /// titlebar strip: the filler's bottom edge and the pane tab bar's top.
+    ///
+    /// Both are offset from the terminal's safe area by whatever part of the
+    /// strip the window has stopped reserving, which is zero for an ordinary
+    /// window and the strip's height in native fullscreen. See
+    /// `syncTitlebarStripInsets`.
+    private var terminalTitlebarFillerBottom: NSLayoutConstraint?
+    private var paneTabBarTopConstraint: NSLayoutConstraint?
+
     /// The sidebar pane container and its glass layer (glass effect
     /// modes cover every pane, so the sidebar carries its own).
     private weak var sidebarPane: NSView?
@@ -1461,21 +1471,29 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // the strip is the *window's*, not the terminal's, and has to be
         // painted whichever half is on screen.
         rightPane.addSubview(titlebarFiller, positioned: .below, relativeTo: nil)
+        // Meets the terminal's content exactly. It cannot do better than
+        // that: overlapping paints that row twice and reads as a dark
+        // line, and falling short leaves the window showing through as a
+        // light one. Two translucent surfaces can't tile seamlessly —
+        // fixing this properly means one backdrop for the whole window
+        // with the terminal drawing no background of its own.
+        //
+        // The offset carries the part of the strip the window has stopped
+        // reserving, which is nothing at all until native fullscreen — where
+        // the terminal's safe area goes to zero while its scroll view still
+        // insets its content under the detached titlebar, so this is the only
+        // thing left to paint that band.
+        let fillerBottom = titlebarFiller.bottomAnchor.constraint(
+            equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
+        )
         NSLayoutConstraint.activate([
             titlebarFiller.topAnchor.constraint(equalTo: rightPane.topAnchor),
             titlebarFiller.leadingAnchor.constraint(equalTo: rightPane.leadingAnchor),
             titlebarFiller.trailingAnchor.constraint(equalTo: rightPane.trailingAnchor),
-            // Meets the terminal's content exactly. It cannot do better than
-            // that: overlapping paints that row twice and reads as a dark
-            // line, and falling short leaves the window showing through as a
-            // light one. Two translucent surfaces can't tile seamlessly —
-            // fixing this properly means one backdrop for the whole window
-            // with the terminal drawing no background of its own.
-            titlebarFiller.bottomAnchor.constraint(
-                equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
-            ),
+            fillerBottom,
         ])
         self.terminalTitlebarFiller = titlebarFiller
+        self.terminalTitlebarFillerBottom = fillerBottom
 
         // The pane's tab bar, above whichever surface is showing. Added after
         // the terminal so that constraining to it is legal: a constraint
@@ -1498,15 +1516,22 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         tabBarHosting.setContentCompressionResistancePriority(.init(1), for: .horizontal)
         rightPane.addSubview(tabBarHosting)
         let tabBarHeight = tabBarHosting.heightAnchor.constraint(equalToConstant: 0)
+        // Offset by the same strip the filler carries, so the bar sits under
+        // the titlebar rather than behind it in fullscreen. The terminal's
+        // own content lines up with it either way: its SwiftUI inset is the
+        // bar's height, applied on top of whatever the window or its scroll
+        // view has already pushed the content down by.
+        let tabBarTop = tabBarHosting.topAnchor.constraint(
+            equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
+        )
         NSLayoutConstraint.activate([
-            tabBarHosting.topAnchor.constraint(
-                equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
-            ),
+            tabBarTop,
             tabBarHosting.leadingAnchor.constraint(equalTo: rightPane.leadingAnchor),
             tabBarHosting.trailingAnchor.constraint(equalTo: rightPane.trailingAnchor),
             tabBarHeight,
         ])
         self.paneTabBarHeight = tabBarHeight
+        self.paneTabBarTopConstraint = tabBarTop
         self.paneTabBarView = tabBarHosting
 
         let editorHosting = NSHostingView(
@@ -1612,6 +1637,22 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             selector: #selector(guiConfigDidApplyNotification(_:)),
             name: GuiConfigStore.didApply,
             object: nil
+        )
+        // The window's own notifications rather than the fullscreen style's
+        // delegate: native fullscreen can be entered from the green button
+        // or from a restored window, and this has to hold whichever way the
+        // window got there.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sidebarFullscreenDidChange(_:)),
+            name: NSWindow.didEnterFullScreenNotification,
+            object: window
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sidebarFullscreenDidChange(_:)),
+            name: NSWindow.didExitFullScreenNotification,
+            object: window
         )
 
         DispatchQueue.main.async { [weak self] in
@@ -1926,6 +1967,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// Keeps the chrome's trailing edge at the sidebar's right edge
     /// (or parked next to the traffic lights when collapsed).
     private func syncSidebarChromeWidth() {
+        // The strip the icons live in is the same strip the panes have to
+        // stay out of, so both are resolved together and every caller of
+        // this — collapse, divider drag, appearance sync, config reload, the
+        // fullscreen transition — keeps them in agreement.
+        syncTitlebarStripInsets()
+
         guard let chrome = sidebarChromeView else { return }
 
         if chrome.superview == nil {
@@ -1949,6 +1996,77 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // Keep the centered title out of the chrome it would otherwise
         // overlap: the icons end where this constraint puts them.
         (window as? TerminalWindow)?.titlebarLeadingInset = constraint.constant + 12
+    }
+
+    /// Hands both panes whatever part of the titlebar strip the window has
+    /// stopped reserving, so the sidebar's first row, the terminal's filler
+    /// and the pane tab bar all sit against the strip in native fullscreen
+    /// the way they do in an ordinary window.
+    ///
+    /// The terminal pane is the yardstick for what *is* reserved because it
+    /// is the view AppKit hands the strip to — the filler has always been
+    /// measured off exactly this inset (see `makeSidebarSplitView`), and it
+    /// reads zero in fullscreen, which is the shortfall put back here.
+    ///
+    /// No mode check, because none is needed: `NSTitlebarView` lives inside
+    /// the titlebar container, and the container is what the window stops its
+    /// content below. The measured strip can therefore never exceed what the
+    /// window reserves outside of fullscreen, so the arithmetic yields zero
+    /// there on its own and windowed layout is left exactly as it was.
+    private func syncTitlebarStripInsets() {
+        guard let window else { return }
+
+        let shortfall = SidebarLayoutModel.titlebarShortfall(
+            titlebarHeight: visibleTitlebarHeight(of: window),
+            reservedByWindow: terminalPaneView?.safeAreaInsets.top ?? 0
+        )
+
+        // The filler's bottom and the tab bar's top hang off the terminal's
+        // safe area, so both take the shortfall as their offset: nothing
+        // moves at zero, and in fullscreen both land on the strip's edge.
+        terminalTitlebarFillerBottom?.constant = shortfall
+        paneTabBarTopConstraint?.constant = shortfall
+
+        // Assigned only on a real change: this runs on every divider drag
+        // and every appearance sync, and a `@Published` write invalidates
+        // the whole sidebar body whether the value moved or not.
+        guard let layout = sidebarLayout,
+              abs(layout.titlebarInset - shortfall) > 0.5
+        else { return }
+        layout.titlebarInset = shortfall
+    }
+
+    /// The height of the titlebar strip this window actually shows, zero
+    /// when it shows none.
+    ///
+    /// The hidden-titlebar style keeps the traffic lights and their
+    /// container around and hides them, and non-native fullscreen drops
+    /// `.titled` altogether so there are no buttons to ask. Neither has a
+    /// strip for the sidebar to stay clear of.
+    private func visibleTitlebarHeight(of window: NSWindow) -> CGFloat {
+        guard let titlebar = window.standardWindowButton(.closeButton)?.superview,
+              !titlebar.isHiddenOrHasHiddenAncestor
+        else { return 0 }
+        return titlebar.frame.height
+    }
+
+    /// Re-resolves the titlebar strip across a fullscreen transition.
+    ///
+    /// Entering native fullscreen moves the titlebar into its own window,
+    /// which both changes the strip the panes must reserve and can hand the
+    /// chrome a new titlebar view to live in. Both helpers are idempotent, so
+    /// exiting runs the same path back.
+    @objc private func sidebarFullscreenDidChange(_ notification: Notification) {
+        attachSidebarChrome()
+        syncTitlebarStripInsets()
+
+        // Again on the next turn: the fullscreen titlebar is not always laid
+        // out by the time the notification lands, and an unmeasured strip
+        // reads as no strip at all.
+        DispatchQueue.main.async { [weak self] in
+            self?.attachSidebarChrome()
+            self?.syncTitlebarStripInsets()
+        }
     }
 
     // MARK: NSSplitViewDelegate

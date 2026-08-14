@@ -123,7 +123,15 @@ struct SidebarView: View {
     var body: some View {
         // No background of its own: the window paints the theme color,
         // opacity and blur, so the sidebar always matches the terminal.
+        //
+        // The padding is the titlebar strip in fullscreen, where the window
+        // stops reserving it and the traffic lights would otherwise land on
+        // the pane switcher; it is zero everywhere else. Padding rather than
+        // a shorter hosting view, because that view's layer is what paints
+        // the strip on the sidebar's half — moved down, the strip would go
+        // back to showing the bare window.
         expanded
+            .padding(.top, layout.titlebarInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -1030,7 +1038,7 @@ private struct PRRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Text("#\(pr.number)")
+                Text(verbatim: "#\(pr.number)")
                     .font(palette.font(size: 11, weight: .medium))
                     .foregroundStyle(palette.accent ?? .accentColor)
 
