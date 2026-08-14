@@ -82,6 +82,22 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
     /// user override. See `LSPInitializationOptions`.
     var initializationOptionsKind: LSPInitializationOptionsKind = .none
 
+    /// Where this definition came from, and therefore whether starting it
+    /// needs to be asked about. See `LSPServerOrigin`.
+    ///
+    /// Defaulted so the table below is untouched, and a field rather than a
+    /// lookup on the side because a field that travels with the value cannot
+    /// be forgotten — a table consulted by language id can be, and one
+    /// missed consultation is not a UI defect, it is the trust gate not
+    /// running.
+    ///
+    /// This does put provenance into a type whose own comment (below, on
+    /// `LSPServerRegistry`) says it has none. That comment is about the
+    /// *registry*, which still reads nothing and asks nobody; this field is
+    /// data the caller supplies, and the alternative — a definition that
+    /// cannot say where it came from — is what makes the gate skippable.
+    var origin: LSPServerOrigin = .builtIn
+
     var id: String { languageID }
 
     /// Which section of the Settings list this server belongs to. Keyed off

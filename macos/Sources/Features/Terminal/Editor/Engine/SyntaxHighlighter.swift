@@ -23,6 +23,12 @@ struct SyntaxHighlighter {
     }
 
     let language: CodeLanguage
+
+    /// The rules actually in force. For a file whose language this build
+    /// ships this is just `language`'s own syntax; for one a contribution
+    /// described, it carries that description.
+    let syntax: LanguageSyntax
+
     private let regex: NSRegularExpression?
 
     /// Order is the precedence used when two kinds could start at the same
@@ -38,8 +44,13 @@ struct SyntaxHighlighter {
     private static let cache = Cache()
 
     init(language: CodeLanguage) {
-        self.language = language
-        self.regex = Self.cache.regex(for: language)
+        self.init(syntax: .builtIn(language))
+    }
+
+    init(syntax: LanguageSyntax) {
+        self.language = syntax.base
+        self.syntax = syntax
+        self.regex = Self.cache.regex(for: syntax)
     }
 
     /// Tokens inside `range`, which the caller keeps to the visible
@@ -49,7 +60,7 @@ struct SyntaxHighlighter {
         // A single-file component has no rules of its own: it is split into
         // its blocks and each is lexed by the language it actually holds.
         // The sub-languages are never `.vue`, so this cannot recurse.
-        if language == .vue {
+        if language == .vue, syntax.isBuiltIn {
             return SFCRegions.regions(in: text).flatMap { region -> [Token] in
                 let clipped = NSIntersectionRange(region.range, range)
                 guard clipped.length > 0 else { return [] }
@@ -76,7 +87,11 @@ struct SyntaxHighlighter {
     /// Builds the combined pattern. Exposed for the tests, which assert on
     /// the shape rather than only on results.
     static func pattern(for language: CodeLanguage) -> String? {
-        let rules = SyntaxRules.rules(for: language)
+        pattern(for: .builtIn(language))
+    }
+
+    static func pattern(for syntax: LanguageSyntax) -> String? {
+        let rules = SyntaxRules.rules(for: syntax)
         let byKind: [(TokenKind, String?)] = [
             (.comment, rules.comment),
             (.string, rules.string),
@@ -96,22 +111,58 @@ struct SyntaxHighlighter {
 
     /// `NSRegularExpression` is safe to use from several threads once
     /// built, so instances are shared; only the building is serialized.
+    ///
+    /// The two halves are kept apart because they are keyed and bounded
+    /// differently.
+    ///
+    /// A built-in language's rules are constant, so the enum is a complete
+    /// key and the dictionary can hold at most one entry per case.
+    ///
+    /// A contributed language's rules are **not** constant for its id: the
+    /// same `elixir` can be edited on disk and reloaded, and a cache keyed
+    /// by the id would then answer with the rules the file used to have.
+    /// So the key is the built pattern itself, which is exactly the identity
+    /// of the thing being cached — same pattern, same regex — and the id
+    /// never enters it at all. That also removes the collision between a
+    /// contribution and a built-in of the same name, which is the state a
+    /// promoted contribution is in by definition.
+    ///
+    /// Building the pattern on every lookup is the cost of that
+    /// correctness; it is string concatenation against
+    /// `NSRegularExpression` compilation, which is the expensive half and
+    /// still cached. The ceiling is here because the key now comes from a
+    /// file: an unbounded dictionary keyed by third-party input is a memory
+    /// cost somebody else gets to choose.
     private final class Cache: @unchecked Sendable {
-        private var storage: [CodeLanguage: NSRegularExpression] = [:]
+        /// Enough for far more contributed languages than a machine will
+        /// have installed; small enough that the worst case is a rebuild,
+        /// not a leak.
+        static let contributedCeiling = 32
+
+        private var builtIn: [CodeLanguage: NSRegularExpression] = [:]
+        private var contributed: [String: NSRegularExpression] = [:]
         private let lock = NSLock()
 
-        func regex(for language: CodeLanguage) -> NSRegularExpression? {
+        func regex(for syntax: LanguageSyntax) -> NSRegularExpression? {
             lock.lock()
             defer { lock.unlock() }
 
-            if let cached = storage[language] { return cached }
-            guard let pattern = SyntaxHighlighter.pattern(for: language) else { return nil }
+            if syntax.isBuiltIn, let cached = builtIn[syntax.base] { return cached }
+
+            guard let pattern = SyntaxHighlighter.pattern(for: syntax) else { return nil }
+            if !syntax.isBuiltIn, let cached = contributed[pattern] { return cached }
+
             guard let built = try? NSRegularExpression(
                 pattern: pattern,
                 options: [.anchorsMatchLines]
             ) else { return nil }
 
-            storage[language] = built
+            if syntax.isBuiltIn {
+                builtIn[syntax.base] = built
+            } else {
+                if contributed.count >= Self.contributedCeiling { contributed.removeAll() }
+                contributed[pattern] = built
+            }
             return built
         }
     }

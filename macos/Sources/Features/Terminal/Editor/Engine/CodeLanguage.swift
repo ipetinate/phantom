@@ -81,6 +81,17 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
         "go.work": .go,
     ]
 
+    /// The names in the table above, folded to lower case.
+    ///
+    /// For whoever has to answer "does this build already own that file
+    /// name" about a name that came from outside — `resolve(fileName:)`
+    /// cannot answer it, because the table is matched case-sensitively
+    /// while a name from a file is not, and `makefile` would look free
+    /// while `Makefile` is taken.
+    static var namedFiles: Set<String> {
+        Set(byName.keys.map { $0.lowercased() })
+    }
+
     static func resolve(fileName: String) -> CodeLanguage {
         if let byName = byName[fileName] { return byName }
 

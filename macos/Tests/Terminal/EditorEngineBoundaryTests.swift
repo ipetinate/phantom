@@ -18,8 +18,21 @@ struct EditorEngineBoundaryTests {
     /// `UserDefaults` is on the list for the same reason as the singletons:
     /// a component that reads preferences behind the host's back can't be
     /// configured by a different host.
+    ///
+    /// The language-extension entries are on it for a reason worth spelling
+    /// out, and `LanguageTrust` is written as a prefix so the store and the
+    /// alert are covered too: a language contributed by a file on disk
+    /// reaches the engine as a `LanguageSyntax` — validated, escaped, and
+    /// carrying no path — and the shortcut of reading the manifest or the
+    /// catalog directly from the highlighter would work, once, and take the
+    /// validation with it.
     private static let forbidden = [
         "ThemePalette",
+        "LanguageCatalog",
+        "LanguageManifest",
+        "LanguageResolver",
+        "LanguageTrust",
+        "LSPServerRegistry",
         "SidebarGroupStore",
         "SidebarTabModel",
         "SidebarTabManager",
