@@ -1,6 +1,26 @@
 import AppKit
 import Foundation
 
+/// The facts about a saved terminal the store reasons about, apart from the
+/// surface tree it exists to carry.
+///
+/// A `TerminalRestorableState` cannot be constructed in a test: decoding one
+/// reaches `Ghostty.SurfaceView.init(from:)`, which builds a live libghostty
+/// surface and spawns a login shell — inside the test host, which *is*
+/// Phantom.app. Stating the handful of fields the grouping and geometry
+/// decisions read as a protocol lets those decisions be tested against a
+/// value that is nothing but those fields.
+protocol PhantomSessionState {
+    var tabGroupID: Int? { get }
+    var tabIndex: Int? { get }
+    var isSelectedTab: Bool? { get }
+    var frame: CGRect? { get }
+    var effectiveFullscreenMode: FullscreenMode? { get }
+    var isFullscreen: Bool? { get }
+}
+
+extension TerminalRestorableState: PhantomSessionState {}
+
 /// Phantom's own terminal session persistence.
 ///
 /// macOS window restoration is the app's nominal restore mechanism, but it
@@ -73,6 +93,279 @@ final class PhantomSessionStore {
             .appendingPathComponent("session.json")
     }
 
+    // MARK: Which Windows Count
+
+    /// Whether a window is one of the session's windows: on screen, or in
+    /// the Dock.
+    ///
+    /// The obvious spelling of "is anything open" is
+    /// `TerminalController.all.isEmpty`, and it is the wrong one. That list
+    /// is derived from `NSApp.windows`, and AppKit keeps a closed window in
+    /// there until it is released — a window controller holds one well past
+    /// its close. Measured right after closing every window: ten controllers
+    /// still listed, twelve windows in the app. Asking it whether anything is
+    /// open answers yes forever after the first close, so the session was
+    /// never restored and a blank window was opened over the top of it
+    /// instead.
+    ///
+    /// `isVisible` was the next attempt and it was wrong too, because it is
+    /// false for a window in the Dock and nothing about it separates
+    /// minimized from closed. Measured against a probe window: shown,
+    /// `isVisible=true isMiniaturized=false`; minimized, `isVisible=false
+    /// isMiniaturized=true`; ordered out and closed, both false; and a
+    /// background tab of a settled tab group, `isVisible=true`. Minimizing
+    /// any one tab minimizes the whole group, so every window in it reports
+    /// `isMiniaturized`.
+    ///
+    /// Recording only `isVisible` windows therefore dropped a minimized
+    /// window and every tab in it — agent conversations included — from the
+    /// saved session, without the set ever being empty enough for the guard
+    /// in `shouldWrite` to notice. Reading it the other way round, as "is
+    /// anything open", it claimed nothing was: minimizing every window and
+    /// pressing New Window restored the whole session on top of itself, two
+    /// tabs to a conversation, two agent processes writing one tab-state
+    /// file.
+    ///
+    /// So: `isVisible || isMiniaturized`, in one place, used by everything
+    /// that asks either question. Spelled over the two booleans rather than
+    /// over `NSWindow` so it can be exercised without a window server.
+    static func isOpen(isVisible: Bool, isMiniaturized: Bool) -> Bool {
+        isVisible || isMiniaturized
+    }
+
+    /// Whether a window is still part of the session. See `isOpen`.
+    static func isOpen(_ window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        return isOpen(isVisible: window.isVisible, isMiniaturized: window.isMiniaturized)
+    }
+
+    /// Whether any terminal window is still part of the session — on screen
+    /// or in the Dock. See `isOpen`.
+    static var hasOpenTerminalWindows: Bool {
+        TerminalController.all.contains { isOpen($0.window) }
+    }
+
+    // MARK: The Session File
+
+    /// The session as it is written: the states, and the version of the
+    /// shape they are written in.
+    ///
+    /// The states used to be the entire file — a bare JSON array — which
+    /// left nothing to say which shape they were in. That is a trap with a
+    /// long fuse: the day a non-optional field is added to `InternalState`,
+    /// every `session.json` already on disk stops decoding, and it did so
+    /// silently (the save logs, the load did not). The reader would open the
+    /// app to a blank window, and the next save would write `[]` over the
+    /// session they had just lost. A version in the file makes a shape this
+    /// build cannot read *recognizable* as such, and the rule for one is to
+    /// leave it alone.
+    private struct Envelope: Codable {
+        let version: Int
+        let states: [TerminalRestorableState]
+    }
+
+    /// The envelope version this build writes. A file with no version at all
+    /// is the original bare array, and is read as such.
+    static let fileVersion = 1
+
+    /// What the session file holds, learned without decoding it.
+    enum SavedSession: Equatable {
+        /// No session has been written, or the file is gone.
+        case absent
+
+        /// A file this build understands, holding `count` terminals.
+        /// `isVersioned` separates the current envelope from the original
+        /// bare array.
+        case readable(count: Int, isVersioned: Bool)
+
+        /// A file this build cannot make sense of: malformed, or written by
+        /// a newer Phantom. A session we cannot read is still a session —
+        /// the reader may be one launch away from the build that reads it —
+        /// so this is never overwritten by a save that has nothing to say.
+        case unreadable
+    }
+
+    /// How many terminals the session file holds, and in which shape,
+    /// without decoding a single one of them.
+    ///
+    /// This exists because `load` is destructive. Two callers only ever
+    /// wanted the count — `hasSavedSession` and the guard in `saveNow` — and
+    /// both were paying a full decode for it. `hasSavedSession` is consulted
+    /// once per window in macOS's *own* saved state, so eight saved
+    /// terminals across three macOS windows meant twenty-four surfaces, and
+    /// twenty-four login shells, created and thrown away on the launch path
+    /// before the real restore had begun. Each of those surfaces also fires
+    /// the agent resume, into a shell nothing will ever show.
+    ///
+    /// `JSONSerialization` walks the same bytes and hands back arrays and
+    /// dictionaries, so counting costs a parse and nothing more.
+    static func inspect(_ data: Data) -> SavedSession {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else {
+            return .unreadable
+        }
+
+        if let states = json as? [Any] {
+            return .readable(count: states.count, isVersioned: false)
+        }
+
+        guard let envelope = json as? [String: Any],
+              let version = envelope["version"] as? Int,
+              let states = envelope["states"] as? [Any],
+              version <= fileVersion else {
+            return .unreadable
+        }
+        return .readable(count: states.count, isVersioned: true)
+    }
+
+    /// The surface ids the saved session still refers to.
+    ///
+    /// Exists for callers that need to know whether a per-surface file on
+    /// disk still belongs to a terminal that is coming back. The tab-state
+    /// prune is the one that does, and age cannot answer it: an mtime
+    /// records the last time an *agent* wrote, not the last time the *tab*
+    /// was used, so a tab left open while its agent stayed quiet ages out
+    /// while still being part of the session. Losing that file loses the
+    /// session id, and the tab returns as a bare shell without even trying
+    /// to resume.
+    ///
+    /// Harvested from the raw JSON rather than from decoded states, for the
+    /// same reason `inspect` exists: decoding reaches
+    /// `SurfaceView.init(from:)`, which builds a live surface and forks a
+    /// shell. Every surface carries its id under a `uuid` key — including
+    /// the ones nested inside a split tree — so collecting that one key
+    /// covers the whole arrangement while instantiating none of it.
+    ///
+    /// `focusedSurface` is deliberately not collected: it always repeats an
+    /// id that a `uuid` key has already supplied, and harvesting keys that
+    /// merely *hold* an id rather than *define* one would make the set grow
+    /// with every future field that happens to reference a surface.
+    static func surfaceIDs(in data: Data) -> Set<UUID> {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return [] }
+        var ids: Set<UUID> = []
+        collect(surfaceIDsFrom: json, into: &ids, depth: 0)
+        return ids
+    }
+
+    /// Bounded because this walks a file the user can edit and that outlives
+    /// any single build: a pathological nesting depth must cost a truncated
+    /// answer, not the stack. Real arrangements nest a handful of levels — a
+    /// split tree of thirty-two panes is six — so the ceiling is far above
+    /// anything the app writes.
+    private static let maxSurfaceIDDepth = 64
+
+    private static func collect(
+        surfaceIDsFrom json: Any,
+        into ids: inout Set<UUID>,
+        depth: Int
+    ) {
+        guard depth < maxSurfaceIDDepth else { return }
+
+        switch json {
+        case let dictionary as [String: Any]:
+            if let raw = dictionary["uuid"] as? String, let id = UUID(uuidString: raw) {
+                ids.insert(id)
+            }
+            for value in dictionary.values {
+                collect(surfaceIDsFrom: value, into: &ids, depth: depth + 1)
+            }
+        case let array as [Any]:
+            for value in array {
+                collect(surfaceIDsFrom: value, into: &ids, depth: depth + 1)
+            }
+        default:
+            return
+        }
+    }
+
+    /// The ids in the session file as it stands on disk, or an empty set
+    /// when there is nothing readable there.
+    ///
+    /// An empty set means "this tells you nothing", never "nothing is
+    /// referenced" — a caller pruning against it must treat emptiness as a
+    /// reason to fall back on its own horizon rather than as permission to
+    /// delete everything.
+    static var referencedSurfaceIDs: Set<UUID> {
+        guard let data = try? Data(contentsOf: defaultFileURL()) else { return [] }
+        return surfaceIDs(in: data)
+    }
+
+    /// What is on disk right now, or `.absent` when there is no file.
+    private func savedSession() -> SavedSession {
+        guard let data = try? Data(contentsOf: fileURL) else { return .absent }
+        return Self.inspect(data)
+    }
+
+    /// Whether a save holding `stateCount` terminals may replace `existing`.
+    ///
+    /// Having no windows is not the same as having no session. Closing the
+    /// last window leaves the app running with nothing open, and recording
+    /// that erased the very thing the next window should come back to — the
+    /// session was gone before anything could restore it. An empty set is
+    /// therefore never written over a session that has something in it; the
+    /// last real arrangement stands until another real one replaces it. A
+    /// file we cannot read counts as having something in it, so a decode
+    /// failure cannot compound into an erased session.
+    ///
+    /// A *shorter* set does replace a longer one, deliberately: closing one
+    /// of three windows has to leave a session of two, or a session could
+    /// only ever grow. What made short saves dangerous was the window
+    /// predicate quietly dropping minimized windows, and that is fixed where
+    /// it belongs, in `isOpen`.
+    static func shouldWrite(stateCount: Int, over existing: SavedSession) -> Bool {
+        if stateCount > 0 { return true }
+
+        switch existing {
+        case .absent:
+            return true
+        case .readable(let count, _):
+            return count == 0
+        case .unreadable:
+            return false
+        }
+    }
+
+    /// Decodes the saved session.
+    ///
+    /// - Warning: this does not read the session, it *builds* it. The states'
+    ///   surface trees decode into `Ghostty.SurfaceView`s, and
+    ///   `SurfaceView.init(from:)` reaches for the live `ghostty.app`, calls
+    ///   `ghostty_surface_new` and fires the agent resume: a real terminal,
+    ///   a real login shell, a real conversation resumed, per saved surface.
+    ///   Decoding is instantiating. Only `restoreIfNeeded` may call this, and
+    ///   only because it puts every surface it gets into a window. Anything
+    ///   that wants to know *about* the session wants `inspect`.
+    private func load() -> [TerminalRestorableState]? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+
+        /// The shape is settled before decoding, never by trying one decode
+        /// and falling back to the other: a decode of the wrong shape can get
+        /// far enough to build surfaces before it throws.
+        let shape = Self.inspect(data)
+        do {
+            switch shape {
+            case .absent:
+                return nil
+
+            case .unreadable:
+                Ghostty.logger.error(
+                    "session load skipped: file is malformed or newer than this build; leaving it alone"
+                )
+                return nil
+
+            case .readable(_, let isVersioned):
+                if isVersioned {
+                    return try JSONDecoder().decode(Envelope.self, from: data).states
+                }
+                return try JSONDecoder().decode([TerminalRestorableState].self, from: data)
+            }
+        } catch {
+            Ghostty.logger.error(
+                "session load failed: \(error.localizedDescription, privacy: .public)"
+            )
+            return nil
+        }
+    }
+
     // MARK: Saving
 
     /// Re-reads the open terminal windows and writes the session file,
@@ -99,17 +392,20 @@ final class PhantomSessionStore {
         var nextGroupID = 0
 
         let states = TerminalController.all.compactMap { controller -> TerminalRestorableState? in
-            // Only what is actually on screen. A closed window stays in
-            // `NSApp.windows` until it is released, and recording those
-            // wrote the same terminals back into the session over and over
-            // — as *standalones*, since a closed window has no tab group —
-            // so the file grew every cycle and restored a pile of separate
-            // windows that had been tabs. Measured: eight terminals became
-            // twenty-two entries in a handful of open/close rounds.
-            guard let window = controller.window, window.isVisible else { return nil }
+            /// Only the windows that are still part of the session — on
+            /// screen or in the Dock. A closed window lingers in
+            /// `NSApp.windows` until it is released, and recording those
+            /// wrote the same terminals back into the session over and over
+            /// — as *standalones*, since a closed window has no tab group —
+            /// so the file grew every cycle and restored a pile of separate
+            /// windows that had been tabs. Measured: eight terminals became
+            /// twenty-two entries in a handful of open/close rounds. See
+            /// `isOpen` for why the Dock has to be in the question too.
+            guard let window = controller.window, Self.isOpen(window) else { return nil }
 
             var tabGroupID: Int?
             var tabIndex: Int?
+            var isSelectedTab: Bool?
             if let group = window.tabGroup, group.windows.count > 1 {
                 let key = ObjectIdentifier(group)
                 if let existing = groupIDByTabGroup[key] {
@@ -120,29 +416,31 @@ final class PhantomSessionStore {
                     nextGroupID += 1
                 }
                 tabIndex = group.windows.firstIndex(of: window)
+
+                /// Which tab the window was *showing*, which no position in
+                /// `group.windows` implies: that array is tab-bar order and
+                /// `selectedWindow` is a property of its own. Recording only
+                /// the order is why a window of four tabs came back on the
+                /// first one however far along the reader had been working.
+                isSelectedTab = group.selectedWindow === window
             }
 
             return TerminalRestorableState(
                 from: controller,
                 tabGroupID: tabGroupID,
-                tabIndex: tabIndex)
+                tabIndex: tabIndex,
+                isSelectedTab: isSelectedTab)
         }
 
-        // Having no windows is not the same as having no session. Closing
-        // the last window leaves the app running with nothing open, and
-        // recording that erased the very thing the next window should come
-        // back to — the session was gone before anything could restore it.
-        // An empty set is therefore never written over a session that has
-        // something in it; the last real arrangement stands until another
-        // real one replaces it.
-        if states.isEmpty, let existing = load(), !existing.isEmpty { return }
+        guard Self.shouldWrite(stateCount: states.count, over: savedSession()) else { return }
 
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            let data = try JSONEncoder().encode(states)
+            let data = try JSONEncoder().encode(
+                Envelope(version: Self.fileVersion, states: states))
             try data.write(to: fileURL, options: .atomic)
         } catch {
             Ghostty.logger.error(
@@ -153,30 +451,23 @@ final class PhantomSessionStore {
 
     // MARK: Restoring
 
-    /// Whether any terminal window is actually on screen.
-    ///
-    /// Not `TerminalController.all.isEmpty`, which is the obvious spelling
-    /// and the wrong one. That list is derived from `NSApp.windows`, and
-    /// AppKit keeps a closed window in there until it is released — a
-    /// window controller holds one well past its close. Measured right
-    /// after closing every window: ten controllers still listed, twelve
-    /// windows in the app. Asking it whether anything is open answers yes
-    /// forever after the first close, so the session was never restored and
-    /// a blank window was opened over the top of it instead.
-    private static var hasVisibleTerminalWindows: Bool {
-        TerminalController.all.contains { $0.window?.isVisible == true }
-    }
-
     /// True when a non-empty session is on disk. `restoreWindow` consults
     /// this to stand macOS's own restore down in favor of ours.
+    ///
+    /// Answered by counting the file, never by decoding it: this is asked
+    /// once per window macOS has in its own saved state, and a decode here
+    /// would build — and abandon — the entire session several times over,
+    /// before the launch had finished. See `inspect` and the warning on
+    /// `load`.
     var hasSavedSession: Bool {
-        guard let states = load() else { return false }
-        return !states.isEmpty
+        if case .readable(let count, _) = savedSession() { return count > 0 }
+        return false
     }
 
-    /// Restores the saved session. No-op when macOS already produced
-    /// windows (the store is empty on the first launch after this feature
-    /// lands) or when the saved session is empty.
+    /// Restores the saved session. No-op when windows are already open (the
+    /// store is empty on the first launch after this feature lands, and
+    /// macOS's own restore will have produced them) or when the saved
+    /// session is empty.
     ///
     /// Called at launch before the app would otherwise open a default
     /// window, and again wherever a window is asked for while none exist —
@@ -200,7 +491,7 @@ final class PhantomSessionStore {
         // creating more would duplicate them. This is also what keeps a
         // second New Window from restoring the session again: once the
         // first one brought it back, windows are on screen.
-        guard !Self.hasVisibleTerminalWindows else { return false }
+        guard !Self.hasOpenTerminalWindows else { return false }
 
         guard let states = load(), !states.isEmpty else { return false }
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return false }
@@ -211,57 +502,125 @@ final class PhantomSessionStore {
             scheduleSave()
         }
 
-        // Windows that were tabs of one window carry the same `tabGroupID`.
-        // Re-form those groups so the restore produces tabs, not a pile of
-        // separate windows.
+        let (groups, standalones) = Self.partition(states)
+
+        var restoredCount = 0
+        for group in groups {
+            restoredCount += restoreWindows(in: group, appDelegate: appDelegate)
+        }
+        for state in standalones {
+            restoredCount += restoreWindows(in: [state], appDelegate: appDelegate)
+        }
+
+        /// What this restore actually produced, not what the app happens to
+        /// hold. `TerminalController.all` is the count that cannot say no
+        /// (see `isOpen`), and reporting success from it meant that a restore
+        /// which produced nothing still told New Window to stand down — so
+        /// New Window opened nothing, and went on opening nothing.
+        return restoredCount > 0
+    }
+
+    /// Splits saved states into the windows that were tabs of one window and
+    /// the windows that stood alone.
+    ///
+    /// States that were tabs of the same window carry the same `tabGroupID`;
+    /// a `nil` id was a window of its own. Group order follows first
+    /// appearance in the file so a restore is deterministic.
+    static func partition<State: PhantomSessionState>(
+        _ states: [State]
+    ) -> (groups: [[State]], standalones: [State]) {
         var groupIndexByID: [Int: Int] = [:]
-        var groups: [[TerminalRestorableState]] = []
-        var standalones: [TerminalRestorableState] = []
+        var groups: [[State]] = []
+        var standalones: [State] = []
+
         for state in states {
-            if let id = state.tabGroupID {
-                if let index = groupIndexByID[id] {
-                    groups[index].append(state)
-                } else {
-                    groupIndexByID[id] = groups.count
-                    groups.append([state])
-                }
-            } else {
+            guard let id = state.tabGroupID else {
                 standalones.append(state)
+                continue
+            }
+            if let index = groupIndexByID[id] {
+                groups[index].append(state)
+            } else {
+                groupIndexByID[id] = groups.count
+                groups.append([state])
             }
         }
 
-        // Restore one tab group (or a standalone window) at a time.
-        for group in groups {
-            restoreWindows(in: group, appDelegate: appDelegate)
-        }
-        for state in standalones {
-            restoreWindows(in: [state], appDelegate: appDelegate)
-        }
+        return (groups, standalones)
+    }
 
-        return !TerminalController.all.isEmpty
+    /// One group's states in tab-bar order.
+    ///
+    /// A state with no recorded position sorts last rather than first: an
+    /// unpositioned tab is one we know nothing about, and putting it at the
+    /// front would move the tabs we *do* know about.
+    static func ordered<State: PhantomSessionState>(_ group: [State]) -> [State] {
+        group.sorted { lhs, rhs in
+            (lhs.tabIndex ?? .max) < (rhs.tabIndex ?? .max)
+        }
+    }
+
+    /// Which of an ordered group was the tab the window was showing, if the
+    /// session recorded one at all. `nil` for sessions written before the
+    /// selection was persisted, which the restore reads as "the first tab".
+    static func selectedIndex<State: PhantomSessionState>(in ordered: [State]) -> Int? {
+        ordered.firstIndex { $0.isSelectedTab == true }
+    }
+
+    /// The frame to give a restored window, if any.
+    ///
+    /// A window that was in fullscreen has the fullscreen bounds for a
+    /// frame, and putting those on a windowed window produces a giant,
+    /// broken-looking thing. Everything else gets the frame it was left at —
+    /// which is most windows, and which they were not getting: the condition
+    /// used to be `effectiveFullscreenMode != .native`, and that mode reads
+    /// `.native` for every window ever opened whether or not it was ever
+    /// fullscreen (see `InternalState.isFullscreen`). So the common case —
+    /// an ordinary window, of tabs or not — came back at a default size
+    /// wherever macOS felt like putting it.
+    static func restoredFrame<State: PhantomSessionState>(for state: State) -> CGRect? {
+        state.isFullscreen == true ? nil : state.frame
+    }
+
+    /// The fullscreen mode to put a restored window into, if any.
+    ///
+    /// Only a window that actually *was* in fullscreen goes back into it.
+    /// Toggling on the strength of `effectiveFullscreenMode` alone, as this
+    /// did, put every restored window into native fullscreen, because that
+    /// mode is set for every window at load time and means no more than
+    /// "the mode fullscreen would use here".
+    static func restoredFullscreenMode<State: PhantomSessionState>(
+        for state: State
+    ) -> FullscreenMode? {
+        state.isFullscreen == true ? state.effectiveFullscreenMode : nil
     }
 
     /// Creates the controllers for the states of one window (a tab group's
     /// members or a standalone window) and joins them into a tab group.
     ///
     /// Tabs must join the group *before* any window is shown — AppKit
-    /// refuses to re-group a window that is already on screen, which is
-    /// what turned restored tabs into separate windows. The selected tab
-    /// (first in `tabGroup.windows` order at save time) is the group's
-    /// anchor and the only one brought to the front.
+    /// refuses to re-group a window that is already on screen, which is what
+    /// turned restored tabs into separate windows. The first tab in the bar
+    /// anchors the group and carries its geometry; which tab the window was
+    /// *showing* is a separate question, recorded as `isSelectedTab`, and
+    /// that tab is the one brought forward once the group has formed.
+    ///
+    /// - Returns: how many windows it produced, so the caller can tell a
+    ///   restore that put something on screen from one that did not.
     private func restoreWindows(
         in group: [TerminalRestorableState],
         appDelegate: AppDelegate
-    ) {
-        let ordered = group.sorted { lhs, rhs in
-            (lhs.tabIndex ?? .max) < (rhs.tabIndex ?? .max)
-        }
+    ) -> Int {
+        let ordered = Self.ordered(group)
+        let selectedIndex = Self.selectedIndex(in: ordered)
+        let isStandalone = ordered.count == 1
 
         var anchor: TerminalController?
+        var anchorState: TerminalRestorableState?
+        var selected: TerminalController?
         var previous: TerminalController?
-        var standaloneState: TerminalRestorableState?
         var restored: [TerminalController] = []
-        for state in ordered {
+        for (index, state) in ordered.enumerated() {
             let controller = TerminalController.init(
                 appDelegate.ghostty,
                 withSurfaceTree: state.surfaceTree)
@@ -284,28 +643,17 @@ final class PhantomSessionStore {
                 }
             }
 
-            // Only the selected (anchor) window carries the frame and
-            // fullscreen state; hidden tabs share its geometry. A standalone
-            // window defers both until it is on screen, where fullscreen
-            // transitions work.
+            /// Only the anchor window carries the frame and fullscreen state;
+            /// hidden tabs share its geometry. Fullscreen waits until the
+            /// window is on screen, which is the only place the transitions
+            /// work at all — a window that has never been shown has no
+            /// `screen`, and non-native fullscreen gives up without one. A
+            /// tab group's frame is the exception: it has to be set before the
+            /// tabs join, so the group forms at the size it was left at.
             if anchor == nil {
-                if group.count == 1 {
-                    standaloneState = state
-                } else {
-                    // A native-fullscreen window saves its fullscreen bounds
-                    // as the frame; restoring those onto a windowed window
-                    // produces a giant, broken-looking window.
-                    if let frame = state.frame,
-                       state.effectiveFullscreenMode != .native {
-                        window.setFrame(frame, display: false)
-                    }
-                    // The frame used to be applied only on the way to a
-                    // fullscreen mode, so an ordinary window of tabs — the
-                    // common case — came back at the default size wherever
-                    // macOS felt like putting it, however it had been left.
-                    if let mode = state.effectiveFullscreenMode, mode != .native {
-                        controller.toggleFullscreen(mode: mode)
-                    }
+                anchorState = state
+                if !isStandalone, let frame = Self.restoredFrame(for: state) {
+                    window.setFrame(frame, display: false)
                 }
             }
 
@@ -327,6 +675,8 @@ final class PhantomSessionStore {
                     .addTabbedWindowSafely(window, ordered: .above) ?? false
                 if !joined { window.orderFrontRegardless() }
             }
+
+            if index == selectedIndex { selected = controller }
             previous = controller
             restored.append(controller)
         }
@@ -347,10 +697,9 @@ final class PhantomSessionStore {
             }
         }
 
-        // Bring only the selected tab forward; the rest are hidden tabs.
-        guard let anchorWindow = anchor?.window else { return }
+        guard let anchorWindow = anchor?.window, let anchorState else { return restored.count }
 
-        if let standaloneState {
+        if isStandalone {
             // A standalone window must come back as its own window.
             // `TerminalWindow` flips tabbing to `.automatic` on the next
             // runloop turn (that is what lets tabs re-form), but macOS
@@ -373,11 +722,10 @@ final class PhantomSessionStore {
                 anchorWindow.tabbingMode = .disallowed
                 anchorWindow.orderFrontRegardless()
 
-                if let frame = standaloneState.frame,
-                   standaloneState.effectiveFullscreenMode != .native {
+                if let frame = PhantomSessionStore.restoredFrame(for: anchorState) {
                     anchorWindow.setFrame(frame, display: false)
                 }
-                if let mode = standaloneState.effectiveFullscreenMode {
+                if let mode = PhantomSessionStore.restoredFullscreenMode(for: anchorState) {
                     anchor?.toggleFullscreen(mode: mode)
                 }
 
@@ -385,9 +733,38 @@ final class PhantomSessionStore {
                     anchorWindow.tabbingMode = tabbingBeforeReveal
                 }
             }
-        } else {
-            anchorWindow.orderFrontRegardless()
+            return restored.count
         }
+
+        /// The tab the reader was on is the one shown, rather than the anchor
+        /// followed by a correction, so the window never appears on the wrong
+        /// tab first. Ordering a background tab front makes it its group's
+        /// selection — measured — which is exactly the request here.
+        let front = selected?.window ?? anchorWindow
+        front.orderFrontRegardless()
+
+        DispatchQueue.main.async {
+            /// Said again a turn later because AppKit's tab group bookkeeping
+            /// is not consistent until the next runloop cycle, and a group
+            /// that had never been on screen may have shown itself without
+            /// moving its selection.
+            if let group = front.tabGroup, group.selectedWindow !== front {
+                group.selectedWindow = front
+            }
+
+            /// Fullscreen last, and only from here: a group has to exist and
+            /// be on screen before it can go fullscreen — a window that has
+            /// never been shown has no `screen`, which is where non-native
+            /// fullscreen gives up — and the state belongs to the window
+            /// rather than to any one tab. Leaving it to AppKit, as the group
+            /// path used to, could not work: `hasSavedSession` has just told
+            /// AppKit's own restoration to stand down.
+            if let mode = PhantomSessionStore.restoredFullscreenMode(for: anchorState) {
+                anchor?.toggleFullscreen(mode: mode)
+            }
+        }
+
+        return restored.count
     }
 
     /// Retries making the given surface the first responder until the
@@ -418,10 +795,5 @@ final class PhantomSessionStore {
                 viewWindow.orderFront(nil)
             }
         }
-    }
-
-    private func load() -> [TerminalRestorableState]? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder().decode([TerminalRestorableState].self, from: data)
     }
 }

@@ -85,6 +85,12 @@ final class TerminalRestorableState: TerminalRestorable {
     var tabIndex: Int? {
         internalState.tabIndex
     }
+    var isSelectedTab: Bool? {
+        internalState.isSelectedTab
+    }
+    var isFullscreen: Bool? {
+        internalState.isFullscreen
+    }
 
     /// Internal State we use to perform unit tests
     ///
@@ -97,8 +103,17 @@ final class TerminalRestorableState: TerminalRestorable {
         internalState = .init(from: controller)
     }
 
-    init(from controller: TerminalController, tabGroupID: Int?, tabIndex: Int?) {
-        internalState = .init(from: controller, tabGroupID: tabGroupID, tabIndex: tabIndex)
+    init(
+        from controller: TerminalController,
+        tabGroupID: Int?,
+        tabIndex: Int?,
+        isSelectedTab: Bool?
+    ) {
+        internalState = .init(
+            from: controller,
+            tabGroupID: tabGroupID,
+            tabIndex: tabIndex,
+            isSelectedTab: isSelectedTab)
     }
 
     required init(copy other: TerminalRestorableState) {

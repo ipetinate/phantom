@@ -27,10 +27,41 @@ extension TerminalRestorableState {
         /// sharing a window. Windows with the same `tabGroupID` are restored
         /// as tabs of a single window; `nil` restores a standalone window.
         let tabGroupID: Int?
-        /// The window's position within its tab group (`tabGroup.windows`
-        /// order, selected tab first). Preserves the front-to-back tab order
-        /// across a restore.
+        /// The window's position within its tab group, in `tabGroup.windows`
+        /// order — which is the order the tabs sit in the tab bar, left to
+        /// right. Preserves the tab order across a restore.
         let tabIndex: Int?
+
+        /// Whether this tab was the one the window was showing.
+        ///
+        /// A separate question from `tabIndex`, which is only the tab's
+        /// place in the bar: `NSWindowTabGroup.selectedWindow` is its own
+        /// property and no order in `tabGroup.windows` implies it. Without
+        /// this, a restored window came back on its first tab however far
+        /// along the bar the reader had actually been working.
+        ///
+        /// Optional so a `session.json` written before it existed still
+        /// decodes; `nil` everywhere means "no recorded selection", and the
+        /// restore falls back to the first tab.
+        let isSelectedTab: Bool?
+
+        /// Whether the window was actually in fullscreen.
+        ///
+        /// `effectiveFullscreenMode` cannot answer this and never could: a
+        /// controller is given a `NativeFullscreen` style the moment its
+        /// window loads (`BaseTerminalController.windowDidLoad`), so the
+        /// mode reads `.native` for every window ever opened, fullscreen or
+        /// not. A live `session.json` recording `"effectiveFullscreenMode":
+        /// "native"` for a 951x600 window is the proof. Restoring on the
+        /// strength of the mode alone therefore forced ordinary windows into
+        /// fullscreen and, by the same token, made the saved frame look like
+        /// fullscreen bounds and get skipped — so a window came back
+        /// fullscreen at a size it had never had.
+        ///
+        /// Optional for the same reason as `isSelectedTab`: sessions written
+        /// before it existed still decode, and `nil` is read as "not
+        /// fullscreen", which is what all but a few windows were.
+        let isFullscreen: Bool?
     }
 }
 
@@ -38,7 +69,8 @@ extension TerminalRestorableState.InternalState where ViewType == Ghostty.Surfac
     init(
         from controller: TerminalController,
         tabGroupID: Int? = nil,
-        tabIndex: Int? = nil
+        tabIndex: Int? = nil,
+        isSelectedTab: Bool? = nil
     ) {
         self.init(
             focusedSurface: controller.focusedSurface?.id.uuidString,
@@ -49,6 +81,8 @@ extension TerminalRestorableState.InternalState where ViewType == Ghostty.Surfac
             frame: controller.window?.frame,
             tabGroupID: tabGroupID,
             tabIndex: tabIndex,
+            isSelectedTab: isSelectedTab,
+            isFullscreen: controller.fullscreenStyle?.isFullscreen,
         )
     }
 }

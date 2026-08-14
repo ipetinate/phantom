@@ -474,18 +474,25 @@ class AppDelegate: NSObject,
         // but I haven't seen it happen in releases. I'm unsure why.
         guard applicationHasBecomeActive else { return true }
 
-        // No visible windows. The session, if there is one, is what the
-        // reader is reopening the app to get back — see `newWindow`. This
-        // is asked before the controller-count check below because that
-        // count includes windows that have been closed and not yet
-        // released, which is every window here.
+        /// No visible windows. The session, if there is one, is what the
+        /// reader is reopening the app to get back — see `newWindow`. This is
+        /// asked before the window check below because a restore is the
+        /// better answer whenever there is a session to restore.
         if PhantomSessionStore.shared.restoreIfNeeded() { return false }
 
-        // If we have any windows in our terminal manager we don't do anything.
-        // This is possible with flag set to false if there a race where the
-        // window is still initializing and is not visible but the user clicked
-        // the dock icon.
-        guard TerminalController.all.isEmpty else { return true }
+        /// Nothing was restored: either there is no session, or the reader
+        /// asked for none to be kept. Open a window, unless one is already on
+        /// its way up — with `flag` false that can still happen, in the race
+        /// where a window is initializing and not yet visible when the dock
+        /// icon is clicked.
+        ///
+        /// Not `TerminalController.all.isEmpty`, which was the check here and
+        /// is never empty after the first window closes: it counts windows
+        /// AppKit has not released yet. So with `window-save-state = never`
+        /// — or on a first ever launch — clicking the dock icon did nothing
+        /// at all, and went on doing nothing. See
+        /// `PhantomSessionStore.isOpen`.
+        guard !PhantomSessionStore.hasOpenTerminalWindows else { return true }
 
         _ = TerminalController.newWindow(ghostty)
         return false
