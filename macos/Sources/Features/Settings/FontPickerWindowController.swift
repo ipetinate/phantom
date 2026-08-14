@@ -134,7 +134,7 @@ struct FontPickerView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("", text: $search, prompt: Text("Search \(families.count) fonts"))
+                    TextField("", text: $search, prompt: Text(verbatim: "Search \(families.count) fonts"))
                         .textFieldStyle(.plain)
                 }
                 .padding(10)

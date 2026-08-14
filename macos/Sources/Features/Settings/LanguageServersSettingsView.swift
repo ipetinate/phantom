@@ -171,7 +171,7 @@ struct LanguageServersSettingsView: View {
             Image(systemName: section.category.systemImage)
             Text(section.category.title)
             Spacer()
-            Text("\(section.servers.count)")
+            Text(verbatim: "\(section.servers.count)")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }

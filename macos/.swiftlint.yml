@@ -34,3 +34,16 @@ function_parameter_count:
 
 large_tuple:
   warning: 3
+
+custom_rules:
+  # Text(_:) takes a LocalizedStringKey, which applies the user's locale
+  # number formatting to an interpolated integer: a PR #43301 renders as
+  # "#43.301", a 4201 port as "4.201", line 1200 as "1.200". This app ships
+  # no string catalog, so the localization buys nothing and the grouping is
+  # pure damage. It has been fixed three times in three different views;
+  # this makes the fourth one impossible.
+  localized_number_interpolation:
+    name: "Localized number interpolation"
+    regex: 'Text\("[^"]*\\\([^)"]*([Cc]ount|[Nn]umber|[Ll]ine|[Tt]otal|[Pp]ort|[Ii]ndex)[^)"]*\)'
+    message: "Text(_:) localizes interpolated integers (1000 becomes \"1.000\"). Use Text(verbatim:)."
+    severity: error

@@ -125,7 +125,7 @@ struct AppearanceSettingsView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("", text: $search, prompt: Text("Search all \(catalog.themes.count) themes"))
+            TextField("", text: $search, prompt: Text(verbatim: "Search all \(catalog.themes.count) themes"))
                 .textFieldStyle(.plain)
 
             Button("Browse All…") {
@@ -989,7 +989,7 @@ private struct ThemeSeedPicker: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("", text: $search, prompt: Text("Search \(catalog.themes.count) themes"))
+                TextField("", text: $search, prompt: Text(verbatim: "Search \(catalog.themes.count) themes"))
                     .textFieldStyle(.plain)
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -1172,7 +1172,7 @@ private struct AllThemesView: View {
                 TextField(
                     "",
                     text: $search,
-                    prompt: Text("Filter \(catalog.themes.count) themes")
+                    prompt: Text(verbatim: "Filter \(catalog.themes.count) themes")
                 )
                 .textFieldStyle(.plain)
             }
@@ -1189,7 +1189,7 @@ private struct AllThemesView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         ForEach(sections, id: \.title) { section in
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("\(section.title) (\(section.themes.count))")
+                                Text(verbatim: "\(section.title) (\(section.themes.count))")
                                     .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(.secondary)
                                     .textCase(.uppercase)

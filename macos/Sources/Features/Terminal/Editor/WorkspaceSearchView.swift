@@ -143,7 +143,7 @@ private struct HitRow: View {
                     .lineLimit(1)
                     .truncationMode(.head)
 
-                Text(":\(hit.line)")
+                Text(verbatim: ":\(hit.line)")
                     .font(palette.font(size: 10))
                     .foregroundStyle(.tertiary)
 
