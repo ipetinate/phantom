@@ -82,6 +82,28 @@ enum CodexHooksInstaller {
 
     static private(set) var lastError: String?
 
+    /// True when the installed script is not the one this build ships. See
+    /// `ClaudeHooksInstaller.isStale` for why `isInstalled` cannot answer it.
+    static var isStale: Bool {
+        guard let onDisk = try? String(contentsOf: scriptURL, encoding: .utf8)
+        else { return false }
+        return onDisk != scriptBody
+    }
+
+    /// Rewrites the script when it is not this build's. The file is generated
+    /// and never edited by hand, so there is nothing of anyone else's in it.
+    @discardableResult
+    static func repairIfStale() -> Bool {
+        guard isInstalled, isStale else { return false }
+        do {
+            try scriptBody.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path
+            )
+            return true
+        } catch { return false }
+    }
+
     static var isInstalled: Bool {
         FileManager.default.fileExists(atPath: scriptURL.path)
             && isRegistered(in: readSettings())

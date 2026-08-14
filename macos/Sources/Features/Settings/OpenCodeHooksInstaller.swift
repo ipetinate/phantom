@@ -99,6 +99,22 @@ enum OpenCodeHooksInstaller {
     });
     """#
 
+    /// True when the installed plugin is not the one this build ships. See
+    /// `ClaudeHooksInstaller.isStale` for why `isInstalled` cannot answer it.
+    static var isStale: Bool {
+        guard let onDisk = try? String(contentsOf: pluginURL, encoding: .utf8)
+        else { return false }
+        return onDisk != pluginBody
+    }
+
+    /// Rewrites the plugin when it is not this build's. The file is generated
+    /// and never edited by hand, so there is nothing of anyone else's in it.
+    @discardableResult
+    static func repairIfStale() -> Bool {
+        guard isInstalled, isStale else { return false }
+        return (try? pluginBody.write(to: pluginURL, atomically: true, encoding: .utf8)) != nil
+    }
+
     static var isInstalled: Bool {
         FileManager.default.fileExists(atPath: pluginURL.path)
     }

@@ -59,7 +59,12 @@ struct SettingsRootView: View {
                     .tag(section)
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
+            // Wide enough for the longest section name at the window's
+            // opening width. "Keyboard Shortcuts" is the longest, and at an
+            // ideal of 180 it opened already truncated to "Keyboard
+            // Shortc…" — a settings list that hides what it is offering
+            // before you have touched anything.
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
         } detail: {
             switch selection {
             case .general:

@@ -135,10 +135,23 @@ struct AgentTabRecordTests {
         #expect(AgentTabRecord.resumeCommand(forStateFileContents: nil) == nil)
     }
 
-    @Test func anEndedSessionIsNotRevived() {
+    /// `ended` with nothing to be precise about is left alone: the id-less
+    /// fallback resumes whatever is newest in the directory, which for a
+    /// session somebody finished is a guess.
+    @Test func anEndedSessionWithNoIdIsNotRevived() {
         #expect(AgentTabRecord.resumeCommand(forStateFileContents: "ended") == nil)
         #expect(AgentTabRecord.resumeCommand(
-            forStateFileContents: "ended\nagent=claude\nsession=\(id)\n") == nil)
+            forStateFileContents: "ended\nagent=claude\n") == nil)
+    }
+
+    /// `ended` *with* an id does come back. Quitting kills the agent and the
+    /// dying agent's own hook writes `ended`, so at quit time every session
+    /// says it — refusing on the word alone is what meant nothing was ever
+    /// resumed. The id names the conversation the tab was for.
+    @Test func anEndedSessionWithAnIdIsResumedByThatId() {
+        #expect(AgentTabRecord.resumeCommand(
+            forStateFileContents: "ended\nagent=claude\nsession=\(id)\n")
+            == "claude --resume \(id)")
     }
 
     @Test func eachAgentResumesItsOwnSessionById() {

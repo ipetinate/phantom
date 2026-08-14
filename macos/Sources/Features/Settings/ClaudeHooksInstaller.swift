@@ -158,6 +158,44 @@ enum ClaudeHooksInstaller {
         FileManager.default.fileExists(atPath: scriptURL.path) && isRegistered
     }
 
+    /// True when the installed script is not the one this build ships.
+    ///
+    /// `isInstalled` cannot answer this: it asks whether a file is there,
+    /// and a stale script is a file that is there. So an install done by an
+    /// older Phantom stayed forever — the UI said "installed", offered only
+    /// to remove it, and the script kept reporting whatever it knew how to
+    /// report. That is how a hook written before session ids existed went on
+    /// silently not capturing them, which read as the resume being broken.
+    static var isStale: Bool {
+        guard let onDisk = try? String(contentsOf: scriptURL, encoding: .utf8)
+        else { return false }
+        return onDisk != scriptBody
+    }
+
+    /// Rewrites the script when it is not this build's.
+    ///
+    /// Safe to do unasked, and better than asking: the file belongs entirely
+    /// to Phantom — it is generated, never edited — so there is no work of
+    /// anyone else's to lose. The registration in `settings.json` is left
+    /// alone, since that part is still valid and does contain the user's
+    /// own hooks.
+    @discardableResult
+    static func repairIfStale() -> Bool {
+        guard isInstalled, isStale else { return false }
+        do {
+            try scriptBody.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: scriptURL.path
+            )
+            log("repaired stale hook script")
+            return true
+        } catch {
+            _ = fail("repairing stale hook script", error)
+            return false
+        }
+    }
+
     @discardableResult
     static func install() -> Bool {
         let fm = FileManager.default

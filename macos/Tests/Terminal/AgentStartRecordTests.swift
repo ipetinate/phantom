@@ -58,10 +58,23 @@ struct AgentStartRecordTests {
         #expect(parsed.stateWord.isEmpty)
     }
 
-    /// A session the reader ended on purpose stays ended — a start record
-    /// must not resurrect it.
-    @Test func anEndedSessionIsStillNotResumed() {
+    /// Quitting kills the agent, and a dying agent's hook writes `ended` —
+    /// so at quit time every session says it. With an id, the exact
+    /// conversation is named and comes back; treating the word alone as
+    /// "finished on purpose" is what meant nothing was ever resumed.
+    @Test func anEndedSessionWithAnIdStillComesBack() {
         let record = AgentTabRecord(stateWord: "ended", agent: .claude, sessionID: "abc123")
+        #expect(
+            AgentTabRecord.resumeCommand(forStateFileContents: record.fileContents)
+                == "claude --resume abc123"
+        )
+    }
+
+    /// Without an id there is nothing to be precise about, and the fallback
+    /// would resume whatever conversation is newest in that directory —
+    /// possibly not this tab's at all.
+    @Test func anEndedSessionWithoutAnIdIsLeftAlone() {
+        let record = AgentTabRecord(stateWord: "ended", agent: .claude)
         #expect(AgentTabRecord.resumeCommand(forStateFileContents: record.fileContents) == nil)
     }
 

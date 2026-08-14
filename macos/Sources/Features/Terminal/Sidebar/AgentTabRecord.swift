@@ -168,20 +168,31 @@ struct AgentTabRecord: Equatable, Sendable {
     /// What a restored surface should run, given the tab-state file its
     /// predecessor left behind — or nil when it should run nothing.
     ///
-    /// A missing file means no agent was ever live in that tab. `ended` means
-    /// one was and finished on purpose, and reviving it would be Phantom
-    /// deciding the session was not really over. Every other word — including
-    /// one this build does not recognize, and the empty one left behind when
-    /// a finished tab's indicator is cleared — is read as "the agent was
-    /// still up when we quit". That is both the pre-session-id behavior and
+    /// A missing file means no agent was ever live in that tab. Every state
+    /// word other than `ended` — including one this build does not recognize,
+    /// and the empty one a start record carries — is read as "the agent was
+    /// still up when we quit", which is both the pre-session-id behavior and
     /// the forgiving default for a file another program owns.
+    ///
+    /// `ended` is the interesting one, and it turns on whether there is an id:
+    ///
+    /// - **With an id**, it resumes. Quitting Phantom kills the agent, and a
+    ///   dying agent's own hook writes `ended` — so at quit time *every*
+    ///   session says `ended`, and treating that as "finished on purpose"
+    ///   meant nothing was ever resumed. The word cannot tell the two apart;
+    ///   the id can, because it names the exact conversation the tab was for.
+    ///   Reopening that conversation is what the tab existed to hold.
+    /// - **Without one**, it does not. There is nothing to be precise about,
+    ///   and the id-less fallback resumes "the most recent conversation in
+    ///   this directory" — which for a session somebody deliberately ended is
+    ///   a guess, and possibly somebody else's conversation.
     ///
     /// A file with no `agent=` line is Claude's: it is the only agent Phantom
     /// ever resumed before this metadata existed.
     static func resumeCommand(forStateFileContents contents: String?) -> String? {
         guard let contents else { return nil }
         let record = AgentTabRecord(fileContents: contents)
-        guard record.state != .ended else { return nil }
+        if record.state == .ended, record.sessionID == nil { return nil }
         return (record.agent ?? .claude).resumeCommand(sessionID: record.sessionID)
     }
 }

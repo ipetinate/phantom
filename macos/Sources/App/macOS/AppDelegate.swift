@@ -233,6 +233,19 @@ class AppDelegate: NSObject,
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
 
+        // Bring already-installed agent hooks up to this build's version.
+        //
+        // Installing them once was a one-way door: the check for "installed"
+        // asks whether the file is there, so a script written by an older
+        // Phantom stayed, the UI reported it as installed, and the only
+        // action offered was to remove it. A hook from before session ids
+        // existed therefore went on not capturing them — which looks exactly
+        // like the resume being broken. These files are generated and never
+        // hand-edited, so rewriting one costs nothing.
+        ClaudeHooksInstaller.repairIfStale()
+        CodexHooksInstaller.repairIfStale()
+        OpenCodeHooksInstaller.repairIfStale()
+
         // Restore our own persisted session. macOS's restoration has either
         // run already (restoring, or standing down in favor of ours), or
         // runs right after launch — it never creates a window when our store
