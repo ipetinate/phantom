@@ -26,6 +26,12 @@ enum LoginEnvironment {
     private static var cachedPath: String?
     private static var didResolve = false
 
+    /// Serializes the resolution itself, so concurrent callers share one
+    /// login shell rather than each starting their own. Separate from
+    /// `lock`, which guards only the cached value and is never held across
+    /// the subprocess.
+    private static let resolveQueue = DispatchQueue(label: "phantom.login-environment.resolve")
+
     /// The environment to hand a subprocess: the current one with `PATH`
     /// replaced, when the login shell's could be resolved.
     ///
@@ -68,23 +74,45 @@ enum LoginEnvironment {
 
     /// Resolves and caches the login shell's `PATH`. Blocking; call from a
     /// background task.
+    ///
+    /// Callers that arrive while a resolution is in flight wait for it
+    /// rather than starting their own. The lock only ever guarded the
+    /// *cache*, not the work: everyone who asked before the first answer
+    /// landed saw `didResolve == false` and ran their own login shell.
+    /// Restoring a session asks all at once — every surface and every
+    /// language server wants the path — so a dozen interactive shells
+    /// started together, each sourcing the whole of `.zshrc`. The machine
+    /// spends its time on that instead of on the terminals that were being
+    /// restored, which is what makes them come back unresponsive.
     static func loginPath() -> String? {
-        lock.lock()
-        if didResolve {
-            let cached = cachedPath
+        if let cached = cachedResult() { return cached }
+
+        // Serialized so the shell runs once. The second check inside is
+        // what makes everyone queued behind the first caller take its
+        // answer instead of repeating the work.
+        return resolveQueue.sync {
+            if let cached = cachedResult() { return cached }
+
+            let resolved = resolve()
+
+            lock.lock()
+            cachedPath = resolved
+            didResolve = true
             lock.unlock()
-            return cached
+
+            return resolved
         }
-        lock.unlock()
+    }
 
-        let resolved = resolve()
-
+    /// The cached path, or nil when nothing has been resolved yet.
+    ///
+    /// A resolution that *failed* is still a resolution: it is cached as a
+    /// nil path with `didResolve` set, so a machine where the login shell
+    /// cannot answer does not pay for it again on every call.
+    private static func cachedResult() -> String?? {
         lock.lock()
-        cachedPath = resolved
-        didResolve = true
-        lock.unlock()
-
-        return resolved
+        defer { lock.unlock() }
+        return didResolve ? .some(cachedPath) : nil
     }
 
     /// Search path for tools installed outside the login shell's PATH.
