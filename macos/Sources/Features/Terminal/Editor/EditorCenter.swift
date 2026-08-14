@@ -186,8 +186,6 @@ final class EditorCenter: ObservableObject {
     ///
     /// The buffer travels with it — renaming a file you are editing should
     /// not throw the edits away — and the tab keeps its place in the bar.
-    /// The language server hears the old document close and the new one
-    /// open through the pane's existing appear/disappear calls.
     func repath(from oldPath: String, to newPath: String) {
         guard oldPath != newPath else { return }
 
@@ -201,12 +199,27 @@ final class EditorCenter: ObservableObject {
 
     /// Moves one open document, with all of its bookkeeping: the watcher
     /// follows the file, the dirty-dot observer is rebound to the new key,
-    /// and the tab keeps its position.
+    /// the tab keeps its position, and the language server is told that one
+    /// URI closed and another opened.
+    ///
+    /// The server has to be told *here*. The comment this replaces claimed
+    /// the pane's own appear/disappear calls covered it, and they do not:
+    /// the pane announces the document it is showing, and a rename does not
+    /// necessarily tear that view down — so the server was left holding a URI
+    /// for a file that no longer exists, answering questions about it, and
+    /// keeping its `announced`, `versions` and `diagnostics` entries for the
+    /// rest of the session.
+    ///
+    /// Guarded on the document having been announced at all: introducing one
+    /// nobody opened would start a language server for a file that is not on
+    /// screen, and a rename is no reason to do that.
     private func repathDocument(from oldPath: String, to newPath: String) {
         guard let document = documents.removeValue(forKey: oldPath) else { return }
 
+        let wasAnnounced = LSPCenter.shared.isOpen(path: oldPath)
         document.stopWatching()
         documentObservers.removeValue(forKey: oldPath)
+        if wasAnnounced { LSPCenter.shared.didClose(path: oldPath) }
 
         let moved = document.transferred(to: URL(fileURLWithPath: newPath))
         documents[newPath] = moved
@@ -222,6 +235,13 @@ final class EditorCenter: ObservableObject {
 
         tabs.repath(from: oldPath, to: newPath)
         if lastSelectedFile == oldPath { lastSelectedFile = newPath }
+
+        /// After the buffer has moved, so the text the server is handed is
+        /// the one the new URI now has — including edits that were never
+        /// saved.
+        if wasAnnounced {
+            LSPCenter.shared.didOpen(path: newPath, text: moved.currentText)
+        }
     }
 
     /// A file or folder deleted in the file explorer stops being a tab, and
