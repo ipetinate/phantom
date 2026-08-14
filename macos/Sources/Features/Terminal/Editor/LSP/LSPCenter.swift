@@ -590,13 +590,27 @@ final class LSPCenter: ObservableObject {
             arguments = trimmedArguments.split(separator: " ").map(String.init)
         }
 
+        /// `origin` is carried, and forgetting it is not a cosmetic loss: it
+        /// is where the definition came from, and therefore whether starting
+        /// it needs the reader's permission. This function rebuilds the value
+        /// from a literal, so a field left out here silently reverts to
+        /// `.builtIn` — and a contributed server whose command happens to
+        /// have an override entry would then launch with **no prompt at
+        /// all**, which is the entire trust gate bypassed by an omission
+        /// nobody would see in review.
+        ///
+        /// The whole reason provenance is a field on the value rather than a
+        /// side table is that a field cannot be forgotten at the call site.
+        /// It can still be forgotten *here*, which is why this comment
+        /// exists and why a test pins it.
         return LSPServerDefinition(
             languageID: definition.languageID,
             displayName: definition.displayName,
             command: command,
             arguments: arguments,
             installHint: definition.installHint,
-            initializationOptionsKind: definition.initializationOptionsKind
+            initializationOptionsKind: definition.initializationOptionsKind,
+            origin: definition.origin
         )
     }
 

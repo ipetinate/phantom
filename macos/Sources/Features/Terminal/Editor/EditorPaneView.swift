@@ -437,6 +437,23 @@ private struct DocumentView: View {
 
     private func format() {
         Task {
+            /// Captured before the request, compared after it.
+            ///
+            /// A formatting reply is a list of ranges computed against the
+            /// text as it was when the request went out. Reading
+            /// `document.currentText` *after* the await and splicing those
+            /// ranges into it assumes nothing moved in between — and
+            /// something moving is the ordinary case: the reader keeps
+            /// typing, or the file watcher reloads.
+            ///
+            /// It does not fail loudly when that happens. An edit whose line
+            /// is now past the end is dropped silently by `LSPTextEdit.apply`,
+            /// and an edit that still lands inside the buffer is applied **at
+            /// the wrong offset** — so the file the reader asked to tidy comes
+            /// back mangled, with no error anywhere. The window is as wide as
+            /// the server is slow, which on a large file is seconds.
+            let revision = document.revision
+
             let edits = await lsp.formatting(
                 path: document.url.path,
                 tabSize: configuration.tabWidth,
@@ -450,7 +467,21 @@ private struct DocumentView: View {
                 )
                 return
             }
-            document.replaceText(LSPTextEdit.apply(edits, to: document.currentText))
+            guard document.revision == revision else { return }
+            let formatted = LSPTextEdit.apply(edits, to: document.currentText)
+            document.replaceText(formatted)
+
+            /// Told explicitly, because a programmatic replacement does not
+            /// travel the path a keystroke does. `replaceText` sets the
+            /// coordinator's "this edit came from us" flag, `textDidChange`
+            /// returns early on it, and `onEdit` — the only caller of
+            /// `didChange` — lives inside that method. So without this line
+            /// the server keeps the *pre-format* text: not merely stale, but
+            /// stale in a way that moves every line break and every indent,
+            /// so hovers, completions and definitions all answer about
+            /// positions that no longer exist. It repairs itself on the next
+            /// keystroke, by accident, which is why nobody notices.
+            lsp.didChange(path: document.url.path, text: formatted)
         }
     }
 
@@ -461,6 +492,7 @@ private struct DocumentView: View {
     /// project broken in exactly the places you were not looking.
     private func rename(at offset: Int, to name: String) {
         Task {
+            let revision = document.revision
             let byFile = await lsp.rename(
                 path: document.url.path,
                 position: position(at: offset),
@@ -478,7 +510,14 @@ private struct DocumentView: View {
             var changed = 0
             for (path, edits) in byFile {
                 if path == document.url.path {
-                    document.replaceText(LSPTextEdit.apply(edits, to: document.currentText))
+                    /// Same guard as `format`, and needed for the same reason:
+                    /// the ranges describe the text as of the request. Note
+                    /// the on-disk branch below is already safe by accident —
+                    /// it re-reads each file immediately before editing it.
+                    guard document.revision == revision else { continue }
+                    let renamed = LSPTextEdit.apply(edits, to: document.currentText)
+                    document.replaceText(renamed)
+                    lsp.didChange(path: path, text: renamed)
                 } else if let existing = try? String(contentsOfFile: path, encoding: .utf8) {
                     let updated = LSPTextEdit.apply(edits, to: existing)
                     try? updated.write(toFile: path, atomically: true, encoding: .utf8)
