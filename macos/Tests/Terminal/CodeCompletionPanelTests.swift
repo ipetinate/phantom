@@ -53,10 +53,26 @@ struct CodeCompletionPanelTests {
     /// The list's rhythm follows the file's, so a bigger editor font gives
     /// taller rows rather than a denser list.
     @Test func rowHeightFollowsTheEditorsFont() {
-        #expect(CodeCompletionPanel.rowHeight(for: font) == ceil(12 * 1.6))
+        /// Both sides are spelled `CGFloat` on purpose, and this is not
+        /// pedantry — it is the difference between this test passing and
+        /// failing.
+        ///
+        /// `rowHeight(for:)` returns `CGFloat`; a bare `ceil(12 * 1.6)`
+        /// infers `Double`. Ordinary Swift compares those happily through
+        /// the implicit `CGFloat`/`Double` conversion, but **that conversion
+        /// does not survive `#expect`'s expansion**, so the macro compares
+        /// two operands of different types and reports a failure between
+        /// values that are bit-for-bit identical:
+        ///
+        ///     measured 4626322717216342016 (CGFloat)
+        ///     expected 4626322717216342016 (Double)
+        ///
+        /// Which reads as an arithmetic bug and is not one. Any float
+        /// assertion in this suite has to name its type on both sides.
+        #expect(CodeCompletionPanel.rowHeight(for: font) == CGFloat(ceil(12 * 1.6)))
         #expect(
             CodeCompletionPanel.rowHeight(for: .monospacedSystemFont(ofSize: 18, weight: .regular))
-                == ceil(18 * 1.6)
+                == CGFloat(ceil(18 * 1.6))
         )
     }
 
