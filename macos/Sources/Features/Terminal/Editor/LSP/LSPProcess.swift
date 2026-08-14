@@ -659,6 +659,12 @@ extension LSPProcess {
     /// pass their own — announcing a capability the client does not have
     /// makes servers send things nobody reads, and in a few cases makes
     /// them wait for replies that never come.
+    ///
+    /// One caller does exactly that: `LSPCenter.clientCapabilities` deep
+    /// merges its own `textDocument.completion` block over this one, because
+    /// the promises in it are about behaviour that lives in `LSPCenter` and
+    /// not down here. **Edit the completion block there, not this one** —
+    /// this is the floor a bare transport can stand behind on its own.
     static let defaultCapabilities: LSPValue = [
         "general": ["positionEncodings": ["utf-16"]],
         "textDocument": [
