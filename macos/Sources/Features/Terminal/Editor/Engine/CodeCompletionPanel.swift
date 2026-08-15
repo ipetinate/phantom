@@ -67,6 +67,47 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
     /// here and goes and asks for its documentation.
     var onSelectionChange: ((CodeCompletionItem?) -> Void)?
 
+    /// Called when the info glyph on the highlighted row is clicked.
+    ///
+    /// The row is handed over and nothing else happens: the panel does not
+    /// know that a documentation card exists, only that the reader asked about
+    /// this row. Leaving it nil is what keeps the glyph off the row entirely —
+    /// an affordance for a gesture nobody is listening for is a button that
+    /// does nothing.
+    var onInfoClicked: ((CodeCompletionItem) -> Void)?
+
+    /// Whether a row has documentation worth opening.
+    ///
+    /// **A question asked of the host rather than of the item**, and that is
+    /// the whole design of this property. `documentation != nil` cannot be the
+    /// test: for most servers a row's prose only exists after a second
+    /// request, so at the moment the row is drawn the honest answer is "the
+    /// server said it can be asked" — which is a fact about the *server*, and
+    /// the engine is not allowed to know that asking is a thing. The host
+    /// knows all three inputs (whether resolve is supported, whether this row
+    /// has a token to resolve, whether an answer already came back) and
+    /// collapses them into a yes or a no here.
+    ///
+    /// Nil is the same as "no", for the reason above: a host that has not
+    /// wired this has not wired the card either.
+    var offersDocumentation: ((CodeCompletionItem) -> Bool)?
+
+    /// The font the icon column's glyphs are drawn in, when the host has one.
+    ///
+    /// **Nil is a working list, not a broken one.** The engine cannot reach
+    /// `Bundle.main` to find a bundled font — it takes what it needs as values
+    /// — so this arrives from the host, and the host can only supply it if the
+    /// resource registered. Every kind therefore keeps a complete
+    /// `symbolName`, and this being nil falls back to it: a failed
+    /// registration costs the list its Codicons and nothing else.
+    ///
+    /// **The size it arrives at does not matter** — the list resizes it to the
+    /// editor's own point size on every fill, so the host sets this once and
+    /// never has to hear about a font change. Handing over a fixed size and
+    /// drawing it verbatim is the bug where the icons stay at thirteen point
+    /// after the reader moves the editor to eighteen.
+    var iconFont: NSFont?
+
     private(set) var items: [CodeCompletionItem] = []
     private(set) var selectedIndex = -1
 
@@ -96,6 +137,11 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
     private var theme = CodeTheme.fallback
     private var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     private var anchor = NSRect.zero
+
+    /// `iconFont` at the editor's point size, worked out once per fill rather
+    /// than once per row — a server's answer runs to hundreds of rows and they
+    /// are all drawn in the same font.
+    private var scaledIconFont: NSFont?
 
     init() {
         super.init(
@@ -296,6 +342,61 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
         return image.withSymbolConfiguration(configuration)
     }
 
+    /// The same icon as a glyph out of the Codicons font, for the path where
+    /// the host supplied one.
+    ///
+    /// Centred in its column rather than drawn from the left, because a
+    /// Codicon is a character in a font sized for a UI and its advance width
+    /// is nothing to do with the square the SF Symbol occupied — left-aligning
+    /// the two paths puts the label in a different place depending on whether
+    /// a font registered.
+    ///
+    /// The colour is applied here and not left to the drawing site for the
+    /// reason the icon exists at all: it is `Kind.tokenKind` resolved against
+    /// the theme, so a glyph without it is the one thing worse than an SF
+    /// Symbol — the right shape in the wrong colour.
+    /// The icon font at the size the rows are drawn in.
+    ///
+    /// Nil in, nil out, which is the SF Symbol path. A descriptor that will not
+    /// round-trip back through `NSFont` returns the original rather than
+    /// nothing — the wrong size is a smaller failure than a blank column, and
+    /// it is the same defensive shape `bold(_:)` above already takes.
+    static func scaled(_ font: NSFont?, to pointSize: CGFloat) -> NSFont? {
+        guard let font else { return nil }
+        guard font.pointSize != pointSize else { return font }
+        return NSFont(descriptor: font.fontDescriptor, size: pointSize) ?? font
+    }
+
+    static func iconGlyph(
+        for kind: CodeCompletionItem.Kind,
+        color: NSColor,
+        font: NSFont
+    ) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+
+        return NSAttributedString(string: String(kind.codicon), attributes: [
+            .font: font,
+            .foregroundColor: color,
+            .paragraphStyle: paragraph,
+        ])
+    }
+
+    /// The colour the row's text is drawn in.
+    ///
+    /// The same colour as the icon, by request: a list where the whole row
+    /// carries the kind's colour reads as a list of *things* rather than a
+    /// list of words with a decorated margin.
+    ///
+    /// **This one function is the switch.** Returning
+    /// `theme.foreground` here puts every label back to the reader's plain
+    /// text colour and leaves the icons coloured, which is the other design
+    /// worth trying; nothing else in this file has to change, because nothing
+    /// else asks what colour a label is.
+    static func labelColor(for item: CodeCompletionItem, theme: CodeTheme) -> NSColor {
+        theme.color(for: item.kind.tokenKind)
+    }
+
     /// The band drawn behind the highlighted row.
     ///
     /// Drawn from the theme's foreground rather than taken from `NSTableView`'s
@@ -318,18 +419,76 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
 
+        let color = labelColor(for: item, theme: theme)
         let result = NSMutableAttributedString(string: item.label, attributes: [
             .font: font,
-            .foregroundColor: theme.foreground.withAlphaComponent(0.9),
+            .foregroundColor: color.withAlphaComponent(0.9),
             .paragraphStyle: paragraph,
         ])
 
         let bold = Self.bold(font)
         let full = NSRange(location: 0, length: result.length)
         for range in highlightRanges(query: query, item: item) where NSIntersectionRange(range, full) == range {
-            result.addAttributes([.font: bold, .foregroundColor: theme.foreground], range: range)
+            result.addAttributes([.font: bold, .foregroundColor: color], range: range)
         }
         return result
+    }
+
+    // MARK: - The info affordance
+
+    /// Whether the highlighted row shows its info glyph.
+    ///
+    /// Only the selected row, and only when there is something behind the
+    /// glyph. Both halves are load-bearing and for different reasons: a column
+    /// of info glyphs down every row is a second icon column competing with
+    /// the first for the same glance, and a glyph on a row with nothing to say
+    /// is a button that answers "no documentation" — which the reader could
+    /// have been told by its absence, for free.
+    static func showsInfo(isSelected: Bool, hasDocumentation: Bool) -> Bool {
+        isSelected && hasDocumentation
+    }
+
+    /// The glyph's square, at the row's trailing edge.
+    ///
+    /// Reserved on *every* row rather than only the selected one — see
+    /// `reservesInfoColumn` — so the detail column does not shuffle sideways
+    /// as the selection moves down a list the reader is steering with.
+    static func infoRect(in bounds: NSRect, side: CGFloat, inset: CGFloat) -> NSRect {
+        NSRect(
+            x: bounds.maxX - inset - side,
+            y: (bounds.height - side) / 2,
+            width: side,
+            height: side
+        )
+    }
+
+    /// The `ⓘ` itself, from the Codicons font when there is one and from SF
+    /// Symbols otherwise — the same fallback the kind icons take, and for the
+    /// same reason.
+    ///
+    /// Dimmer than the row it sits on. It is an offer rather than a statement:
+    /// at full strength it would be the brightest thing on the selected row,
+    /// which is the row whose *label* is the thing being read.
+    static func infoGlyph(theme: CodeTheme, font: NSFont) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+
+        return NSAttributedString(string: "\u{EA74}", attributes: [
+            .font: font,
+            .foregroundColor: theme.foreground.withAlphaComponent(0.55),
+            .paragraphStyle: paragraph,
+        ])
+    }
+
+    static func infoImage(theme: CodeTheme, pointSize: CGFloat) -> NSImage? {
+        guard let image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Documentation") else {
+            return nil
+        }
+        let color = theme.foreground.withAlphaComponent(0.55)
+        return image.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        )
     }
 
     /// A bolder cut of the editor's own font, falling back to the system
@@ -454,6 +613,7 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
 
     private func select(_ index: Int) {
         guard index != selectedIndex else { return }
+        let previous = selectedIndex
         selectedIndex = index
 
         if items.indices.contains(index) {
@@ -463,7 +623,24 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
             tableView.deselectAll(nil)
         }
         tableView.enumerateAvailableRowViews { view, _ in view.needsDisplay = true }
+        rebuildInfoAffordance(movingFrom: previous, to: index)
         onSelectionChange?(selectedItem)
+    }
+
+    /// Rebuilds the two rows whose info glyph changed.
+    ///
+    /// The band above is repainted by marking the row views dirty, and that is
+    /// enough for it because the band is *drawn*. The glyph is not — it is
+    /// content, handed to the cell in `tableView(_:viewFor:row:)`, which
+    /// nothing re-runs when the selection moves. Two rows rather than a
+    /// `reloadData`, because this is the arrow key's path and the list behind
+    /// it can be several hundred rows long.
+    private func rebuildInfoAffordance(movingFrom previous: Int, to index: Int) {
+        guard reservesInfoColumn else { return }
+
+        let rows = IndexSet([previous, index].filter(items.indices.contains))
+        guard !rows.isEmpty else { return }
+        tableView.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0))
     }
 
     @objc private func rowClicked() {
@@ -478,6 +655,7 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
     private func fill(_ items: [CodeCompletionItem], query: String) {
         self.items = items
         self.query = query
+        scaledIconFont = Self.scaled(iconFont, to: font.pointSize)
 
         let background = theme.background.withAlphaComponent(1)
         card.layer?.backgroundColor = background.cgColor
@@ -492,12 +670,26 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
 
     /// The chrome a row needs beyond its text: the icon column, the gaps either
     /// side of it, the gap before the detail and the room an overlay scroller
-    /// takes when it appears.
+    /// takes when it appears — plus the info column when the host asked for
+    /// one, which is measured here so a list with the affordance is a little
+    /// wider rather than a little more truncated.
     private var chromeWidth: CGFloat {
         horizontalInset * 2 + iconSide + iconGap + detailGap + 12
+            + (reservesInfoColumn ? iconSide + iconGap : 0)
     }
 
     private var iconSide: CGFloat { ceil(font.pointSize * 1.15) }
+
+    /// Whether every row leaves room at its trailing edge for an info glyph.
+    ///
+    /// A property of the *list* and not of the row, deliberately. The glyph
+    /// appears on one row at a time, and reserving its width only on that row
+    /// would slide the detail column left and right as the selection moves —
+    /// under a hand that is holding the down arrow, which is the worst
+    /// possible moment for the list to reflow.
+    private var reservesInfoColumn: Bool {
+        onInfoClicked != nil && offersDocumentation != nil
+    }
 
     private func resize() {
         let width = Self.measuredWidth(for: items, font: font, chrome: chromeWidth)
@@ -550,17 +742,40 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
         cell.iconSide = iconSide
         cell.iconGap = iconGap
         cell.detailGap = detailGap
-        cell.icon = Self.icon(
-            for: item.kind,
-            color: theme.color(for: item.kind.tokenKind),
-            pointSize: font.pointSize
-        )
+
+        let color = theme.color(for: item.kind.tokenKind)
+        if let scaledIconFont {
+            cell.icon = nil
+            cell.iconText = Self.iconGlyph(for: item.kind, color: color, font: scaledIconFont)
+        } else {
+            cell.icon = Self.icon(for: item.kind, color: color, pointSize: font.pointSize)
+            cell.iconText = nil
+        }
+
         cell.label = Self.labelText(for: item, query: query, theme: theme, font: font)
         cell.detail = item.detail.flatMap { detail in
             detail.isEmpty ? nil : Self.detailText(detail, theme: theme, font: font)
         }
+
+        cell.reservesInfoColumn = reservesInfoColumn
+        let showsInfo = Self.showsInfo(
+            isSelected: row == selectedIndex,
+            hasDocumentation: reservesInfoColumn && (offersDocumentation?(item) ?? false)
+        )
+        cell.info = showsInfo ? infoAffordance() : nil
+        cell.onInfoClicked = showsInfo ? { [weak self] in self?.onInfoClicked?(item) } : nil
+
         cell.needsDisplay = true
         return cell
+    }
+
+    /// The info glyph as the row should draw it, taking the same font fallback
+    /// the kind icons take.
+    private func infoAffordance() -> RowCellView.Info {
+        if let scaledIconFont {
+            return .glyph(Self.infoGlyph(theme: theme, font: scaledIconFont))
+        }
+        return .image(Self.infoImage(theme: theme, pointSize: font.pointSize))
     }
 
     /// A click on a row selects it, and nothing else does.
@@ -639,7 +854,19 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
     private final class RowCellView: NSView {
         static let reuseIdentifier = NSUserInterfaceItemIdentifier("CodeCompletionRow")
 
+        /// Whichever of the two the host's font situation allows, so the
+        /// affordance is one thing to the row rather than two nullable ones.
+        enum Info {
+            case image(NSImage?)
+            case glyph(NSAttributedString)
+        }
+
         var icon: NSImage?
+
+        /// The icon as a Codicon. Mutually exclusive with `icon` — the panel
+        /// sets exactly one of them, according to whether a font registered.
+        var iconText: NSAttributedString?
+
         var label: NSAttributedString?
         var detail: NSAttributedString?
         var horizontalInset: CGFloat = 8
@@ -647,9 +874,29 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
         var iconGap: CGFloat = 6
         var detailGap: CGFloat = 12
 
+        /// Whether to keep the trailing square clear even on rows that are not
+        /// showing the glyph. See `CodeCompletionPanel.reservesInfoColumn`.
+        var reservesInfoColumn = false
+
+        var info: Info? {
+            didSet {
+                button.info = info
+                button.isHidden = info == nil
+                needsLayout = true
+            }
+        }
+
+        var onInfoClicked: (() -> Void)? {
+            didSet { button.onClick = onInfoClicked }
+        }
+
+        private let button = InfoButton()
+
         init(identifier: NSUserInterfaceItemIdentifier) {
             super.init(frame: .zero)
             self.identifier = identifier
+            button.isHidden = true
+            addSubview(button)
         }
 
         @available(*, unavailable)
@@ -658,6 +905,22 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
         override var isFlipped: Bool { true }
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func layout() {
+            super.layout()
+            button.frame = CodeCompletionPanel.infoRect(
+                in: bounds,
+                side: iconSide,
+                inset: horizontalInset
+            )
+        }
+
+        /// The width the trailing edge gives up, which is a constant of the
+        /// list rather than of this row — the glyph moving between rows must
+        /// not move the detail column with it.
+        private var infoColumnWidth: CGFloat {
+            reservesInfoColumn ? iconSide + iconGap : 0
+        }
 
         /// The detail never takes more than half the row, so a long qualified
         /// name cannot squeeze the label — which is the column being read — down
@@ -669,16 +932,21 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
                 width: iconSide,
                 height: iconSide
             )
-            icon?.draw(in: iconRect)
+            if let iconText {
+                draw(iconText, in: iconRect)
+            } else {
+                icon?.draw(in: iconRect)
+            }
 
             let textLeft = iconRect.maxX + iconGap
-            let available = max(bounds.maxX - horizontalInset - textLeft, 0)
+            let right = bounds.maxX - horizontalInset - infoColumnWidth
+            let available = max(right - textLeft, 0)
 
             var detailWidth: CGFloat = 0
             if let detail {
                 detailWidth = min(ceil(detail.size().width), available / 2)
                 let rect = NSRect(
-                    x: bounds.maxX - horizontalInset - detailWidth,
+                    x: right - detailWidth,
                     y: textBaseline(for: detail),
                     width: detailWidth,
                     height: detail.size().height
@@ -699,8 +967,74 @@ final class CodeCompletionPanel: NSPanel, NSTableViewDataSource, NSTableViewDele
             )
         }
 
+        /// Centred vertically in the square the SF Symbol would have filled, so
+        /// the two icon paths sit on the same line as each other and as the
+        /// label.
+        private func draw(_ glyph: NSAttributedString, in square: NSRect) {
+            let height = glyph.size().height
+            glyph.draw(
+                with: NSRect(
+                    x: square.minX,
+                    y: square.midY - height / 2,
+                    width: square.width,
+                    height: height
+                ),
+                options: [.usesLineFragmentOrigin]
+            )
+        }
+
         private func textBaseline(for text: NSAttributedString) -> CGFloat {
             (bounds.height - text.size().height) / 2
+        }
+    }
+
+    /// The `ⓘ` on the highlighted row.
+    ///
+    /// A view of its own rather than a rectangle the row hit-tests, because the
+    /// row's click already means something: `tableView.action` accepts the
+    /// completion. A subview that consumes `mouseDown` and does not call super
+    /// is what stops the table ever hearing the click, so asking about a row
+    /// cannot insert it by accident.
+    private final class InfoButton: NSView {
+        var info: RowCellView.Info? {
+            didSet { needsDisplay = true }
+        }
+
+        var onClick: (() -> Void)?
+
+        override var isFlipped: Bool { true }
+
+        /// Without this the first click is spent activating a panel that can
+        /// never be key — see `ListTableView`, which needs it for the rows and
+        /// gets no say over a subview of its own cells.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            onClick?()
+        }
+
+        override func resetCursorRects() {
+            addCursorRect(bounds, cursor: .pointingHand)
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            switch info {
+            case .image(let image):
+                image?.draw(in: bounds)
+            case .glyph(let glyph):
+                let height = glyph.size().height
+                glyph.draw(
+                    with: NSRect(
+                        x: bounds.minX,
+                        y: bounds.midY - height / 2,
+                        width: bounds.width,
+                        height: height
+                    ),
+                    options: [.usesLineFragmentOrigin]
+                )
+            case nil:
+                return
+            }
         }
     }
 }
