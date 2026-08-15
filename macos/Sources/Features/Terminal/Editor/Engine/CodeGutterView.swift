@@ -142,20 +142,82 @@ final class CodeGutterView: NSView {
             }
             guard frame.minY + inset <= visible.maxY else { return false }
 
-            let label = String(lineNumber) as NSString
-            let isCurrent = lineNumber == currentLine
-            let attributes = isCurrent ? currentAttributes : attributes
-            let size = label.size(withAttributes: attributes)
-            let y = frame.minY + inset - visible.minY + (frame.height - size.height) / 2
-
-            label.draw(
-                at: NSPoint(x: bounds.width - size.width - 8, y: y),
-                withAttributes: attributes
+            // A file that ends in a newline shows one more line than it has
+            // text for, and TextKit hands that empty line back *inside* the
+            // last fragment rather than as one of its own — same frame, twice
+            // the height. Numbering the fragment as a single row therefore
+            // centred its number between the two, and left the last line of
+            // every file in this repo with no number at all.
+            let extra = Self.extraLineFragment(of: fragment)
+            let split = Self.rowSplit(
+                fragmentHeight: frame.height,
+                extraLineHeight: extra?.typographicBounds.height ?? 0
             )
+            let top = frame.minY + inset - visible.minY
+
+            draw(number: lineNumber, in: NSRect(
+                x: 0,
+                y: top,
+                width: bounds.width,
+                height: split.numbered
+            ), plain: attributes, current: currentAttributes)
+
+            if let extra {
+                draw(number: lineNumber + lines, in: NSRect(
+                    x: 0,
+                    y: top + split.extraOffset,
+                    width: bounds.width,
+                    height: extra.typographicBounds.height
+                ), plain: attributes, current: currentAttributes)
+            }
 
             lineNumber += lines
             return true
         }
+    }
+
+    /// Draws one number centred in the row it belongs to.
+    private func draw(
+        number: Int,
+        in row: NSRect,
+        plain: [NSAttributedString.Key: Any],
+        current: [NSAttributedString.Key: Any]
+    ) {
+        let label = String(number) as NSString
+        let attributes = number == currentLine ? current : plain
+        let size = label.size(withAttributes: attributes)
+        label.draw(
+            at: NSPoint(
+                x: bounds.width - size.width - 8,
+                y: row.minY + (row.height - size.height) / 2
+            ),
+            withAttributes: attributes
+        )
+    }
+
+    /// The empty line TextKit appends to a document that ends in a newline,
+    /// or nil for every other fragment.
+    ///
+    /// Recognised by carrying no characters. A soft-wrapped line is also more
+    /// than one line fragment, and its last one has text in it — which is what
+    /// keeps wrapping out of this.
+    private static func extraLineFragment(
+        of fragment: NSTextLayoutFragment
+    ) -> NSTextLineFragment? {
+        let lines = fragment.textLineFragments
+        guard lines.count > 1, let last = lines.last, last.characterRange.length == 0
+        else { return nil }
+        return last
+    }
+
+    /// How a fragment's height splits between the rows that carry a number of
+    /// their own: the text, and the appended empty line when there is one.
+    static func rowSplit(
+        fragmentHeight: CGFloat,
+        extraLineHeight: CGFloat
+    ) -> (numbered: CGFloat, extraOffset: CGFloat) {
+        let numbered = max(0, fragmentHeight - extraLineHeight)
+        return (numbered: numbered, extraOffset: numbered)
     }
 
     private static func characterRange(

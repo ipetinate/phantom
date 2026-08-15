@@ -543,6 +543,7 @@ struct CodeTextView: NSViewRepresentable {
         /// on demand. Debounced: a flick of the wheel is one destination,
         /// not forty.
         @objc func scrolled() {
+            snapOutOfTheLeftMargin()
             guard highlightsOnDemand else { return }
             highlightTask?.cancel()
             highlightTask = Task { [weak self] in
@@ -550,6 +551,47 @@ struct CodeTextView: NSViewRepresentable {
                 guard !Task.isCancelled else { return }
                 self?.highlightVisibleRegion()
             }
+        }
+
+        /// Puts the text back against the left edge when something has left it
+        /// scrolled into its own margin.
+        ///
+        /// Entering native fullscreen does exactly that: the clip view comes
+        /// back with `bounds.origin.x == 9` — the text container inset plus the
+        /// container's line fragment padding — while the text view's frame, the
+        /// container, the insets and the viewport all read identically to the
+        /// windowed layout. Measured, not inferred; that one number was the
+        /// whole difference. The first character of every line is then drawn
+        /// left of what the clip shows, and it survives leaving fullscreen,
+        /// because nothing lays the view out again until the tab is switched —
+        /// which is why switching tabs appeared to "fix" it.
+        ///
+        /// Snapping is a correction rather than a preference: there is no text
+        /// to the left of the first glyph, so any offset inside the margin
+        /// hides a column and reveals nothing. Real horizontal scrolling starts
+        /// past the margin and is left alone. The cost is that dragging the
+        /// scroller through those few points settles at zero instead of inside
+        /// them, which is the same thing the reader wanted anyway.
+        private func snapOutOfTheLeftMargin() {
+            guard let textView,
+                  let scrollView = textView.enclosingScrollView,
+                  let container = textView.textContainer
+            else { return }
+            let clipView = scrollView.contentView
+            guard let corrected = Self.horizontalSnap(
+                offset: clipView.bounds.origin.x,
+                margin: textView.textContainerInset.width + container.lineFragmentPadding
+            ) else { return }
+
+            clipView.scroll(to: NSPoint(x: corrected, y: clipView.bounds.origin.y))
+            scrollView.reflectScrolledClipView(clipView)
+        }
+
+        /// Where a horizontal offset inside the left margin should go, or nil
+        /// when the offset is a real scroll position and must not be touched.
+        static func horizontalSnap(offset: CGFloat, margin: CGFloat) -> CGFloat? {
+            guard offset > 0, offset <= margin else { return nil }
+            return 0
         }
 
         /// Rebuilds the minimap shortly, rather than now.
@@ -846,11 +888,15 @@ struct CodeTextView: NSViewRepresentable {
 
             // Screen → window → clip view, the same trip `reveal` makes.
             let onScreen = textView.firstRect(forCharacterRange: selection, actualRange: nil)
-            guard onScreen.height > 0 else {
+            let inClip: NSRect
+            if onScreen.height > 0 {
+                inClip = clipView.convert(window.convertFromScreen(onScreen), from: nil)
+            } else if let laidOut = Self.caretRectInView(of: textView, caret: selection.location) {
+                inClip = clipView.convert(laidOut, from: textView)
+            } else {
                 band.isHidden = true
                 return
             }
-            let inClip = clipView.convert(window.convertFromScreen(onScreen), from: nil)
 
             band.layer?.backgroundColor = color.cgColor
             band.frame = Self.bandFrame(
@@ -906,6 +952,39 @@ struct CodeTextView: NSViewRepresentable {
                   let range = NSTextRange(location: from, end: to)
             else { return }
             layout.ensureLayout(for: range)
+        }
+
+        /// Where the caret is, asked of the layout manager instead of the view.
+        ///
+        /// `firstRect(forCharacterRange:)` returns nothing for an empty range
+        /// at the very end of the document — and a file that ends in a newline
+        /// shows one more line than it has text for, so that position is the
+        /// last line of nearly every file in this repo. The band was hidden
+        /// there, on the one line a reader is most likely to be sitting on
+        /// while typing at the end of a file. The layout manager does answer:
+        /// it reports a segment for that position, in the text container's
+        /// space, which `textContainerOrigin` puts back in the view's.
+        ///
+        /// Consulted **only** when the view has already declined, so the rule
+        /// the doc comment above records — the band follows the caret's own
+        /// rect, never a fragment lookup — still decides every line that has
+        /// text on it.
+        private static func caretRectInView(of textView: NSTextView, caret: Int) -> NSRect? {
+            guard let layout = textView.textLayoutManager,
+                  let content = layout.textContentManager,
+                  let location = content.location(content.documentRange.location, offsetBy: caret),
+                  let empty = NSTextRange(location: location, end: location)
+            else { return nil }
+
+            var caretFrame: NSRect?
+            layout.enumerateTextSegments(in: empty, type: .standard) { _, frame, _, _ in
+                caretFrame = frame
+                return false
+            }
+            guard let caretFrame, caretFrame.height > 0 else { return nil }
+
+            let origin = textView.textContainerOrigin
+            return caretFrame.offsetBy(dx: origin.x, dy: origin.y)
         }
 
         /// The band's frame in the clip view, given where the caret is in it.

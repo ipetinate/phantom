@@ -145,6 +145,84 @@ struct CurrentLineHighlightTests {
     }
 }
 
+/// The line numbers beside the text, and the last line of a file.
+///
+/// A file that ends in a newline shows one more line than it has text for, and
+/// TextKit hands that empty line back inside the *last* fragment rather than as
+/// one of its own — one frame, two rows. The gutter drew one number per
+/// fragment, centred in its frame, so the last number floated between the two
+/// rows and the final line got none at all. That is every file in this repo.
+///
+/// These pin the split. Whether the number lands on the right pixel is a thing
+/// only the running app can show.
+@MainActor
+struct GutterLineNumberTests {
+    /// The ordinary fragment: nothing appended, nothing to divide.
+    @Test func aFragmentWithoutAnAppendedLineIsOneRow() {
+        let split = CodeGutterView.rowSplit(fragmentHeight: 15, extraLineHeight: 0)
+        #expect(split.numbered == CGFloat(15))
+        #expect(split.extraOffset == CGFloat(15))
+    }
+
+    /// The last fragment of a file ending in a newline: half of it is the
+    /// appended empty line, and the number belongs in the other half.
+    @Test func anAppendedLineTakesItsOwnRow() {
+        let split = CodeGutterView.rowSplit(fragmentHeight: 30, extraLineHeight: 15)
+        #expect(split.numbered == CGFloat(15))
+        #expect(split.extraOffset == CGFloat(15))
+    }
+
+    /// A soft-wrapped last line is three rows, one of them appended — the
+    /// number still centres over the text, which is the two that have any.
+    @Test func wrappingLeavesTheAppendedLineOneRowOfItsOwn() {
+        let split = CodeGutterView.rowSplit(fragmentHeight: 45, extraLineHeight: 15)
+        #expect(split.numbered == CGFloat(30))
+        #expect(split.extraOffset == CGFloat(30))
+    }
+
+    /// Garbage in — an appended line taller than the fragment holding it —
+    /// must not put the number above the fragment it belongs to.
+    @Test func anImpossibleSplitNeverGoesNegative() {
+        let split = CodeGutterView.rowSplit(fragmentHeight: 15, extraLineHeight: 30)
+        #expect(split.numbered == CGFloat(0))
+    }
+}
+
+/// The horizontal offset the editor is allowed to rest at.
+///
+/// Entering native fullscreen left the clip view scrolled 9 points right — the
+/// text container inset plus its line fragment padding — with every other
+/// measurement identical to the windowed layout, so the first character of
+/// every line was drawn outside what the clip showed. It survived leaving
+/// fullscreen and cleared only on a tab switch.
+@MainActor
+struct EditorHorizontalSnapTests {
+    /// The margin itself, and everything inside it, is not a scroll position:
+    /// there is nothing to the left of the first glyph to bring into view.
+    @Test(arguments: [CGFloat(0.5), CGFloat(4), CGFloat(9)])
+    func anOffsetInsideTheMarginGoesBackToZero(offset: CGFloat) {
+        #expect(CodeTextView.Coordinator.horizontalSnap(offset: offset, margin: 9) == CGFloat(0))
+    }
+
+    /// Already home. Correcting it would post a scroll on every bounds change
+    /// for no reason.
+    @Test func zeroIsLeftAlone() {
+        #expect(CodeTextView.Coordinator.horizontalSnap(offset: 0, margin: 9) == nil)
+    }
+
+    /// Past the margin the reader is really scrolled sideways, and moving them
+    /// back would fight them.
+    @Test(arguments: [CGFloat(9.5), CGFloat(120), CGFloat(4_000)])
+    func aRealScrollPositionIsUntouched(offset: CGFloat) {
+        #expect(CodeTextView.Coordinator.horizontalSnap(offset: offset, margin: 9) == nil)
+    }
+
+    /// Wrapping leaves no margin to be inside of, and nothing to scroll.
+    @Test func noMarginCorrectsNothing() {
+        #expect(CodeTextView.Coordinator.horizontalSnap(offset: 3, margin: 0) == nil)
+    }
+}
+
 /// The environment badge's colour scale.
 struct EnvironmentBadgeTests {
     /// Inverted on purpose: green is the one you are *meant* to break.
