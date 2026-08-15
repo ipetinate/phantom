@@ -18,6 +18,9 @@ struct EditorPaneView: View {
     @AppStorage(EditorSettings.tabWidthKey) private var tabWidth = EditorSettings.defaultTabWidth
     @AppStorage(EditorSettings.showsMinimapKey) private var showsMinimap = true
     @AppStorage(EditorSettings.colorsBracketPairsKey) private var colorsBracketPairs = true
+    @AppStorage(EditorSettings.closesBracketsKey) private var closesBrackets = true
+    @AppStorage(EditorSettings.closesQuotesKey) private var closesQuotes = true
+    @AppStorage(EditorSettings.closesTagsKey) private var closesTags = true
 
     @ObservedObject var search: WorkspaceSearchCenter
     @ObservedObject private var lsp: LSPCenter = .shared
@@ -140,7 +143,10 @@ struct EditorPaneView: View {
             insertsSpacesForTab: true,
             highlightsCurrentLine: true,
             colorsBracketPairs: colorsBracketPairs,
-            showsMinimap: showsMinimap
+            showsMinimap: showsMinimap,
+            closesBrackets: closesBrackets,
+            closesQuotes: closesQuotes,
+            closesTags: closesTags
         )
     }
 }
@@ -186,6 +192,15 @@ private struct DocumentView: View {
     /// is the only time they actually change.
     @State private var underlines: [(range: NSRange, color: NSColor)] = []
 
+    /// Translates between the server's vocabulary and the list's.
+    ///
+    /// `@State` because it has to *survive* body evaluation: it remembers the
+    /// server's own item behind each row so that row can later be resolved,
+    /// and a fresh one per keystroke would hand out tokens that resolve to
+    /// nothing. One per document, which is also the scope of the list it
+    /// describes.
+    @State private var completionBridge = CompletionBridge()
+
     var body: some View {
         VStack(spacing: 0) {
             if document.hasConflict {
@@ -200,6 +215,10 @@ private struct DocumentView: View {
                 text: document.currentText,
                 textRevision: document.revision,
                 language: document.language,
+                /// From the file's name, not its language: `.ts` and `.tsx`
+                /// are the same `CodeLanguage`, and a tag closed in `.ts` is
+                /// always wrong because a `<` there can only be a generic.
+                tagDialect: CodeTagDialect.resolve(fileName: document.url.lastPathComponent),
                 theme: theme,
                 configuration: configuration,
                 onEdit: { edited in
@@ -208,20 +227,10 @@ private struct DocumentView: View {
                 },
                 underlines: underlines,
                 hoverProvider: { offset in await hoverInfo(at: offset) },
-                /// Still flattened to `[String]`, and deliberately so for now:
-                /// the engine's completion list is being built alongside this,
-                /// and widening the closure before it exists would leave the
-                /// editor with a richer answer and nowhere to put it. `.items`
-                /// is empty for every outcome that is not a list, which is the
-                /// same thing this closure did when a failure was spelled `[]`
-                /// — the difference is that the outcome can now be *told apart*
-                /// from an empty answer, which is what the panel will need.
-                completionProvider: { offset in
-                    await lsp.completions(
-                        path: document.url.path,
-                        position: position(at: offset)
-                    ).items.map(\.insertText)
-                },
+                completionProvider: { offset in await completions(at: offset) },
+                completionDocProvider: { item in await documentation(for: item) },
+                completionOffersDocumentation: { item in offersDocumentation(item) },
+                completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
                 reveal: revealRange,
                 onJumpToDefinition: { offset in jump(from: offset) },
                 onRename: { offset in
@@ -362,6 +371,58 @@ private struct DocumentView: View {
         }
 
         return info
+    }
+
+    /// What to offer at an offset.
+    ///
+    /// The whole of the translation lives in `CompletionBridge`; what this
+    /// adds is the two facts only the document has — the text the server's
+    /// line/character ranges are measured against, and whether this file's
+    /// server answers a resolve at all. The second is asked here rather than
+    /// cached because a server can finish starting between two keystrokes,
+    /// and a `false` remembered from before it was ready would leave the
+    /// documentation card permanently silent.
+    private func completions(at offset: Int) async -> CodeCompletionAnswer {
+        let outcome = await lsp.completions(
+            path: document.url.path,
+            position: position(at: offset)
+        )
+
+        completionBridge.note(
+            supportsResolve: lsp.completionSupport(forPath: document.url.path)?.resolveProvider == true
+        )
+
+        return completionBridge.items(from: outcome, in: document.currentText as NSString)
+    }
+
+    /// Asks the server to finish one row, for the documentation card.
+    ///
+    /// The item is looked up rather than rebuilt, because the server has to be
+    /// handed back the object it sent: a reconstruction from the fields this
+    /// app models drops everything it does not, and a server that cannot match
+    /// the item it receives answers with that item **unchanged rather than
+    /// with an error** — an empty card that is indistinguishable from a symbol
+    /// nobody documented.
+    private func documentation(for item: CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome {
+        guard let completion = completionBridge.completion(for: item.resolveToken) else {
+            return .superseded
+        }
+
+        let outcome = await lsp.resolve(completion, path: document.url.path)
+        return CompletionBridge.outcome(of: outcome)
+    }
+
+    /// Whether this row is worth an info glyph.
+    ///
+    /// Two conditions, and both are needed. The server has to answer resolve
+    /// at all — `kotlin-language-server` 1.3.13 does not, and ships no
+    /// per-item documentation either, so for Kotlin the glyph would be a
+    /// control that is permanently going to answer nothing. And the row has to
+    /// still be one this bridge can name: an item from a superseded list has
+    /// no token left, and asking about it would come back unchanged rather
+    /// than refused.
+    private func offersDocumentation(_ item: CodeCompletionItem) -> Bool {
+        completionBridge.supportsResolve && completionBridge.completion(for: item.resolveToken) != nil
     }
 
     /// The diagnostics whose range covers this offset.

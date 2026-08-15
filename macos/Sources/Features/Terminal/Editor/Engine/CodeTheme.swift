@@ -101,6 +101,22 @@ struct CodeEditorConfiguration: Equatable {
     /// the switch did nothing until the file was reopened.
     var showsMinimap: Bool = true
 
+    /// Whether typing an opener writes its closer too.
+    ///
+    /// Three switches rather than one because they fail differently and are
+    /// disliked separately — see `EditorSettings` for the reasoning. All
+    /// three default to on, which is what every editor this one is measured
+    /// against does.
+    ///
+    /// **These are read on every keystroke, unlike everything above them.**
+    /// The rest of this type describes how the text is *drawn*, so it is
+    /// consulted when appearance is applied; these three decide what gets
+    /// *written*, so they have to be current at the moment a key is pressed
+    /// rather than at the moment the view was last restyled.
+    var closesBrackets: Bool = true
+    var closesQuotes: Bool = true
+    var closesTags: Bool = true
+
     static var `default`: CodeEditorConfiguration {
         CodeEditorConfiguration(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
@@ -110,7 +126,10 @@ struct CodeEditorConfiguration: Equatable {
             insertsSpacesForTab: true,
             highlightsCurrentLine: true,
             colorsBracketPairs: true,
-            showsMinimap: true
+            showsMinimap: true,
+            closesBrackets: true,
+            closesQuotes: true,
+            closesTags: true
         )
     }
 }

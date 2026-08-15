@@ -34,6 +34,12 @@ struct CodeTextView: NSViewRepresentable {
     let textRevision: Int
 
     let language: CodeLanguage
+
+    /// Which markup this file is. Beside `language` rather than inside the
+    /// configuration, because it describes the file and not the editor — see
+    /// `CodeNSTextView.tagDialect`.
+    var tagDialect: CodeTagDialect = .none
+
     let theme: CodeTheme
     let configuration: CodeEditorConfiguration
 
@@ -54,8 +60,25 @@ struct CodeTextView: NSViewRepresentable {
     /// Asked what to say when the pointer rests on an offset.
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
 
-    /// Asked for the words to offer at an offset, for the completion list.
-    var completionProvider: ((Int) async -> [String])?
+    /// Asked what to offer at an offset, for the completion list.
+    var completionProvider: ((Int) async -> CodeCompletionAnswer)?
+
+    /// Asked to describe the highlighted row, for the documentation card.
+    ///
+    /// Separate from `completionProvider` because it is a second question
+    /// asked about one row rather than more of the first answer: servers
+    /// routinely withhold documentation from the list and only supply it when
+    /// asked about a specific item, which is a request per selection change
+    /// rather than per keystroke.
+    var completionDocProvider: ((CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome)?
+
+    /// Whether a row gets an info glyph. See `CodeNSTextView` for why this is
+    /// the host's question and not the item's.
+    var completionOffersDocumentation: ((CodeCompletionItem) -> Bool)?
+
+    /// The icon column's glyph font, as a value — the engine may not reach
+    /// into the bundle to find it.
+    var completionIconFont: NSFont?
 
     /// A range to select and scroll into view once. Carries an identity so
     /// the same range asked for twice still moves the view — jumping to a
@@ -211,6 +234,9 @@ struct CodeTextView: NSViewRepresentable {
         textView.onJumpToDefinition = onJumpToDefinition
         textView.hoverProvider = hoverProvider
         textView.completionProvider = completionProvider
+        textView.completionDocProvider = completionDocProvider
+        textView.completionOffersDocumentation = completionOffersDocumentation
+        textView.completionIconFont = completionIconFont
 
         context.coordinator.textView = textView
         context.coordinator.gutter = gutter
@@ -226,7 +252,11 @@ struct CodeTextView: NSViewRepresentable {
         )
 
         context.coordinator.applyIfNewRevision(text: text, revision: textRevision)
-        context.coordinator.applyAppearance(theme: theme, configuration: configuration)
+        context.coordinator.applyAppearance(
+            theme: theme,
+            configuration: configuration,
+            dialect: tagDialect
+        )
 
         return container
     }
@@ -249,11 +279,18 @@ struct CodeTextView: NSViewRepresentable {
             code.onJumpToDefinition = onJumpToDefinition
             code.hoverProvider = hoverProvider
             code.completionProvider = completionProvider
+            code.completionDocProvider = completionDocProvider
+            code.completionOffersDocumentation = completionOffersDocumentation
+            code.completionIconFont = completionIconFont
         }
         context.coordinator.applyUnderlines(underlines)
 
         context.coordinator.storage.setLanguage(language)
-        context.coordinator.applyAppearance(theme: theme, configuration: configuration)
+        context.coordinator.applyAppearance(
+            theme: theme,
+            configuration: configuration,
+            dialect: tagDialect
+        )
         scrollView.hasHorizontalScroller = !configuration.wrapsLines
 
         // Applied when the *host* replaced the text, never because the two
@@ -624,7 +661,11 @@ struct CodeTextView: NSViewRepresentable {
             storage.endEditing()
         }
 
-        func applyAppearance(theme: CodeTheme, configuration: CodeEditorConfiguration) {
+        func applyAppearance(
+            theme: CodeTheme,
+            configuration: CodeEditorConfiguration,
+            dialect: CodeTagDialect
+        ) {
             guard let textView else { return }
 
             // Nothing to do unless the look actually changed.
@@ -669,9 +710,24 @@ struct CodeTextView: NSViewRepresentable {
             // the file's language, so it has to be told both. Outside the
             // guard for the same reason as the two above: a card built with a
             // stale theme is a card in the wrong colours.
+            //
+            // The auto-closing switches are here rather than below for a
+            // different reason, and it is worth stating because inside the
+            // guard they would appear to work. `unchanged` compares the whole
+            // configuration, so toggling one of these *is* a change and would
+            // pass — right up until someone adds a field that changes for an
+            // unrelated reason and starts absorbing the comparison. Then a
+            // switch silently stops taking effect until the file is reopened,
+            // which is precisely the bug `showsMinimap` above documents.
+            // Behaviour that decides what gets typed does not belong behind a
+            // guard about what gets drawn.
             if let code = textView as? CodeNSTextView {
                 code.hoverTheme = theme
                 code.hoverLanguage = storage.language
+                code.closesBrackets = configuration.closesBrackets
+                code.closesQuotes = configuration.closesQuotes
+                code.closesTags = configuration.closesTags
+                code.tagDialect = dialect
             }
 
             // Everything below rewrites attributes or re-lays out the document,
@@ -893,7 +949,37 @@ final class CodeNSTextView: NSTextView {
     var onFormat: (() -> Void)?
     var onJumpToDefinition: ((Int) -> Void)?
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
-    var completionProvider: ((Int) async -> [String])?
+    var completionProvider: ((Int) async -> CodeCompletionAnswer)?
+    var completionDocProvider: ((CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome)?
+
+    /// Whether a row is worth offering an info glyph on.
+    ///
+    /// Asked of the host because the honest answer is about the *server* — it
+    /// is "this row can be asked about", not "this row has prose", and for
+    /// most servers the prose does not exist until a second request has been
+    /// made. The engine is not allowed to know that a second request is a
+    /// thing, so the host collapses what it knows into a yes or a no.
+    var completionOffersDocumentation: ((CodeCompletionItem) -> Bool)?
+
+    /// The glyph font for the icon column, handed in as a value.
+    ///
+    /// The engine cannot go and find it: it is a resource in the app bundle,
+    /// and reaching `Bundle.main` from here is the dependency this whole side
+    /// of the code is arranged to avoid. Nil is a supported state — the list
+    /// falls back to system symbols, so a font that failed to register costs
+    /// prettier icons and nothing else.
+    var completionIconFont: NSFont?
+
+    /// The card beside the list, and the request behind it.
+    private var documentationPanel: CodeCompletionDocPanel?
+    private var documentationState: CodeCompletionDocPanel.State = .hidden
+    private var documentationTask: Task<Void, Never>?
+
+    /// Whether the reader has asked for the card. Separate from the panel's
+    /// own visibility because the card is legitimately empty for a server
+    /// that answers no documentation, and "asked for and empty" has to
+    /// survive the selection moving to a row that does have some.
+    private var isShowingDocumentation = false
 
     /// How long the caret rests before the list asks for suggestions.
     ///
@@ -978,6 +1064,29 @@ final class CodeNSTextView: NSTextView {
     /// that knows the file's colours and language.
     var hoverTheme: CodeTheme = .fallback
     var hoverLanguage: CodeLanguage = .plain
+
+    /// The three auto-closing switches, mirrored from the configuration.
+    ///
+    /// Held here rather than read from a shared configuration because this is
+    /// the object the keystroke arrives at, and the answer has to be one
+    /// property load: the alternative is asking the coordinator on every
+    /// character typed.
+    var closesBrackets = true
+    var closesQuotes = true
+    var closesTags = true
+
+    /// Which markup this file is, which the language cannot answer.
+    ///
+    /// `.ts` and `.tsx` are one `CodeLanguage`, and that is right for lexing
+    /// and wrong here: JSX is legal in one and a syntax error in the other,
+    /// so `<` means a tag in the first and only ever a generic in the second.
+    /// Kept beside the language rather than inside `CodeEditorConfiguration`
+    /// because it is a fact about the *file* and not a preference about the
+    /// editor — and because the configuration is what the appearance pass
+    /// compares to decide whether anything changed. A field that differs for
+    /// every tab would make that comparison always fail, which is how the
+    /// whole document ends up being re-coloured on each switch.
+    var tagDialect: CodeTagDialect = .none
 
     /// Whether a click means "go to the definition" rather than "put the
     /// cursor here".
@@ -1294,6 +1403,37 @@ final class CodeNSTextView: NSTextView {
         requestCompletions(explicitly: false, immediate: true)
     }
 
+    /// Which language the caret's line is actually written in.
+    ///
+    /// A container language answers nothing useful about a single line, and
+    /// that was a real bug rather than a hypothetical one: `.vue` routes to
+    /// `SFCRegions`, which needs the whole document to find `^<script>` and
+    /// `^</script>`, so a lone line came back with **no tokens at all** and
+    /// the caller's string-and-comment suppression silently never fired in a
+    /// Vue file. Measured — the same line yields `[keyword, string]` as
+    /// `.javascript` and `[]` as `.vue`.
+    ///
+    /// The obvious repair is to hand over the whole document and scope the
+    /// range to the line, and that is correct and unaffordable: 2.7 ms per
+    /// keystroke on a 5000-line component, growing linearly with the file,
+    /// because `SFCRegions` compiles three expressions and scans everything
+    /// three times per call with no cache. Resolving the language instead
+    /// costs a bounded backwards literal search and leaves the tokenizing
+    /// scoped to one line, which is ~12 µs.
+    ///
+    /// Only a container needs resolving. Everything else — including `.jsx`,
+    /// which is JavaScript that happens to carry tags — is already the
+    /// language its lines are written in.
+    static func effectiveLanguage(
+        _ language: CodeLanguage,
+        in content: NSString,
+        at caret: Int,
+        dialect: CodeTagDialect
+    ) -> CodeLanguage {
+        guard language == .vue else { return language }
+        return CodeTagClose.isInMarkup(content, caret: caret, dialect: dialect) ? .html : .javascript
+    }
+
     /// The trigger policy, asked over the caret's line only — a per-keystroke
     /// path cannot afford to tokenize the document to find out whether it is
     /// inside a string.
@@ -1304,7 +1444,12 @@ final class CodeNSTextView: NSTextView {
         let line = content.substring(with: lineRange)
         let caretInLine = caret - lineRange.location
 
-        let suppressed = SyntaxHighlighter(language: hoverLanguage)
+        let suppressed = SyntaxHighlighter(language: Self.effectiveLanguage(
+            hoverLanguage,
+            in: content,
+            at: caret,
+            dialect: tagDialect
+        ))
             .tokens(in: line, range: NSRange(location: 0, length: (line as NSString).length))
             .contains { token in
                 (token.kind == .string || token.kind == .comment)
@@ -1344,25 +1489,27 @@ final class CodeNSTextView: NSTextView {
         completionTask = Task { [weak self, delay] in
             if delay > .zero { try? await Task.sleep(for: delay) }
             guard !Task.isCancelled else { return }
-            let words = await completionProvider(offset)
+            let answer = await completionProvider(offset)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.completionGeneration == generation else { return }
-                self.showCompletions(words, requestedAt: offset)
+
+                /// The one case that must not reach `showCompletions`: it is
+                /// not an answer, so there is nothing to draw and — crucially
+                /// — nothing to clear.
+                guard case .items(let items) = answer else { return }
+                self.showCompletions(items, requestedAt: offset)
             }
         }
     }
 
     /// Ranks an answer and puts it on screen.
-    private func showCompletions(_ words: [String], requestedAt offset: Int) {
+    private func showCompletions(_ items: [CodeCompletionItem], requestedAt offset: Int) {
         let content = string as NSString
         let caret = selectedRange().location
         let prefix = Self.identifierRange(in: content, endingAt: caret)
 
         let query = content.substring(with: prefix)
-        let items = words.map {
-            CodeCompletionItem(kind: .text, label: $0, insertText: $0, source: .server)
-        }
         let ranked = CodeCompletionFilter.rank(items, query: query)
         guard !ranked.isEmpty else {
             dismissCompletions()
@@ -1409,8 +1556,101 @@ final class CodeNSTextView: NSTextView {
     private func makeCompletionPanel() -> CodeCompletionPanel {
         let panel = CodeCompletionPanel()
         panel.onAccept = { [weak self] item in self?.acceptCompletion(item) }
+        panel.iconFont = completionIconFont
+        panel.offersDocumentation = { [weak self] item in
+            self?.completionOffersDocumentation?(item) ?? false
+        }
+        panel.onInfoClicked = { [weak self] item in self?.toggleDocumentation(for: item) }
+
+        /// Once the card is open it follows the selection, which is what makes
+        /// it worth opening: a card that described the row you clicked and then
+        /// went stale under the arrow keys would have to be closed and reopened
+        /// to be read, and nobody does that twice.
+        panel.onSelectionChange = { [weak self] item in
+            guard let self, self.isShowingDocumentation else { return }
+            guard let item else {
+                self.hideDocumentation()
+                return
+            }
+            self.requestDocumentation(for: item)
+        }
+
         completionPanel = panel
         return panel
+    }
+
+    /// The info glyph is a toggle, not a one-way door: it is the same control
+    /// for "show me this" and "that is enough".
+    private func toggleDocumentation(for item: CodeCompletionItem) {
+        if isShowingDocumentation {
+            hideDocumentation()
+        } else {
+            isShowingDocumentation = true
+            requestDocumentation(for: item)
+        }
+    }
+
+    /// Draws what is already known, then asks for the rest.
+    ///
+    /// In that order, and the order is the feature. The row's own detail — a
+    /// type, a module — needs no request at all, so something true about the
+    /// highlighted row is on screen before anything is sent. Arrowing down a
+    /// list therefore never leaves an empty card waiting on a server; the prose
+    /// fills in underneath a signature that was already right.
+    private func requestDocumentation(for item: CodeCompletionItem) {
+        guard isShowingDocumentation, let completionDocProvider else { return }
+
+        documentationState = CodeCompletionDocPanel.state(
+            hasSelection: true,
+            supportsResolve: completionOffersDocumentation?(item) ?? false
+        )
+        presentDocumentation(detail: item.detail)
+
+        documentationTask?.cancel()
+        documentationTask = Task { [weak self] in
+            let outcome = await completionDocProvider(item)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.isShowingDocumentation else { return }
+
+                /// Folded through `state(after:current:)` rather than assigned,
+                /// because a superseded answer has to leave the card alone —
+                /// every request cancels the one before it, so that is the
+                /// answer that arrives most often.
+                self.documentationState = CodeCompletionDocPanel.state(
+                    after: outcome,
+                    current: self.documentationState
+                )
+                self.presentDocumentation(detail: item.detail)
+            }
+        }
+    }
+
+    private func presentDocumentation(detail: String?) {
+        guard let list = completionPanel, list.isVisible else { return }
+
+        let panel = documentationPanel ?? {
+            let made = CodeCompletionDocPanel()
+            documentationPanel = made
+            return made
+        }()
+
+        panel.present(
+            CodeCompletionDocPanel.Content(state: documentationState, detail: detail),
+            theme: hoverTheme,
+            font: font ?? .monospacedSystemFont(ofSize: 12, weight: .regular),
+            language: hoverLanguage,
+            beside: list.frame,
+            over: self
+        )
+    }
+
+    private func hideDocumentation() {
+        isShowingDocumentation = false
+        documentationTask?.cancel()
+        documentationTask = nil
+        documentationState = .hidden
+        documentationPanel?.dismiss()
     }
 
     /// Replaces the word being completed with the item's text.
@@ -1431,12 +1671,18 @@ final class CodeNSTextView: NSTextView {
     }
 
     /// Closes the list and invalidates anything still in flight for it.
+    ///
+    /// The card goes with it. It describes a row of this list and there is no
+    /// state in which it is right for one to outlive the other — a card left
+    /// floating over the text after the list closed is a window nothing can
+    /// dismiss.
     func dismissCompletions() {
         completionTask?.cancel()
         completionTask = nil
         completionSession = nil
         completionGeneration += 1
         completionPanel?.dismiss()
+        hideDocumentation()
     }
 
     /// Whether a list is open, for the key-handling table.
@@ -1494,6 +1740,19 @@ final class CodeNSTextView: NSTextView {
 
     private static let quoteCharacters: Set<Character> = ["\"", "'", "`"]
 
+    /// Whether auto-closing is switched on for the class this character
+    /// belongs to.
+    ///
+    /// Stepping over an existing closer is gated on the same answer as
+    /// inserting one, and that is a decision rather than an oversight. With
+    /// closing switched off nothing was ever inserted for the reader, so a
+    /// closer sitting after the caret is one they typed on purpose — stepping
+    /// over it would swallow the keystroke that was meant to produce the
+    /// second one.
+    private func closes(_ character: Character) -> Bool {
+        Self.quoteCharacters.contains(character) ? closesQuotes : closesBrackets
+    }
+
     private static func character(in content: NSString, at index: Int) -> Character? {
         guard index >= 0, index < content.length else { return nil }
         return Character(UnicodeScalar(content.character(at: index)) ?? " ")
@@ -1521,8 +1780,62 @@ final class CodeNSTextView: NSTextView {
         /// and what the list should react to is the character the caret now
         /// sits behind.
         if let typed = (string as? String)?.last {
+            insertTextClosingTags(typed)
             completionDidType(typed)
         }
+    }
+
+    /// Closes a markup element once the character that decides it is already
+    /// in the document.
+    ///
+    /// A third call rather than two more branches inside the auto-closing
+    /// body, for two reasons that both point the same way. Neither `>` nor
+    /// `/` is a bracket or a quote, so nothing above ever consumes them —
+    /// they always reach the plain insertion at the bottom, which means this
+    /// runs on a document that already contains the typed character. And that
+    /// is exactly the arrangement `CodeTagClose` wants: it reads the deciding
+    /// character out of the text instead of being told what was typed, so the
+    /// caller and the scanner cannot disagree about what the buffer says.
+    ///
+    /// Keeping them out of that body also keeps its "four early returns"
+    /// warning true, which is the whole reason the completion hook lives in
+    /// the wrapper.
+    private func insertTextClosingTags(_ typed: Character) {
+        guard closesTags else { return }
+
+        let caret = selectedRange().location
+        let content = string as NSString
+
+        let insertion: String?
+        switch typed {
+        case ">":
+            insertion = CodeTagClose.closingTag(in: content, caret: caret, dialect: tagDialect)
+        case "/":
+            insertion = CodeTagClose.closingTagCompletion(in: content, caret: caret, dialect: tagDialect)
+        default:
+            return
+        }
+
+        guard let insertion else { return }
+
+        /// Through the delegate rather than by writing to the storage
+        /// directly: this is what registers a single undo step and what tells
+        /// the host the buffer moved. A raw `replaceCharacters` leaves the
+        /// language server describing a file that no longer exists — the same
+        /// desynchronisation the formatter had.
+        let range = NSRange(location: caret, length: 0)
+        guard shouldChangeText(in: range, replacementString: insertion) else { return }
+        textStorage?.replaceCharacters(in: range, with: insertion)
+        didChangeText()
+
+        /// Typing `>` leaves the caret **between** the two tags, which is
+        /// where the content goes. Completing a `</` puts it after the tag it
+        /// just finished, because that element is now closed and there is
+        /// nothing left to write inside it.
+        setSelectedRange(NSRange(
+            location: typed == ">" ? caret : caret + (insertion as NSString).length,
+            length: 0
+        ))
     }
 
     /// Closes a bracket or quote as it is typed, and steps over one that is
@@ -1548,12 +1861,12 @@ final class CodeNSTextView: NSTextView {
         let content = self.string as NSString
         let after = Self.character(in: content, at: caret)
 
-        if let after, after == typed, Self.autoClosingPairs.values.contains(typed) {
+        if let after, after == typed, Self.autoClosingPairs.values.contains(typed), closes(typed) {
             setSelectedRange(NSRange(location: caret + 1, length: 0))
             return
         }
 
-        if let closing = Self.autoClosingPairs[typed] {
+        if let closing = Self.autoClosingPairs[typed], closes(typed) {
             if Self.quoteCharacters.contains(typed) {
                 let before = Self.character(in: content, at: caret - 1)
                 let touchesAWord = [before, after].contains { $0?.isLetter == true || $0?.isNumber == true }
@@ -1589,7 +1902,8 @@ final class CodeNSTextView: NSTextView {
             let content = self.string as NSString
             if let before = Self.character(in: content, at: caret - 1),
                let after = Self.character(in: content, at: caret),
-               Self.autoClosingPairs[before] == after {
+               Self.autoClosingPairs[before] == after,
+               closes(before) {
                 super.replaceCharacters(in: NSRange(location: caret - 1, length: 2), with: "")
                 return
             }
