@@ -95,7 +95,14 @@ final class LanguageResolver: ObservableObject {
     /// what lets the second server arrive without every call site in
     /// `LSPCenter` learning about it separately.
     func serverDefinitions(forPath path: String) -> [LSPServerDefinition] {
-        serverDefinition(forPath: path).map { [$0] } ?? []
+        let name = (path as NSString).lastPathComponent
+        if let contributed = catalog.contribution(forFileName: name) {
+            return contributed.serverDefinition.map { [$0] } ?? []
+        }
+        return LSPServerRegistry.servers(
+            forPath: path,
+            toolchain: TypeScriptToolchain.resolve(root: LSPCenter.workspaceRoot(for: path))
+        )
     }
 
     func serverDefinition(forLanguage languageID: String) -> LSPServerDefinition? {

@@ -370,7 +370,18 @@ final class LSPCenter: ObservableObject {
     /// else uses, and the entry would look like a second server that never
     /// answers.
     private static func resolvedServers(forPath path: String) -> [LSPServerDefinition] {
-        LanguageResolver.shared.serverDefinitions(forPath: path).map(effectiveDefinition)
+        resolvedBaseServers(forPath: path).map(effectiveDefinition)
+    }
+
+    /// The same list *before* any override.
+    ///
+    /// Needed because an override is stored under the command it replaces, so
+    /// reading one back requires knowing what that was. `Key.command` cannot
+    /// answer — it is the command after the override — and asking the
+    /// registry by language id cannot either, now that one language can have
+    /// two servers: it would hand the secondary the primary's override.
+    private static func resolvedBaseServers(forPath path: String) -> [LSPServerDefinition] {
+        LanguageResolver.shared.serverDefinitions(forPath: path)
     }
 
     private static func resolvedServer(forPath path: String) -> LSPServerDefinition? {
@@ -410,14 +421,15 @@ final class LSPCenter: ObservableObject {
     /// and only one of those two servers is reading a document whose numbering
     /// means anything.
     func didOpen(path: String, text: String) {
-        let definitions = Self.resolvedServers(forPath: path)
-        guard !definitions.isEmpty else { return }
+        let bases = Self.resolvedBaseServers(forPath: path)
+        guard !bases.isEmpty else { return }
 
         if !openDocuments.contains(path) { versions[path] = 1 }
         openDocuments.insert(path)
         let version = versions[path] ?? 1
 
-        for definition in definitions {
+        for base in bases {
+            let definition = Self.effectiveDefinition(base)
             let key = Self.key(for: definition, path: path)
 
             // Already announced to *this* server: a second `didOpen` for the
@@ -426,7 +438,11 @@ final class LSPCenter: ObservableObject {
             guard announced[path]?.contains(key) != true else { continue }
 
             Task { [weak self] in
-                guard let server = await self?.server(for: key, definition: definition) else { return }
+                guard let server = await self?.server(
+                    for: key,
+                    definition: definition,
+                    baseCommand: base.command
+                ) else { return }
                 await MainActor.run { _ = self?.announced[path, default: []].insert(key) }
                 try? server.notify("textDocument/didOpen", params: [
                     "textDocument": [
@@ -1234,7 +1250,11 @@ final class LSPCenter: ObservableObject {
     /// rename and the availability sweep all arrive through this door; a
     /// check at each of them would be a check somebody adds a thirteenth
     /// caller without.
-    private func server(for key: Key, definition: LSPServerDefinition) async -> LSPProcess? {
+    private func server(
+        for key: Key,
+        definition: LSPServerDefinition,
+        baseCommand: String
+    ) async -> LSPProcess? {
         if let existing = servers[key] { return existing }
         guard !starting.contains(key) else { return nil }
         starting.insert(key)
@@ -1281,7 +1301,12 @@ final class LSPCenter: ObservableObject {
         status[key] = .starting
 
         let initializationOptions: LSPValue?
-        switch await resolvedInitializationOptions(for: definition, key: key, searchPath: searchPath) {
+        switch await resolvedInitializationOptions(
+            for: definition,
+            key: key,
+            baseCommand: baseCommand,
+            searchPath: searchPath
+        ) {
         case .failure(let reason):
             status[key] = .failedToStart(reason: reason)
             return nil
@@ -1324,14 +1349,13 @@ final class LSPCenter: ObservableObject {
     /// registry has never heard of, keys its override on the command its
     /// manifest asked for instead of falling through to the overridden one.
     ///
-    /// ⚠️ That lookup asks for **one** definition by language id, and it is
-    /// the piece of this file that a second server for the same language
-    /// invalidates: it would answer with the primary's default command, and
-    /// the secondary would read the primary's override. The key cannot supply
-    /// it either — `Key.command` is the command *after* the override, and the
-    /// store is keyed by the one before. Resolving this needs the base
-    /// definition carried down to here, and it has to be done in the same
-    /// change that gives a language its second server.
+    /// `baseCommand` is carried down from `didOpen` rather than resolved
+    /// here, and that is the fix for the hazard the single-server version
+    /// left behind: asking the registry for "the" server of a language id
+    /// answers with the primary, so the `.vue` file's TypeScript half would
+    /// have read the *Vue server's* override. `Key.command` cannot stand in
+    /// either — it is the command after the override, and the store is keyed
+    /// by the one before.
     ///
     /// A manifest's own `initializationOptions` are deliberately **not**
     /// consulted here, even though `LanguageResolver` can supply them. The
@@ -1343,10 +1367,10 @@ final class LSPCenter: ObservableObject {
     private func resolvedInitializationOptions(
         for definition: LSPServerDefinition,
         key: Key,
+        baseCommand: String,
         searchPath: String
     ) async -> LSPOutcome<LSPValue?> {
-        let defaultCommand = Self.resolvedServer(forLanguage: key.languageID)?.command ?? definition.command
-        if let override = LSPServerOverrideStore.override(for: defaultCommand) {
+        if let override = LSPServerOverrideStore.override(for: baseCommand) {
             let raw = override.initializationOptionsJSON.trimmingCharacters(in: .whitespacesAndNewlines)
             if !raw.isEmpty {
                 switch Self.parseInitializationOptions(raw) {
@@ -1366,6 +1390,21 @@ final class LSPCenter: ObservableObject {
             }.value
             switch resolved {
             case .success(let tsdk): return .success(LSPInitializationOptions.vueValue(tsdk: tsdk))
+            case .failure(let reason): return .failure(reason)
+            }
+
+        case .vueTypeScriptPlugin:
+            /// A failure here is reported rather than swallowed, and that is
+            /// the whole point of the case: without the plugin this server
+            /// refuses the document, so starting it anyway would spend a
+            /// process to produce silence. `failedToStart(reason:)` puts the
+            /// sentence in the banner, where the reader can act on it.
+            let root = key.root
+            let resolved = await Task.detached(priority: .utility) {
+                LSPInitializationOptions.vueTypeScriptPlugin(root: root)
+            }.value
+            switch resolved {
+            case .success(let value): return .success(value)
             case .failure(let reason): return .failure(reason)
             }
         }
@@ -1519,6 +1558,17 @@ final class LSPCenter: ObservableObject {
         serverCapabilities.removeValue(forKey: key)
         completionSupport.removeValue(forKey: key)
         status[key] = .crashed(status: exitStatus)
+
+        /// A dead server's problems are not the file's problems any more.
+        /// This mattered little while one server owned a file — the
+        /// underlines were stale but at least consistent — and matters a lot
+        /// now: with two servers, one dying leaves its errors sitting beside
+        /// the other's live ones, indistinguishable, and nothing ever removes
+        /// them.
+        for path in diagnosticsByServer.keys {
+            guard diagnosticsByServer[path]?.removeValue(forKey: key) != nil else { continue }
+            republishDiagnostics(for: path)
+        }
     }
 
     /// The enclosing repository, else the file's own folder.

@@ -451,7 +451,14 @@ struct LanguageTrustGatePlacementTests {
     /// check at each of them is a check the next caller is added without.
     @Test func theGateIsInsideTheFunctionThatStartsTheServer() throws {
         let center = try read("LSPCenter.swift")
-        let start = try #require(center.range(of: "private func server(for key: Key"))
+
+        /// Anchored on a fragment of the signature rather than the whole
+        /// declaration: the earlier version pinned `private func server(for
+        /// key: Key` verbatim and broke the day the parameter list wrapped
+        /// across lines, which is a test failing for a reformat instead of
+        /// for the thing it guards. `for key: Key,` — with the comma — still
+        /// belongs to this function alone.
+        let start = try #require(center.range(of: "for key: Key,"))
         let body = center[start.upperBound...]
         let construction = try #require(body.range(of: "LSPProcess(definition:"))
         let gate = try #require(body.range(of: "LanguageTrustGate.allowsLaunch"))

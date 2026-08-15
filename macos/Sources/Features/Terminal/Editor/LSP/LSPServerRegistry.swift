@@ -105,7 +105,7 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
     /// in one place and can't disagree about it.
     var category: LSPServerCategory {
         switch command {
-        case "typescript-language-server", "vue-language-server",
+        case "typescript-language-server", "tsc", "vue-language-server",
              "pyright-langserver", "bash-language-server",
              "intelephense", "ruby-lsp":
             return .script
@@ -151,12 +151,6 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
     /// guarantee: a convention every call site had to remember. Refusing
     /// here instead makes it a property of the value — it declines to name a
     /// shell command whoever asks, including a caller written next year.
-    ///
-    /// `""` rather than `nil` only because the caller in Settings takes a
-    /// non-optional and that file is not this one's to change. `String?` is
-    /// the honest signature and the empty string is the same refusal spelled
-    /// weakly: `$SHELL -lic ""` is a shell that runs nothing, so no manifest
-    /// text reaches it either way.
     var installCommand: String? {
         /// Nil, not empty. A contributed server has no install command this
         /// app may offer, because the only text it could offer is the
@@ -193,6 +187,9 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
         guard case .builtIn = origin else { return nil }
         switch command {
         case "typescript-language-server": return "npm rm -g typescript-language-server typescript"
+        /// The native server *is* the TypeScript package — removing it is
+        /// removing TypeScript, not an editor tool that wraps it.
+        case "tsc": return "npm rm -g typescript"
         case "vue-language-server": return "npm rm -g @vue/language-server"
         case "pyright-langserver": return "npm rm -g pyright"
         case "vscode-css-language-server", "vscode-html-language-server",
@@ -257,28 +254,28 @@ enum LSPServerRegistry {
             displayName: "TypeScript Language Server",
             command: "typescript-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g typescript-language-server typescript"
+            installHint: "npm i -g typescript-language-server typescript@6"
         ),
         LSPServerDefinition(
             languageID: "typescriptreact",
             displayName: "TypeScript Language Server",
             command: "typescript-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g typescript-language-server typescript"
+            installHint: "npm i -g typescript-language-server typescript@6"
         ),
         LSPServerDefinition(
             languageID: "javascript",
             displayName: "TypeScript Language Server",
             command: "typescript-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g typescript-language-server typescript"
+            installHint: "npm i -g typescript-language-server typescript@6"
         ),
         LSPServerDefinition(
             languageID: "javascriptreact",
             displayName: "TypeScript Language Server",
             command: "typescript-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g typescript-language-server typescript"
+            installHint: "npm i -g typescript-language-server typescript@6"
         ),
         LSPServerDefinition(
             languageID: "vue",
@@ -437,10 +434,199 @@ enum LSPServerRegistry {
         )
     ]
 
+    /// The servers that speak LSP without a wrapper.
+    ///
+    /// A table of its own rather than four more rows in `all`, because
+    /// `all` holds one entry per language id — `byLanguageID` keeps the
+    /// first of a duplicate and a repeated id there is normally a mistake,
+    /// which `languageIDsAreUnique` is there to catch. These deliberately
+    /// repeat four ids that `all` already has: they are the *other* server
+    /// for those languages, chosen per project rather than per language.
+    /// `distinctServers` unions both, so Settings lists the row.
+    ///
+    /// `byLanguageID` is built from `all` alone, so "the" server of a
+    /// language is still the wrapper. Which of the two a file actually gets
+    /// is not a property of the language and is not decided here — see
+    /// `servers(forPath:toolchain:)`.
+    ///
+    /// The hint is unpinned on purpose, the mirror of the `@6` on the wrapper:
+    /// `npm i -g typescript` installs 7, which is exactly what these rows want
+    /// and exactly what the wrapper cannot use.
+    static let nativeServers: [LSPServerDefinition] = [
+        LSPServerDefinition(
+            languageID: "typescript",
+            displayName: "TypeScript (native)",
+            command: "tsc",
+            arguments: ["--lsp", "--stdio"],
+            installHint: "npm i -g typescript"
+        ),
+        LSPServerDefinition(
+            languageID: "typescriptreact",
+            displayName: "TypeScript (native)",
+            command: "tsc",
+            arguments: ["--lsp", "--stdio"],
+            installHint: "npm i -g typescript"
+        ),
+        LSPServerDefinition(
+            languageID: "javascript",
+            displayName: "TypeScript (native)",
+            command: "tsc",
+            arguments: ["--lsp", "--stdio"],
+            installHint: "npm i -g typescript"
+        ),
+        LSPServerDefinition(
+            languageID: "javascriptreact",
+            displayName: "TypeScript (native)",
+            command: "tsc",
+            arguments: ["--lsp", "--stdio"],
+            installHint: "npm i -g typescript"
+        )
+    ]
+
     private static let byLanguageID: [String: LSPServerDefinition] = Dictionary(
         all.map { ($0.languageID, $0) },
         uniquingKeysWith: { first, _ in first }
     )
+
+    // MARK: Which servers a file gets
+
+    /// The command of the server that speaks LSP without a wrapper.
+    static let nativeTypeScriptCommand = "tsc"
+
+    /// Every file extension `tsc --lsp --stdio` will accept.
+    ///
+    /// **An allowlist, and it may never become a subtraction.** Measured, one
+    /// `didOpen` per process: `.ts`, `.tsx`, `.js`, `.jsx`, `.mts`, `.cts` and
+    /// `.json` are served; `.vue`, `.svelte`, `.astro`, `.mdx`, `.css` and a
+    /// file with no extension at all each **kill the process**:
+    ///
+    /// ```
+    /// panic: ScriptKind must be specified when parsing source file: …/probe.vue
+    /// github.com/microsoft/typescript-go/internal/parser.(*Parser).initializeState
+    /// ```
+    ///
+    /// It does not answer empty and it does not decline the document — it
+    /// dies, and every other file that server was serving dies with it. That
+    /// is why "everything except `.vue`" is the wrong shape: `.vue` is only
+    /// the first one anybody happened to try.
+    ///
+    /// **This is an upstream defect, not a design limit.** A language server
+    /// is supposed to decline a document it cannot parse, the way
+    /// `typescript-language-server` answers `Unexpected resource …`. If
+    /// `typescript-go` fixes it, this list can grow — until then it is the
+    /// contract, and `LSPServerRegistryTests` fails anyone who widens the
+    /// native entry past it.
+    static let nativeTypeScriptExtensions: Set<String> = [
+        "ts", "tsx", "js", "jsx", "mts", "cts", "json",
+    ]
+
+    /// Whether a binary may be handed this file at all.
+    ///
+    /// Keyed on the **command**, and the alternative is worth writing down
+    /// because it is the more obvious one: put the accepted set on
+    /// `LSPServerDefinition` and let it ride along the way `origin` does.
+    /// That does not work here, and the reason is what the two facts are
+    /// *about*. `origin` is a fact about where a definition came from, which
+    /// genuinely differs per definition. "`tsc` dies on a `.css`" is a fact
+    /// about the binary, identical for every definition that names it —
+    /// including the two this app never writes:
+    ///
+    /// - a **user override** repointing some other language's command at
+    ///   `tsc`, which keeps that language's definition and therefore that
+    ///   definition's (absent) field;
+    /// - a **contributed manifest** declaring `command: "tsc"` with
+    ///   `args: ["--lsp", "--stdio"]`, whose definition this file never
+    ///   built and cannot annotate.
+    ///
+    /// Neither would carry a field, so a field would protect neither. A
+    /// lookup by command protects both, and the usual objection to a lookup —
+    /// that a call site can forget it — is answered by there being exactly
+    /// one call site: `LSPCenter.resolvedPairs(forPath:)`, after the override
+    /// is applied, which is the only way any definition reaches a process.
+    ///
+    /// The trust gate cannot cover this. It approves a *command*; it has no
+    /// way to know the command panics on the file about to be opened, and a
+    /// user who approved `tsc` approved a language server, not a crash.
+    static func accepts(command: String, path: String) -> Bool {
+        guard command == nativeTypeScriptCommand else { return true }
+        return nativeTypeScriptExtensions.contains(
+            (path as NSString).pathExtension.lowercased()
+        )
+    }
+
+    /// Every server that should serve a file, primary first.
+    ///
+    /// Pure: the workspace's TypeScript arrives as a value, because deciding
+    /// it means touching a disk and this type does not. See
+    /// `TypeScriptToolchain.resolve(root:)`, and `LanguageResolver` for the
+    /// call that joins the two.
+    static func servers(
+        forPath path: String,
+        toolchain: TypeScriptToolchain
+    ) -> [LSPServerDefinition] {
+        guard let languageID = languageID(forPath: path) else { return [] }
+
+        if languageID == "vue" { return vueServers(toolchain: toolchain) }
+
+        guard let wrapper = server(forLanguage: languageID) else { return [] }
+        guard wrapper.command == "typescript-language-server" else { return [wrapper] }
+
+        /// The choice this whole file exists for, and it is a fact about the
+        /// project rather than a preference: a workspace with a `tsserver.js`
+        /// gets the wrapper that drives it, and a workspace without one gets
+        /// the binary that needs none. Pointing the wrapper at a TypeScript 7
+        /// does not degrade — it exits during `initialize`.
+        switch toolchain {
+        case .tsserver:
+            return [wrapper]
+        case .native:
+            return nativeServer(forLanguage: languageID).map { [$0] } ?? [wrapper]
+        }
+    }
+
+    /// A `.vue` is served by two processes, and has been since Volar 2
+    /// dropped takeover mode: the Vue server for the template and the style,
+    /// and `typescript-language-server` — loading `@vue/typescript-plugin` —
+    /// for the `<script>` block. One server per language id is the Volar 1.x
+    /// model.
+    ///
+    /// **The native entry is never one of them, and the reason is not that it
+    /// would not help.** It is that a `.vue` handed to `tsc --lsp` panics the
+    /// process — see `nativeTypeScriptExtensions`. So a project whose
+    /// TypeScript is 7 gets the template half and no script half at all, and
+    /// that has to be *said* rather than left as silence: the answer is "Vue
+    /// needs TypeScript 6.x in this project", not an empty completion list.
+    private static func vueServers(toolchain: TypeScriptToolchain) -> [LSPServerDefinition] {
+        guard let vue = server(forLanguage: "vue") else { return [] }
+        guard case .tsserver = toolchain else { return [vue] }
+        return [vue, vueTypeScriptServer]
+    }
+
+    /// The TypeScript half of a `.vue`.
+    ///
+    /// `languageID` is **`vue`**, not `typescript`, and that is load-bearing
+    /// rather than cosmetic: the plugin's `languages` array becomes tsserver's
+    /// `modeIds`, which is what registers this server for `vue` at all, and
+    /// the document has to arrive announced as `vue` to match it. It also
+    /// keeps this process on its own `LSPCenter.Key` — same language, same
+    /// root, different command — instead of colliding with the Vue server.
+    static let vueTypeScriptServer = LSPServerDefinition(
+        languageID: "vue",
+        displayName: "TypeScript Language Server",
+        command: "typescript-language-server",
+        arguments: ["--stdio"],
+        installHint: "npm i -g typescript-language-server typescript@6",
+        initializationOptionsKind: .vueTypeScriptPlugin
+    )
+
+    private static let nativeByLanguageID: [String: LSPServerDefinition] = Dictionary(
+        nativeServers.map { ($0.languageID, $0) },
+        uniquingKeysWith: { first, _ in first }
+    )
+
+    static func nativeServer(forLanguage languageID: String) -> LSPServerDefinition? {
+        nativeByLanguageID[languageID]
+    }
 
     /// The language ids share servers — four of them are the same
     /// TypeScript process — so extensions map to a language first and a
@@ -530,6 +716,6 @@ enum LSPServerRegistry {
     /// language ids point at it would be noise.
     static var distinctServers: [LSPServerDefinition] {
         var seen: Set<String> = []
-        return all.filter { seen.insert($0.command).inserted }
+        return (all + nativeServers).filter { seen.insert($0.command).inserted }
     }
 }
