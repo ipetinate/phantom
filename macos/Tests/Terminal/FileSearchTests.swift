@@ -76,6 +76,32 @@ struct FileSearchTests {
         #expect(!found.contains { $0.contains("/.git/") })
     }
 
+    /// The tree shows dot-names now, so a search runs with hidden files on
+    /// and `.git` is something it can finally see. Seeing it is fine;
+    /// walking into it is not — and this is the case that could not be
+    /// reached before, because nothing hidden was ever listed at all.
+    @Test func itStillRefusesToWalkIntoDotDirectoriesWhenHiddenFilesShow() {
+        let root = makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let found = search("index", in: root, showHidden: true)
+        #expect(!found.contains { $0.contains("/.git/") })
+        #expect(found.contains { $0.hasSuffix("src/index.ts") })
+    }
+
+    /// Searching for a dotfile by name is half the point of showing them.
+    @Test func itFindsDotNames() {
+        let root = makeTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try? "x".write(
+            to: root.appendingPathComponent(".env"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        #expect(search("env", in: root, showHidden: true).contains { $0.hasSuffix("/.env") })
+    }
+
     /// Matches are a flat list, so no row is indented against a parent the
     /// list isn't showing.
     @Test func matchesAreFlat() {

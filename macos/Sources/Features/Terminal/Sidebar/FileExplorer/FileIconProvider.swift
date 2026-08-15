@@ -169,6 +169,12 @@ final class FileIconProvider: ObservableObject {
     }()
 
     /// Filenames that read better by name than by extension.
+    ///
+    /// Where most of the dot-names live, and they have to: `.eslintrc` and
+    /// `.zshrc` have no extension in any useful sense — the whole name is
+    /// the meaning — so without an entry here each one falls through to the
+    /// blank page icon. The ones that do carry a real suffix (`.env`,
+    /// `.prettierrc.json`) still resolve by extension and are left out.
     private static let symbolsByName: [String: (String, Color)] = [
         "dockerfile": ("shippingbox", .blue),
         "makefile": ("hammer", .orange),
@@ -176,6 +182,21 @@ final class FileIconProvider: ObservableObject {
         "readme.md": ("book", .blue),
         ".gitignore": ("arrow.triangle.branch", .orange),
         ".gitattributes": ("arrow.triangle.branch", .orange),
+        ".gitmodules": ("arrow.triangle.branch", .orange),
+        ".gitkeep": ("arrow.triangle.branch", .orange),
+        ".dockerignore": ("shippingbox", .blue),
+        ".editorconfig": ("list.bullet.rectangle", .yellow),
+        ".npmrc": ("list.bullet.rectangle", .yellow),
+        ".nvmrc": ("list.bullet.rectangle", .yellow),
+        ".yarnrc": ("list.bullet.rectangle", .yellow),
+        ".eslintrc": ("list.bullet.rectangle", .yellow),
+        ".prettierrc": ("list.bullet.rectangle", .yellow),
+        ".babelrc": ("list.bullet.rectangle", .yellow),
+        ".zshrc": ("terminal", .green),
+        ".zprofile": ("terminal", .green),
+        ".bashrc": ("terminal", .green),
+        ".bash_profile": ("terminal", .green),
+        ".profile": ("terminal", .green),
         "package.json": ("shippingbox", .red),
     ]
 
