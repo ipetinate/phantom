@@ -927,6 +927,10 @@ final class CodeNSTextView: NSTextView {
     /// The list currently on screen, if any.
     private var completionSession: CompletionSession?
 
+    /// Built on first use and kept, so a burst of typing reuses one window
+    /// rather than making and destroying one per keystroke.
+    private(set) var completionPanel: CodeCompletionPanel?
+
     /// The in-flight fetch. Cancelled on every new one, rather than dropped —
     /// dropping the *new* request is what the version this replaces did, and
     /// it meant the answer on screen was always the one for a prefix the
@@ -1350,18 +1354,12 @@ final class CodeNSTextView: NSTextView {
     }
 
     /// Ranks an answer and puts it on screen.
-    ///
-    /// ⚠️ The panel itself lands separately, so today this keeps the session
-    /// without drawing it. That is deliberate rather than forgotten: the
-    /// ranking, the trigger policy and the cancellation are all exercised by
-    /// this path, and wiring a half-built panel in would make a display bug
-    /// and a logic bug indistinguishable while both were still moving.
     private func showCompletions(_ words: [String], requestedAt offset: Int) {
-        guard case .open(let prefix) = completionDecision(typed: nil)
-            ?? .open(prefix: NSRange(location: offset, length: 0))
-        else { return }
+        let content = string as NSString
+        let caret = selectedRange().location
+        let prefix = Self.identifierRange(in: content, endingAt: caret)
 
-        let query = (string as NSString).substring(with: prefix)
+        let query = content.substring(with: prefix)
         let items = words.map {
             CodeCompletionItem(kind: .text, label: $0, insertText: $0, source: .server)
         }
@@ -1370,7 +1368,66 @@ final class CodeNSTextView: NSTextView {
             dismissCompletions()
             return
         }
+
         completionSession = CompletionSession(prefix: prefix, items: ranked, selection: 0)
+
+        /// Anchored on the **start of the word**, not the caret, so the list
+        /// lines up under what is being completed rather than drifting right
+        /// as the reader types. A zero-height rect means TextKit has not laid
+        /// the line out yet, and the panel treats that as "do not show".
+        let anchor = firstRect(
+            forCharacterRange: NSRange(location: prefix.location, length: max(prefix.length, 1)),
+            actualRange: nil)
+
+        let panel = completionPanel ?? makeCompletionPanel()
+        panel.present(
+            ranked,
+            query: query,
+            theme: hoverTheme,
+            font: font ?? .monospacedSystemFont(ofSize: 12, weight: .regular),
+            anchor: anchor,
+            over: self
+        )
+    }
+
+    /// The word the caret sits at the end of.
+    ///
+    /// `$` counts, because it is a legal identifier character in JavaScript
+    /// and TypeScript and dropping it would make `$el` complete as `el`.
+    static func identifierRange(in content: NSString, endingAt caret: Int) -> NSRange {
+        var start = min(max(caret, 0), content.length)
+        while start > 0 {
+            let scalar = UnicodeScalar(content.character(at: start - 1)) ?? " "
+            let character = Character(scalar)
+            guard character.isLetter || character.isNumber || character == "_" || character == "$"
+            else { break }
+            start -= 1
+        }
+        return NSRange(location: start, length: min(max(caret, 0), content.length) - start)
+    }
+
+    private func makeCompletionPanel() -> CodeCompletionPanel {
+        let panel = CodeCompletionPanel()
+        panel.onAccept = { [weak self] item in self?.acceptCompletion(item) }
+        completionPanel = panel
+        return panel
+    }
+
+    /// Replaces the word being completed with the item's text.
+    ///
+    /// Through `shouldChangeText` and `didChangeText` rather than a bare
+    /// `replaceCharacters`, so undo registers it as one step and the
+    /// delegate fires — which is what tells the language server the buffer
+    /// moved. A raw replacement desynchronises the server silently.
+    private func acceptCompletion(_ item: CodeCompletionItem) {
+        guard let session = completionSession else { return }
+        let range = session.prefix
+        dismissCompletions()
+
+        guard shouldChangeText(in: range, replacementString: item.insertText) else { return }
+        textStorage?.replaceCharacters(in: range, with: item.insertText)
+        didChangeText()
+        setSelectedRange(NSRange(location: range.location + (item.insertText as NSString).length, length: 0))
     }
 
     /// Closes the list and invalidates anything still in flight for it.
@@ -1379,10 +1436,52 @@ final class CodeNSTextView: NSTextView {
         completionTask = nil
         completionSession = nil
         completionGeneration += 1
+        completionPanel?.dismiss()
     }
 
     /// Whether a list is open, for the key-handling table.
     var isCompletionListOpen: Bool { completionSession != nil }
+
+    /// Which keys the open list claims, and — the part that matters — which
+    /// it does not.
+    ///
+    /// Nothing is claimed unless a list is open, which is the whole
+    /// conflict-avoidance strategy: with the list closed every selector falls
+    /// through untouched, so Return still reaches the find bar and Tab still
+    /// indents. Spelled as a static over a `Bool` so the entire keyboard
+    /// contract is testable without a window, an event or a panel.
+    static func completionCommand(
+        for selector: Selector,
+        isListOpen: Bool
+    ) -> CodeCompletionPanel.Movement?? {
+        guard isListOpen else { return nil }
+        switch selector {
+        case #selector(NSResponder.moveDown(_:)): return .some(.down)
+        case #selector(NSResponder.moveUp(_:)): return .some(.up)
+        case #selector(NSResponder.scrollPageDown(_:)): return .some(.pageDown)
+        case #selector(NSResponder.scrollPageUp(_:)): return .some(.pageUp)
+        case #selector(NSResponder.insertNewline(_:)),
+             #selector(NSResponder.insertTab(_:)),
+             #selector(NSResponder.cancelOperation(_:)):
+            return .some(nil)
+        default: return nil
+        }
+    }
+
+    override func doCommand(by selector: Selector) {
+        guard let claimed = Self.completionCommand(for: selector, isListOpen: isCompletionListOpen) else {
+            super.doCommand(by: selector)
+            return
+        }
+
+        if let movement = claimed {
+            completionPanel?.moveSelection(movement)
+        } else if selector == #selector(NSResponder.cancelOperation(_:)) {
+            dismissCompletions()
+        } else {
+            completionPanel?.acceptSelection()
+        }
+    }
 
     /// What each opener closes with. Quotes map to themselves: typing one
     /// is either "open a string" or "step over the one already there"
