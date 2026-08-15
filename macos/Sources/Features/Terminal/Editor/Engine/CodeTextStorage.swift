@@ -12,26 +12,53 @@ import AppKit
 /// `/*` and everything below it becomes a comment — so a repaint has to
 /// cover more than the characters that changed.
 final class CodeTextStorage {
-    private(set) var language: CodeLanguage
+    /// How this file is lexed.
+    ///
+    /// A `LanguageSyntax` rather than a `CodeLanguage`, because a language
+    /// contributed by an extension has no `CodeLanguage` case of its own —
+    /// it lexes as some base with its own keywords and comment markers laid
+    /// over the top. Holding only the base is what made a contributed
+    /// language get a language server and no colour: the server side already
+    /// resolved through the catalogue while this side still asked the
+    /// filename.
+    private(set) var syntax: LanguageSyntax
+
+    /// The base the syntax lexes as, for the callers that genuinely mean the
+    /// family — a hover card, the choice of markup dialect — rather than
+    /// this file's exact rules.
+    var language: CodeLanguage { syntax.base }
+
     private var highlighter: SyntaxHighlighter
     var theme: CodeTheme
     var configuration: CodeEditorConfiguration
 
     init(
-        language: CodeLanguage,
+        syntax: LanguageSyntax,
         theme: CodeTheme,
         configuration: CodeEditorConfiguration
     ) {
-        self.language = language
-        self.highlighter = SyntaxHighlighter(language: language)
+        self.syntax = syntax
+        self.highlighter = SyntaxHighlighter(syntax: syntax)
         self.theme = theme
         self.configuration = configuration
     }
 
+    convenience init(
+        language: CodeLanguage,
+        theme: CodeTheme,
+        configuration: CodeEditorConfiguration
+    ) {
+        self.init(syntax: .builtIn(language), theme: theme, configuration: configuration)
+    }
+
+    func setSyntax(_ syntax: LanguageSyntax) {
+        guard syntax != self.syntax else { return }
+        self.syntax = syntax
+        self.highlighter = SyntaxHighlighter(syntax: syntax)
+    }
+
     func setLanguage(_ language: CodeLanguage) {
-        guard language != self.language else { return }
-        self.language = language
-        self.highlighter = SyntaxHighlighter(language: language)
+        setSyntax(.builtIn(language))
     }
 
     /// Applies colors to `range` of `storage`.

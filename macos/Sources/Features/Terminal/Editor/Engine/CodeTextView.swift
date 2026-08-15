@@ -33,7 +33,12 @@ struct CodeTextView: NSViewRepresentable {
     /// `text` when this changes and at no other time.
     let textRevision: Int
 
-    let language: CodeLanguage
+    /// How this file is lexed, base language included.
+    ///
+    /// Not a bare `CodeLanguage`: a language an extension contributed has no
+    /// case of its own, and passing only the base is what left such a file
+    /// with a server but no colour.
+    let syntax: LanguageSyntax
 
     /// Which markup this file is. Beside `language` rather than inside the
     /// configuration, because it describes the file and not the editor — see
@@ -102,7 +107,7 @@ struct CodeTextView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             storage: CodeTextStorage(
-                language: language,
+                syntax: syntax,
                 theme: theme,
                 configuration: configuration
             ),
@@ -285,7 +290,7 @@ struct CodeTextView: NSViewRepresentable {
         }
         context.coordinator.applyUnderlines(underlines)
 
-        context.coordinator.storage.setLanguage(language)
+        context.coordinator.storage.setSyntax(syntax)
         context.coordinator.applyAppearance(
             theme: theme,
             configuration: configuration,
@@ -492,7 +497,7 @@ struct CodeTextView: NSViewRepresentable {
             let text = textStorage.string as NSString
             // The tokens the highlighter already produced, so a brace inside
             // a string or a comment doesn't open a level that never closes.
-            let skipped = SyntaxHighlighter(language: storage.language)
+            let skipped = SyntaxHighlighter(syntax: storage.syntax)
                 .tokens(in: textStorage.string, range: region)
                 .filter { $0.kind == .string || $0.kind == .comment }
                 .map(\.range)
@@ -620,7 +625,7 @@ struct CodeTextView: NSViewRepresentable {
         func refreshMinimap() {
             guard let minimap, minimap.isHidden == false, let textView else { return }
             let text = textView.string
-            let tokens = SyntaxHighlighter(language: storage.language)
+            let tokens = SyntaxHighlighter(syntax: storage.syntax)
                 .tokens(in: text, range: NSRange(location: 0, length: (text as NSString).length))
             minimap.setRows(CodeMinimapView.rows(for: text, tokens: tokens))
         }

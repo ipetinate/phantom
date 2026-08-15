@@ -675,6 +675,19 @@ extension LSPProcess {
             ],
             "publishDiagnostics": ["relatedInformation": true],
             "hover": ["contentFormat": ["markdown", "plaintext"]],
+            /// **Shadowed on every path that completes anything.**
+            /// `LSPCenter.clientCapabilities` lays its own `completion` block
+            /// over this one, and `LSPValue.merging` resolves a leaf in the
+            /// overlay's favour — so every key here has a counterpart there
+            /// that wins. Reachable only through `initialize`'s default
+            /// argument, which today is a bare transport in a test.
+            ///
+            /// `snippetSupport` therefore stays `false` here while it is
+            /// `true` there, and the disagreement is the honest one: a
+            /// transport with no editor behind it has nothing to consume a
+            /// `${1:placeholder}` with, and promising otherwise is how the
+            /// marker ends up typed into a file. The promise belongs where
+            /// the parser is.
             "completion": [
                 "completionItem": ["snippetSupport": false],
                 "contextSupport": true

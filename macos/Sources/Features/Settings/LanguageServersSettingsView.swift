@@ -639,7 +639,11 @@ private struct LanguageServerOverrideForm: View {
     /// The command the section shows and the copy button copies.
     private var activeCommand: String {
         guard showsUninstall, let uninstall = server.uninstallCommand else {
-            return server.installCommand
+            /// Empty for a contributed server, which has no command this app
+            /// may offer — see `installCommand`. The section around this is
+            /// already hidden in that case; the fallback is here so a future
+            /// caller that forgets gets nothing rather than something.
+            return server.installCommand ?? ""
         }
         return uninstall
     }

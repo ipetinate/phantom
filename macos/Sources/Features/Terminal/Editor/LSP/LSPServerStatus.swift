@@ -34,6 +34,18 @@ enum LSPServerStatus: Equatable, Sendable {
     /// `LSPCenter.hasCapability(_:forPath:)`.
     case running
 
+    /// The binary is there and the server was not started, because it comes
+    /// from an extension whose launch the reader has not approved — either
+    /// refused outright, or refused by a rule no answer overrides. See
+    /// `LanguageTrust.Verdict`.
+    ///
+    /// A state of its own rather than a `failedToStart(reason:)` with a
+    /// sentence in it, because nothing failed: this is the gate working. The
+    /// distinction is what lets a banner offer the way back — the decision
+    /// lives in Settings — instead of inviting a reader to debug a server
+    /// that is behaving correctly by not existing.
+    case notApproved
+
     /// The process never reached `running` — it failed to launch, or
     /// `initialize` threw. Distinct from `crashed`: this server never did
     /// anything.
@@ -51,8 +63,10 @@ enum LSPServerStatus: Equatable, Sendable {
     /// noise in a banner.
     var isFailure: Bool {
         switch self {
-        case .notInstalled, .failedToStart, .crashed, .unresponsive: return true
-        case .starting, .running: return false
+        case .notInstalled, .notApproved, .failedToStart, .crashed, .unresponsive:
+            return true
+        case .starting, .running:
+            return false
         }
     }
 
@@ -61,6 +75,7 @@ enum LSPServerStatus: Equatable, Sendable {
     var summary: String {
         switch self {
         case .notInstalled: return "isn't installed"
+        case .notApproved: return "isn't approved to run — you can change that in Settings"
         case .starting: return "is starting"
         case .running: return "is running"
         case .failedToStart(let reason): return "didn't start: \(reason)"

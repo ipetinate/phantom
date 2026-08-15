@@ -114,11 +114,32 @@ final class LanguageResolver: ObservableObject {
             languageID: languageID
         )
         reload()
+        Self.noteResolutionChanged()
     }
 
     /// Forgets a trust decision, which is how a refusal is undone.
     func forgetTrust(extensionID: String) {
         LanguageTrustStore.forget(extensionID)
+        Self.noteResolutionChanged()
+    }
+
+    /// Tells the open documents to introduce themselves again.
+    ///
+    /// Without it, undoing a refusal is a setting that appears to do
+    /// nothing: `LSPCenter` asked the gate once, was told no, and has no
+    /// reason to ask a second time — the file would have to be closed and
+    /// reopened for the answer to be taken. The generation counter is the
+    /// mechanism that already exists for "a server that could not run before
+    /// can run now", and a decision reversed in Settings is exactly that.
+    ///
+    /// **The dependency only points this way.** `LSPCenter` reads this
+    /// resolver, including from its own initializer, so anything here that
+    /// reached for `LSPCenter.shared` *eagerly* would re-enter a singleton
+    /// still being constructed. Reaching for it from a user's gesture, long
+    /// after both exist, is safe; reaching for it from `reload()` — which
+    /// runs during `init` — would not be.
+    private static func noteResolutionChanged() {
+        LSPCenter.shared.noteAvailabilityChanged()
     }
 
     /// The verdict for a contributed language, for a Settings row that wants

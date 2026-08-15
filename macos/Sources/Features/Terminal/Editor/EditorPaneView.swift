@@ -252,7 +252,12 @@ private struct DocumentView: View {
             CodeTextView(
                 text: document.currentText,
                 textRevision: document.revision,
-                language: document.language,
+                /// Through the resolver, not `CodeLanguage.resolve` — a
+                /// language an extension contributed carries its own
+                /// keywords and comment markers, and asking the filename
+                /// directly is what made such a file get a language server
+                /// and no syntax colouring.
+                syntax: LanguageResolver.shared.syntax(forFileName: document.url.lastPathComponent),
                 /// From the file's name, not its language: `.ts` and `.tsx`
                 /// are the same `CodeLanguage`, and a tag closed in `.ts` is
                 /// always wrong because a `<` there can only be a generic.

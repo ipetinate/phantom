@@ -11,6 +11,7 @@ struct LSPServerStatusTests {
         #expect(!LSPServerStatus.running.isFailure)
 
         #expect(LSPServerStatus.notInstalled.isFailure)
+        #expect(LSPServerStatus.notApproved.isFailure)
         #expect(LSPServerStatus.failedToStart(reason: "boom").isFailure)
         #expect(LSPServerStatus.crashed(status: 1).isFailure)
         #expect(LSPServerStatus.unresponsive.isFailure)
@@ -28,5 +29,16 @@ struct LSPServerStatusTests {
     /// surface.
     @Test func theFailureReasonSurvivesIntoTheSummary() {
         #expect(LSPServerStatus.failedToStart(reason: "JAVA_HOME not set").summary.contains("JAVA_HOME not set"))
+    }
+
+    /// A withheld server is not a broken one, and the sentence has to say so
+    /// — with the way back, since the decision is reversible from Settings
+    /// and nowhere else. A reader told "didn't start" would go looking for a
+    /// fault in a server that is behaving correctly by not existing.
+    @Test func aWithheldServerSaysItIsAPermissionAndNotAFault() {
+        let summary = LSPServerStatus.notApproved.summary
+        #expect(summary.contains("approved"))
+        #expect(summary.contains("Settings"))
+        #expect(!summary.contains("didn't start"))
     }
 }

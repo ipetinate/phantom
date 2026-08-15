@@ -189,7 +189,8 @@ final class LSPCenter: ObservableObject {
         isProbingInstalls = true
 
         let commands = Set(
-            LSPServerRegistry.distinctServers.map { Self.effectiveDefinition($0).command }
+            (LSPServerRegistry.distinctServers + Self.contributedServers())
+                .map { Self.effectiveDefinition($0).command }
         )
         Task { [weak self] in
             let found = await Task.detached(priority: .utility) { () -> Set<String> in
@@ -257,7 +258,7 @@ final class LSPCenter: ObservableObject {
     func recheckMissingServers() {
         let notInstalledCommands = Set(status.compactMap { key, value -> String? in
             guard case .notInstalled = value else { return nil }
-            return LSPServerRegistry.server(forLanguage: key.languageID).map(Self.effectiveDefinition)?.command
+            return Self.resolvedServer(forLanguage: key.languageID).map(Self.effectiveDefinition)?.command
         })
         guard !notInstalledCommands.isEmpty else { return }
 
@@ -286,7 +287,7 @@ final class LSPCenter: ObservableObject {
                 guard let self else { return }
                 for key in Array(self.status.keys) {
                     guard case .notInstalled = self.status[key],
-                          let base = LSPServerRegistry.server(forLanguage: key.languageID),
+                          let base = Self.resolvedServer(forLanguage: key.languageID),
                           found.contains(Self.effectiveDefinition(base).command)
                     else { continue }
                     self.status.removeValue(forKey: key)
@@ -298,10 +299,54 @@ final class LSPCenter: ObservableObject {
         }
     }
 
+    // MARK: What starts for a file
+
+    /// What would start for a file: the compiled-in registry first, then a
+    /// user extension, then a bundled one. `LanguageResolver` owns that
+    /// order — see its `serverDefinition(forPath:)` — and these two functions
+    /// are the only door into it from here, so the precedence is not
+    /// re-derived once per call site.
+    ///
+    /// **If this subsystem is ever taken apart, the order to restore it in is
+    /// the gate first.** `LanguageTrustGate.allowsLaunch` in
+    /// `server(for:definition:)` has to be in the path before — or in the same
+    /// commit as — these functions. Reaching for the resolver while the gate
+    /// is missing is what turns a text file into a process: `command`, written
+    /// by whoever dropped a directory into `~/.config/phantom/extensions/`,
+    /// would travel from here to `Process.run` with nothing asked in between.
+    /// The reverse order is inert — a gate with no resolver behind it can only
+    /// refuse launches that never arrive — which is why *that* half is the one
+    /// that is safe to land alone.
+    private static func resolvedServer(forPath path: String) -> LSPServerDefinition? {
+        LanguageResolver.shared.serverDefinition(forPath: path)
+    }
+
+    /// The same resolution keyed by language id, for the paths that start
+    /// from a `Key` rather than from a file. See `resolvedServer(forPath:)`
+    /// for the rule that governs both.
+    private static func resolvedServer(forLanguage languageID: String) -> LSPServerDefinition? {
+        LanguageResolver.shared.serverDefinition(forLanguage: languageID)
+    }
+
+    /// The servers contributed by manifests that are actually in force.
+    ///
+    /// Used only where the question is *display* — "would this be found on
+    /// `PATH`" — never where it is launch. Locating a manifest-supplied
+    /// command is a `stat`, and it is the same `stat` the Settings row needs
+    /// to avoid telling a reader that a server they installed is missing.
+    ///
+    /// Reached from `refreshInstalledCommands`, which runs during this
+    /// object's own `init`, so `LanguageResolver` is constructed from inside
+    /// `LSPCenter.shared`. That direction is fine and the reverse is not:
+    /// see `LanguageResolver.noteResolutionChanged`.
+    private static func contributedServers() -> [LSPServerDefinition] {
+        LanguageResolver.shared.catalog.contributed.compactMap(\.serverDefinition)
+    }
+
     // MARK: Documents
 
     func didOpen(path: String, text: String) {
-        guard let base = LSPServerRegistry.server(forPath: path) else { return }
+        guard let base = Self.resolvedServer(forPath: path) else { return }
         let definition = Self.effectiveDefinition(base)
         let root = Self.workspaceRoot(for: path)
         let key = Key(languageID: definition.languageID, root: root)
@@ -348,7 +393,7 @@ final class LSPCenter: ObservableObject {
     /// were real. Cancelling from this side instead means the caller is told
     /// `.cancelled` and keeps what it is showing.
     func didChange(path: String, text: String) {
-        guard let definition = LSPServerRegistry.server(forPath: path),
+        guard let definition = Self.resolvedServer(forPath: path),
               openDocuments.contains(path)
         else { return }
 
@@ -437,7 +482,7 @@ final class LSPCenter: ObservableObject {
     }
 
     func didSave(path: String, text: String) {
-        guard let definition = LSPServerRegistry.server(forPath: path) else { return }
+        guard let definition = Self.resolvedServer(forPath: path) else { return }
         let key = Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path))
         // Before the save notification, so the server is not told a file was
         // saved while still holding the text from before the last edits.
@@ -449,7 +494,7 @@ final class LSPCenter: ObservableObject {
     }
 
     func didClose(path: String) {
-        guard let definition = LSPServerRegistry.server(forPath: path) else { return }
+        guard let definition = Self.resolvedServer(forPath: path) else { return }
         let key = Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path))
         openDocuments.remove(path)
         announced.removeValue(forKey: path)
@@ -479,7 +524,7 @@ final class LSPCenter: ObservableObject {
     /// included instead of pretending there is one global process.
     func status(for server: LSPServerDefinition) -> LSPServerStatusSnapshot {
         let states = status.compactMap { key, value -> LSPServerStatus? in
-            guard let definition = LSPServerRegistry.server(forLanguage: key.languageID),
+            guard let definition = Self.resolvedServer(forLanguage: key.languageID),
                   Self.effectiveDefinition(definition).command == server.command
             else { return nil }
             return value
@@ -514,11 +559,11 @@ final class LSPCenter: ObservableObject {
         return false
     }
 
-    /// The registry's definition plus any override, for the language this
-    /// file would use. What a banner names and what "Check Again" or a log
-    /// panel act on.
+    /// The definition in force for this file's language plus any override —
+    /// the registry's, or an extension's where one owns the file type. What a
+    /// banner names and what "Check Again" or a log panel act on.
     func definition(forPath path: String) -> LSPServerDefinition? {
-        guard let base = LSPServerRegistry.server(forPath: path) else { return nil }
+        guard let base = Self.resolvedServer(forPath: path) else { return nil }
         return Self.effectiveDefinition(base)
     }
 
@@ -1031,7 +1076,7 @@ final class LSPCenter: ObservableObject {
     }
 
     private func key(forPath path: String) -> Key? {
-        guard let definition = LSPServerRegistry.server(forPath: path) else { return nil }
+        guard let definition = Self.resolvedServer(forPath: path) else { return nil }
         return Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path))
     }
 
@@ -1050,7 +1095,7 @@ final class LSPCenter: ObservableObject {
     /// the characters typed while it was starting were gone rather than
     /// merely late. Every path that hands back a server flushes first.
     private func runningServer(forPath path: String) async -> LSPProcess? {
-        guard let definition = LSPServerRegistry.server(forPath: path) else { return nil }
+        guard let definition = Self.resolvedServer(forPath: path) else { return nil }
         let key = Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path))
 
         if servers[key] == nil {
@@ -1077,7 +1122,7 @@ final class LSPCenter: ObservableObject {
     /// Sends any debounced change for the documents this server owns.
     private func flushPending(for key: Key) {
         for path in pendingChanges.paths {
-            guard let definition = LSPServerRegistry.server(forPath: path),
+            guard let definition = Self.resolvedServer(forPath: path),
                   Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path)) == key
             else { continue }
             flushChange(path: path, key: key)
@@ -1085,6 +1130,13 @@ final class LSPCenter: ObservableObject {
     }
 
     /// Starts a server, or hands back the running one.
+    ///
+    /// The one function in the app that brings an `LSPProcess` into
+    /// existence, which is why the trust gate is here and not at any of the
+    /// dozen places that ask for a server. `didOpen`, hover, completion,
+    /// rename and the availability sweep all arrive through this door; a
+    /// check at each of them would be a check somebody adds a thirteenth
+    /// caller without.
     private func server(for key: Key, definition: LSPServerDefinition) async -> LSPProcess? {
         if let existing = servers[key] { return existing }
         guard !starting.contains(key) else { return nil }
@@ -1098,8 +1150,29 @@ final class LSPCenter: ObservableObject {
         let searchPath = await Task.detached(priority: .userInitiated) {
             LoginEnvironment.executableSearchPath()
         }.value
-        guard LSPProcess.locate(definition.command, searchPath: searchPath) != nil else {
+        guard let resolvedPath = LSPProcess.locate(definition.command, searchPath: searchPath) else {
             status[key] = .notInstalled
+            return nil
+        }
+
+        /// The gate. It sits *after* `locate` because what gets recorded is
+        /// an answer about a path: "not installed" is not a trust question,
+        /// and until the name has resolved there is nothing to show the user
+        /// and nothing an approval could be pinned to. It sits *before* the
+        /// status becomes `.starting`, so the window is not claiming to start
+        /// something while a sheet is still asking whether it may.
+        ///
+        /// A compiled-in definition returns `true` without a lookup and
+        /// without a prompt — see `LSPServerOrigin`. The key stays in
+        /// `starting` for the whole await, which is deliberate: a hover that
+        /// arrives while the prompt is up waits for the answer rather than
+        /// being told there is no server.
+        guard await LanguageTrustGate.allowsLaunch(
+            of: definition,
+            resolvedPath: resolvedPath,
+            workspaceRoot: key.root
+        ) else {
+            status[key] = .notApproved
             return nil
         }
 
@@ -1146,16 +1219,27 @@ final class LSPCenter: ObservableObject {
     /// there is one, else the language's own resolution — Vue's `tsdk`
     /// lookup today, nothing for everyone else.
     ///
-    /// The override lookup uses the registry's *default* command for this
-    /// language rather than `definition.command` — `definition` here may
-    /// already be the overridden one, and the override's own identity has
-    /// to stay independent of what it changes the command to.
+    /// The override lookup uses the *default* command for this language
+    /// rather than `definition.command` — `definition` here may already be
+    /// the overridden one, and the override's own identity has to stay
+    /// independent of what it changes the command to. Resolved rather than
+    /// looked up in the registry so a contributed language, which the
+    /// registry has never heard of, keys its override on the command its
+    /// manifest asked for instead of falling through to the overridden one.
+    ///
+    /// A manifest's own `initializationOptions` are deliberately **not**
+    /// consulted here, even though `LanguageResolver` can supply them. The
+    /// approval prompt names a command and a resolved path; it does not show
+    /// the options, and for more than one real server an option is enough to
+    /// redirect which code the server loads. Wiring them in is a change to
+    /// what an approval *means*, so it belongs with a prompt that shows them
+    /// and a `LanguageTrustStore.currentRecordVersion` bump, not here.
     private func resolvedInitializationOptions(
         for definition: LSPServerDefinition,
         key: Key,
         searchPath: String
     ) async -> LSPOutcome<LSPValue?> {
-        let defaultCommand = LSPServerRegistry.server(forLanguage: key.languageID)?.command ?? definition.command
+        let defaultCommand = Self.resolvedServer(forLanguage: key.languageID)?.command ?? definition.command
         if let override = LSPServerOverrideStore.override(for: defaultCommand) {
             let raw = override.initializationOptionsJSON.trimmingCharacters(in: .whitespacesAndNewlines)
             if !raw.isEmpty {
@@ -1907,15 +1991,24 @@ extension LSPCenter {
         "dynamicRegistration": false,
         "contextSupport": true,
         "completionItem": [
-            /// Stays `false` until the snippet parser lands, and flips in
-            /// the same commit as it. Flipped early, a server's
-            /// `console.log(${1:message})` is typed into the user's file
-            /// literally, placeholders and all. It is not free to leave off
-            /// either: measured, `typescript-language-server` does
-            /// `if (isSnippet && !features.completionSnippets) return null`,
-            /// so today's `false` silently drops whole items — class members
-            /// among them — rather than merely dropping the placeholders.
-            "snippetSupport": false,
+            /// On, and the precondition it waited for is that `CodeSnippet`'s
+            /// parser and the tab-stop session are wired into `CodeTextView`:
+            /// the marker is consumed now rather than inserted. Announced
+            /// before that, a server's `console.log(${1:message})` was typed
+            /// into the reader's file literally, placeholders and all.
+            ///
+            /// Leaving it off was never free either. Measured,
+            /// `typescript-language-server` does
+            /// `if (isSnippet && !features.completionSnippets) return null` —
+            /// so `false` was silently dropping whole items, class members
+            /// among them, not merely their placeholders.
+            ///
+            /// The claim is only honest while **`insertTextFormat == 2` stays
+            /// the sole test for snippet-ness** (`LSPCompletion.isSnippet`).
+            /// Absent means plain text, and in a plain item a `$` is a dollar
+            /// sign: inferring from the text instead would mutilate the
+            /// insertion of every item that merely contains one.
+            "snippetSupport": true,
             /// The "origin" column: this is what makes
             /// `typescript-language-server` populate
             /// `labelDetails.description` with the module a symbol comes

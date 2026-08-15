@@ -674,6 +674,14 @@ struct LSPCompletionListTests {
             newText: "valueOf"
         ))
         #expect(item.insertTextFormat == 2)
+
+        /// The consequence, now that `snippetSupport` is announced: a
+        /// list-level default is a second live route to `isSnippet`, and an
+        /// item that inherits `2` this way has to be inserted through the
+        /// parser like any other snippet. It is the protocol's own defaulting
+        /// rather than a guess about the text, which is what keeps it safe.
+        #expect(item.isSnippet)
+
         #expect(item.commitCharacters == ["."])
         #expect(item.data == ["cacheId": .integer(3)])
     }

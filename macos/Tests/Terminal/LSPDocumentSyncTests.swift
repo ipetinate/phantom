@@ -368,11 +368,24 @@ struct LSPClientCapabilityTests {
         #expect(item?["labelDetailsSupport"]?.boolValue == true)
     }
 
-    /// Stays off until the snippet parser lands, and flips in the same commit
-    /// as it — flipped early, `console.log(${1:message})` is typed into the
-    /// user's file literally.
-    @Test func snippetSupportIsStillOff() {
-        #expect(item?["snippetSupport"]?.boolValue == false)
+    /// On, now that the parser and the tab-stop session consume the marker.
+    /// It was not merely cosmetic to leave off: measured,
+    /// `typescript-language-server` does
+    /// `if (isSnippet && !features.completionSnippets) return null`, so the
+    /// old `false` dropped whole items rather than their placeholders.
+    @Test func snippetSupportIsAnnounced() {
+        #expect(item?["snippetSupport"]?.boolValue == true)
+    }
+
+    /// The claim above is a promise about *this* block, and the transport's
+    /// own floor still says `false`. Both are correct and the overlay is what
+    /// ships — so the merge direction is pinned here, because a `merging`
+    /// that ever resolved a leaf the other way would quietly un-announce
+    /// snippets and the only symptom would be missing suggestions.
+    @Test func theOverlayWinsOverTheTransportsFloor() {
+        let floor = LSPProcess.defaultCapabilities["textDocument"]?["completion"]
+        #expect(floor?["completionItem"]?["snippetSupport"]?.boolValue == false)
+        #expect(item?["snippetSupport"]?.boolValue == true)
     }
 
     /// Three capabilities that must not be claimed, each because claiming it

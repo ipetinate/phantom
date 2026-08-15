@@ -213,9 +213,9 @@ struct LanguageManifest: Equatable, Sendable {
 
         return LanguageManifest(
             id: id,
-            name: string(json["name"]) ?? root.lastPathComponent,
-            version: string(json["version"]) ?? "",
-            publisher: string(json["publisher"]) ?? "",
+            name: displayString(json["name"]) ?? root.lastPathComponent,
+            version: displayString(json["version"]) ?? "",
+            publisher: displayString(json["publisher"]) ?? "",
             eligibility: eligibility,
             languages: dedupedByLanguageID(languages),
             unrecognizedFields: unrecognized.sorted(),
@@ -285,6 +285,27 @@ struct LanguageManifest: Equatable, Sendable {
         guard let string = value as? String else { return nil }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// A manifest string that exists only to be *shown*, escaped once here
+    /// rather than at each place that draws it.
+    ///
+    /// Every other field is validated against a charset that already
+    /// excludes the dangerous scalars — a language id, an extension, a
+    /// keyword, a comment marker, an icon path. These four are free text by
+    /// design, so they are the only ones a `U+202E` or a newline can ride in
+    /// on, and they travel further than the approval prompt: a contributed
+    /// server's `displayName` and `installHint` reach the editor's status
+    /// banner, which draws them with `Text` and no escaping of its own.
+    ///
+    /// Escaped at the parse rather than at the banner because the set of
+    /// things that display a manifest's name only grows — a settings row, a
+    /// tooltip, a menu — and a rule applied at each of them is a rule the
+    /// next one forgets. `LanguageTrustAlert` escapes again, which is free:
+    /// the output of this contains nothing left to escape.
+    static func displayString(_ value: Any?) -> String? {
+        guard let raw = string(value) else { return nil }
+        return UntrustedURL.escapingUnsafeScalars(raw)
     }
 
     /// An extension id, or nil.
@@ -399,7 +420,7 @@ struct LanguageContribution: Equatable, Sendable {
 
         return LanguageContribution(
             languageID: languageID,
-            displayName: LanguageManifest.string(json["name"]) ?? languageID,
+            displayName: LanguageManifest.displayString(json["name"]) ?? languageID,
             fileExtensions: fileExtensions,
             fileNames: fileNames,
             keywords: keywords(from: json["keywords"]),
@@ -714,8 +735,10 @@ struct LanguageServerContribution: Equatable, Sendable {
         return "~;&|<>$`()[]{}*?!#'\"\\\n\r\t".unicodeScalars.contains(scalar)
     }
 
+    /// Escaped, and the cap is applied to the escaped text so a hint made of
+    /// nothing but overrides cannot expand past it.
     static func installHint(_ value: Any?) -> String {
-        guard let raw = LanguageManifest.string(value) else { return "" }
+        guard let raw = LanguageManifest.displayString(value) else { return "" }
         return String(raw.prefix(512))
     }
 

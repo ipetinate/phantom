@@ -137,7 +137,33 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
 
     /// The executable command shown and copied by Settings. Some servers
     /// ship with a toolchain, so their install hint also contains prose.
-    var installCommand: String {
+    ///
+    /// **Empty for anything a manifest contributed**, and that refusal is
+    /// the reason to read this property at all. The `default` branch below
+    /// hands back `installHint`, and Settings passes what it gets to
+    /// `$SHELL -lic` — the one place in this app where a string becomes a
+    /// shell command. For a contributed definition `installHint` is *the
+    /// manifest's own text*, so a row built for one would turn "run this
+    /// named binary, once you approve it" into "run this sentence", with no
+    /// approval anywhere near it.
+    ///
+    /// Today no view builds that row, and until now that was the entire
+    /// guarantee: a convention every call site had to remember. Refusing
+    /// here instead makes it a property of the value — it declines to name a
+    /// shell command whoever asks, including a caller written next year.
+    ///
+    /// `""` rather than `nil` only because the caller in Settings takes a
+    /// non-optional and that file is not this one's to change. `String?` is
+    /// the honest signature and the empty string is the same refusal spelled
+    /// weakly: `$SHELL -lic ""` is a shell that runs nothing, so no manifest
+    /// text reaches it either way.
+    var installCommand: String? {
+        /// Nil, not empty. A contributed server has no install command this
+        /// app may offer, because the only text it could offer is the
+        /// manifest's own — and that string would be handed to `$SHELL -lic`
+        /// by the button beside it. An optional makes a caller face that;
+        /// an empty string lets one render a button that runs nothing.
+        guard case .builtIn = origin else { return nil }
         switch command {
         case "sourcekit-lsp": return "xcode-select --install"
         case "clangd": return "xcode-select --install"
@@ -164,6 +190,7 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
     /// Uninstall button. Removing any one of them removes the package, and
     /// so the other two with it.
     var uninstallCommand: String? {
+        guard case .builtIn = origin else { return nil }
         switch command {
         case "typescript-language-server": return "npm rm -g typescript-language-server typescript"
         case "vue-language-server": return "npm rm -g @vue/language-server"
