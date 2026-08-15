@@ -625,8 +625,27 @@ final class LSPCenter: ObservableObject {
     /// when no server — registry or override — is known for this language
     /// at all, which is the ordinary case for most files a terminal opens.
     func status(forPath path: String) -> LSPServerStatus? {
-        guard let key = key(forPath: path) else { return nil }
+        guard let key = speakingKey(forPath: path) else { return nil }
         return status[key]
+    }
+
+    /// The server this file's banner should speak for.
+    ///
+    /// The primary while everything is healthy, and otherwise **the first one
+    /// in a failure state**. A `.vue` has two servers and they fail
+    /// independently: the template half can be running perfectly while the
+    /// script half has nothing to run against. A banner that only ever spoke
+    /// for the primary would report that as health — the reader would get a
+    /// working template, an empty `<script>`, and no sentence anywhere — which
+    /// is the exact silence this whole path exists to remove.
+    ///
+    /// `definition(forPath:)` and `log(forPath:)` follow the same choice, so
+    /// the name in the banner, the sentence and the log all belong to the same
+    /// server. Naming one server while explaining another is worse than saying
+    /// nothing.
+    private func speakingKey(forPath path: String) -> Key? {
+        let keys = keys(forPath: path)
+        return keys.first { status[$0]?.isFailure == true } ?? keys.first
     }
 
     /// Aggregates installation and runtime state for the Settings screen.
@@ -678,15 +697,16 @@ final class LSPCenter: ObservableObject {
     /// the registry's, or an extension's where one owns the file type. What a
     /// banner names and what "Check Again" or a log panel act on.
     func definition(forPath path: String) -> LSPServerDefinition? {
-        guard let base = Self.resolvedServer(forPath: path) else { return nil }
-        return Self.effectiveDefinition(base)
+        let servers = Self.resolvedServers(forPath: path)
+        guard let key = speakingKey(forPath: path) else { return servers.first }
+        return servers.first { $0.command == key.command } ?? servers.first
     }
 
     /// The server's recent stderr, oldest first. Kept after the process
     /// exits or fails to start — that is precisely when it is worth
     /// reading.
     func log(forPath path: String) -> [String] {
-        guard let key = key(forPath: path) else { return [] }
+        guard let key = speakingKey(forPath: path) else { return [] }
         return serverLogs[key] ?? []
     }
 
@@ -850,30 +870,79 @@ final class LSPCenter: ObservableObject {
         isExplicit: Bool,
         epoch: Int
     ) async -> LSPCompletionOutcome {
-        let answer = await perform(
-            "textDocument/completion",
+        /// Asked of every server the file has, not only the primary. This is
+        /// the whole point of a `.vue` having two: the Vue server answers for
+        /// the template and says nothing about a `<script>` block, and
+        /// `typescript-language-server` answers for the script and refuses
+        /// the template. Either alone is half a file.
+        let live = await runningServers(forPath: path)
+        guard !live.isEmpty else { return .noServer }
+
+        let params = Self.requestParams(
             path: path,
             position: position,
-            extra: Self.completionExtra(for: context),
-            timeout: isExplicit ? LSPTimeout.completionExplicit : LSPTimeout.completionWhileTyping
+            extra: Self.completionExtra(for: context)
         )
+        let timeout = isExplicit ? LSPTimeout.completionExplicit : LSPTimeout.completionWhileTyping
+
+        let name = Self.name(of: path)
+        Self.logger.debug(
+            """
+            → completion \(name) servers=\(live.count, privacy: .public) \
+            version=\(self.versions[path] ?? 0, privacy: .public)
+            """
+        )
+
+        let started = Date()
+        var lists: [LSPCompletionList] = []
+        var failures: [RequestFailure] = []
+
+        /// Sequentially, and that is a deliberate first cut rather than an
+        /// oversight: the only file with two servers today is `.vue`, whose
+        /// second answer is fast, and a task group here has to move
+        /// `LSPProcess` across an isolation boundary. Worth revisiting if a
+        /// third server ever joins a language — the cost is additive.
+        for (key, server) in live {
+            do {
+                let result = try await server.request(
+                    "textDocument/completion",
+                    params: params,
+                    timeout: timeout
+                )
+                noteRequestSucceeded(for: key)
+                lists.append(LSPCompletionList(result, epoch: epoch))
+            } catch {
+                noteRequestFailed(error, for: key)
+                failures.append(Self.failure(from: error))
+            }
+        }
 
         let outcome: LSPCompletionOutcome
         let summary: String
-        switch answer {
-        case .success(let value):
-            let list = LSPCompletionList(value, epoch: epoch)
+
+        /// One server failing does not cost the file the other's answer.
+        /// Only when *every* server failed is there a failure to report, and
+        /// the first one is the one named — a cancellation in particular has
+        /// to survive, since the UI is required to ignore it rather than
+        /// treat it as an empty list.
+        if lists.isEmpty {
+            let failure = failures.first(where: { $0 == .cancelled }) ?? failures.first
+            outcome = failure?.completionOutcome ?? .noServer
+            summary = failure?.summary ?? "no server"
+        } else {
+            let list = LSPCompletionList.merged(lists)
             outcome = .list(list)
-            summary = "items=\(list.items.count) incomplete=\(list.isIncomplete)"
-        case .failure(let failure):
-            outcome = failure.completionOutcome
-            summary = failure.summary
+            summary = """
+            items=\(list.items.count) incomplete=\(list.isIncomplete) \
+            from=\(lists.count)/\(live.count)
+            """
         }
 
-        let name = Self.name(of: path)
-        let trigger = context.kind.rawValue
         Self.logger.debug(
-            "completion \(name) trigger=\(trigger, privacy: .public) \(summary, privacy: .public)"
+            """
+            ← completion \(summary, privacy: .public) \
+            in \(Self.milliseconds(since: started), privacy: .public)ms
+            """
         )
         return outcome
     }
@@ -1246,6 +1315,38 @@ final class LSPCenter: ObservableObject {
         /// — it points at the wrong characters.
         flushPending(for: key)
         return server
+    }
+
+    /// Every live server for a file, primary first.
+    ///
+    /// Waits for the *first* one to come up rather than for all of them: a
+    /// `.vue` has two, and holding the answer until the slower one is ready
+    /// would make every completion as slow as the worst server. A list
+    /// missing its second server for one keystroke corrects itself on the
+    /// next; a list that arrives late is a list the reader has already typed
+    /// past.
+    private func runningServers(forPath path: String) async -> [(key: Key, server: LSPProcess)] {
+        let keys = keys(forPath: path)
+        guard !keys.isEmpty else { return [] }
+
+        if keys.allSatisfy({ servers[$0] == nil }) {
+            /// Bounded, and cancellation breaks out — `try?` on the sleep
+            /// swallows it, which would otherwise spin the remaining
+            /// iterations without sleeping.
+            for _ in 0..<60 {
+                guard keys.contains(where: { starting.contains($0) }), !Task.isCancelled else { break }
+                try? await Task.sleep(for: .milliseconds(250))
+                if keys.contains(where: { servers[$0] != nil }) { break }
+            }
+        }
+
+        let live = keys.compactMap { key in servers[key].map { (key: key, server: $0) } }
+        guard !live.isEmpty else { return [] }
+
+        /// Anything typed in the last moment is still behind the debounce,
+        /// and an answer about stale text points at the wrong characters.
+        flushChange(path: path)
+        return live
     }
 
     /// Sends any debounced change for the documents this server owns.
@@ -2018,6 +2119,46 @@ struct LSPCompletionList: Equatable {
     var isEmpty: Bool { items.isEmpty }
 
     var ordered: [LSPCompletion] { LSPCompletion.ordered(items) }
+
+    /// One list out of what a file's several servers answered.
+    ///
+    /// **Whole items, concatenated in the order given, first occurrence
+    /// wins.** Never a merge that takes a range from one server's answer and
+    /// text from another's: inside a single-file component each server maps
+    /// positions through its own copy of the language tooling, and those
+    /// copies can disagree about where the `<script>` block begins. Mixing
+    /// their parts lands an edit in the wrong place, and it is precisely the
+    /// "cleverer merge" somebody will be tempted to write here.
+    ///
+    /// `itemDefaults` is dropped rather than combined, and that is safe
+    /// rather than lossy: `LSPCompletion.init` folds a list's defaults into
+    /// every item as it parses, so by the time there are items to merge the
+    /// defaults have already been applied — and two lists' defaults are not
+    /// the same object to begin with.
+    ///
+    /// Deduped on the label *and* the text that would be inserted. Label
+    /// alone would drop a genuinely different completion that happens to
+    /// share a name, which is common: two servers offering `ref` from
+    /// different modules are two answers, not one.
+    static func merged(_ lists: [LSPCompletionList]) -> LSPCompletionList {
+        guard lists.count > 1 else { return lists.first ?? LSPCompletionList(items: []) }
+
+        var seen: Set<String> = []
+        var items: [LSPCompletion] = []
+        for list in lists {
+            for item in list.items where seen.insert(item.label + "\u{0}" + item.insertText).inserted {
+                items.append(item)
+            }
+        }
+
+        /// Incomplete if *any* server said so. A list one server called a
+        /// guess is a guess: treating the union as settled would stop the
+        /// re-request that server asked for.
+        return LSPCompletionList(
+            items: items,
+            isIncomplete: lists.contains(where: \.isIncomplete)
+        )
+    }
 
     init(
         items: [LSPCompletion],

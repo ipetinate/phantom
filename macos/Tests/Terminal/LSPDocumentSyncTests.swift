@@ -427,6 +427,83 @@ struct LSPDiagnosticMergeTests {
     }
 }
 
+/// Two servers' completion answers, made into the one list on screen.
+///
+/// The case this exists for is a `.vue`: the Vue server answers for the
+/// template and says nothing about a `<script>` block, and
+/// `typescript-language-server` answers for the script and refuses the
+/// template. Either alone is half a file.
+struct LSPCompletionMergeTests {
+    private func item(_ label: String, insert: String? = nil, sortText: String? = nil) -> LSPCompletion {
+        var value: [String: LSPValue] = ["label": .string(label)]
+        if let insert { value["insertText"] = .string(insert) }
+        if let sortText { value["sortText"] = .string(sortText) }
+        return LSPCompletion(.object(value), index: 0, defaults: nil, epoch: 1)!
+    }
+
+    private func list(_ items: [LSPCompletion], isIncomplete: Bool = false) -> LSPCompletionList {
+        LSPCompletionList(items: items, isIncomplete: isIncomplete)
+    }
+
+    /// The inert case: one server's answer is handed back untouched, which
+    /// is every language but Vue.
+    @Test func oneServersListIsUnchanged() {
+        let only = list([item("ref"), item("computed")])
+        #expect(LSPCompletionList.merged([only]) == only)
+        #expect(LSPCompletionList.merged([]).isEmpty)
+    }
+
+    @Test func bothServersContributeInTheOrderGiven() {
+        let template = list([item("RouterLink"), item("Suspense")])
+        let script = list([item("counter"), item("label")])
+
+        let merged = LSPCompletionList.merged([template, script])
+        #expect(merged.items.map(\.label) == ["RouterLink", "Suspense", "counter", "label"])
+    }
+
+    /// Same name *and* same insertion is one answer reported twice.
+    @Test func anItemOfferedByBothServersIsShownOnce() {
+        let merged = LSPCompletionList.merged([
+            list([item("ref", insert: "ref")]),
+            list([item("ref", insert: "ref")]),
+        ])
+        #expect(merged.items.count == 1)
+    }
+
+    /// Same name, different insertion — two servers offering `ref` from
+    /// different modules are two answers, and collapsing them on the label
+    /// would silently drop one.
+    @Test func theSameLabelInsertingDifferentTextIsTwoAnswers() {
+        let merged = LSPCompletionList.merged([
+            list([item("ref", insert: "ref")]),
+            list([item("ref", insert: "shallowRef")]),
+        ])
+        #expect(merged.items.count == 2)
+    }
+
+    /// A list one server called a guess is a guess. Treating the union as
+    /// settled would stop the re-request that server explicitly asked for.
+    @Test func incompleteFromEitherServerMakesTheUnionIncomplete() {
+        let settled = list([item("a")])
+        let guess = list([item("b")], isIncomplete: true)
+
+        #expect(LSPCompletionList.merged([settled, guess]).isIncomplete)
+        #expect(LSPCompletionList.merged([guess, settled]).isIncomplete)
+        #expect(!LSPCompletionList.merged([settled, settled]).isIncomplete)
+    }
+
+    /// Ranking is a separate step and stays that way: the merge concatenates,
+    /// and `ordered` is what puts the list in the order a reader sees.
+    @Test func theMergeDoesNotRankAndOrderedStillDoes() {
+        let merged = LSPCompletionList.merged([
+            list([item("zeta", sortText: "0")]),
+            list([item("alpha", sortText: "9")]),
+        ])
+        #expect(merged.items.map(\.label) == ["zeta", "alpha"])
+        #expect(merged.ordered.map(\.label) == ["zeta", "alpha"], "sortText decides, not the server order")
+    }
+}
+
 /// What the client tells a server it can do.
 ///
 /// Assembled in `LSPCenter` rather than in `LSPProcess`, so these assert the
