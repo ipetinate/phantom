@@ -1515,7 +1515,7 @@ final class LSPCenter: ObservableObject {
             /// sentence in the banner, where the reader can act on it.
             let root = key.root
             let resolved = await Task.detached(priority: .utility) {
-                LSPInitializationOptions.vueTypeScriptPlugin(root: root)
+                LSPInitializationOptions.vueTypeScriptPlugin(root: root, searchPath: searchPath)
             }.value
             switch resolved {
             case .success(let value): return .success(value)
