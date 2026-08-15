@@ -301,6 +301,18 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     private static func applyCascade(to window: NSWindow, hasFixedPos: Bool) {
         if hasFixedPos { return }
 
+        /// Cascading and centring are the same decision made twice, and they
+        /// disagree: `showWindow` now opens a standalone window in the middle
+        /// of its screen, and stepping it down and right immediately
+        /// afterwards would undo that on the second window and every one
+        /// after it.
+        ///
+        /// Kept rather than deleted, and gated here rather than at its two
+        /// call sites, so there is one place to look and one line to remove
+        /// if staggered windows are wanted back — and so the shape upstream
+        /// merges against stays recognisable.
+        if opensCentred { return }
+
         if all.count > 1 {
             lastCascadePoint = window.cascadeTopLeft(from: lastCascadePoint)
         } else {
@@ -2122,9 +2134,31 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             size: defaultSize == nil,
         )
 
-        // If nothing is changed for the frame,
-        // we should center the window
-        if !originChanged, !restored {
+        // A window this app opens is centred and wide enough to hold the
+        // sidebar, rather than inheriting wherever and whatever the last one
+        // was. See `initialFrame` for what "wide enough" is measured against.
+        //
+        // Deliberately ahead of `LastWindowPosition`, whose whole job is to
+        // reopen where you left off: that is the right default for a plain
+        // terminal and the wrong one here, because the size it restores is
+        // whatever the previous window happened to be dragged to, and a
+        // window narrowed once stays narrow for every window after it.
+        //
+        // Three things still win, in this order: an explicit
+        // `window-position-x/y`, an explicit `window-width/height` or
+        // `maximize` — both of which arrive as `defaultSize` — and being a
+        // tab, where setting a frame would move the whole group rather than
+        // this window. That last guard is the same test the cascade above
+        // uses, and for the same reason.
+        let isAloneInItsGroup = (terminalWindow.tabGroup?.windows.count ?? 1) == 1
+        if !originChanged, defaultSize == nil, isAloneInItsGroup,
+           !terminalWindow.styleMask.contains(.fullScreen),
+           let screen = terminalWindow.screen ?? NSScreen.main {
+            terminalWindow.setFrame(
+                Self.initialFrame(sidebarWidth: sharedSidebarWidth, visible: screen.visibleFrame),
+                display: true
+            )
+        } else if !originChanged, !restored {
             // This doesn't work in `windowDidLoad` somehow
             terminalWindow.center()
         }
@@ -2675,6 +2709,53 @@ extension TerminalController {
                 window.constrainToScreen()
             }
         }
+    }
+
+    /// Whether a window this app opens lands in the middle of its screen.
+    ///
+    /// The switch between two whole-app behaviours rather than a preference:
+    /// centring and cascading contradict each other, so exactly one of them
+    /// can be true, and naming it makes that visible from both sides.
+    static let opensCentred = true
+
+    /// What a terminal needs beside the sidebar before the window stops
+    /// feeling cramped.
+    ///
+    /// Eighty columns is the width almost every tool still assumes when it
+    /// wraps its own output, and at the editor's default monospace that is
+    /// roughly this. Below it the sidebar is not what breaks — the *terminal*
+    /// starts wrapping, and the sidebar gets blamed for the room it takes.
+    static let minimumTerminalWidth: CGFloat = 720
+
+    /// Where a freshly created window opens: centred, and wide enough for the
+    /// sidebar and a terminal to coexist.
+    ///
+    /// Both halves are measured rather than chosen. The floor is the sidebar's
+    /// *current* width — the one the reader last dragged to, not a constant —
+    /// plus what a terminal needs, so widening the sidebar cannot squeeze the
+    /// pane beside it in the next window that opens.
+    ///
+    /// Everything is clamped to the visible frame, which is what keeps this
+    /// honest on a laptop screen: a preferred size larger than the display
+    /// gives a window running off the bottom, and the menu bar and Dock are
+    /// already excluded from `visibleFrame`.
+    ///
+    /// A static over values so the arithmetic is assertable without a window
+    /// or a screen — the rest of this file's geometry follows the same rule.
+    static func initialFrame(
+        sidebarWidth: CGFloat,
+        visible: NSRect,
+        preferred: NSSize = NSSize(width: 1280, height: 820)
+    ) -> NSRect {
+        let width = min(max(preferred.width, sidebarWidth + minimumTerminalWidth), visible.width)
+        let height = min(preferred.height, visible.height)
+
+        return NSRect(
+            x: visible.midX - width / 2,
+            y: visible.midY - height / 2,
+            width: width,
+            height: height
+        ).integral
     }
 
     private var defaultSize: DefaultSize? {
