@@ -130,7 +130,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     private var sidebarChromeTrailingConstraint: NSLayoutConstraint?
 
     /// The config fallback width used before any user drag is persisted.
-    private var sidebarDefaultWidth: CGFloat = 240
+    /// The width a sidebar opens at when the reader has never dragged one
+    /// and the config does not say.
+    ///
+    /// Raised from 240, which is where a group row starts losing its name to
+    /// the controls beside it — the layout survives that now, but a default
+    /// that needs truncation to be readable is the wrong default. This is
+    /// only the fallback: `config.sidebarWidth` still wins, and so does any
+    /// width dragged to since.
+    private var sidebarDefaultWidth: CGFloat = 280
 
     /// UserDefaults key holding the app-wide sidebar width. Shared by all
     /// windows so dragging the divider in one tab applies to every tab.
@@ -1405,7 +1413,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         self.sidebarPane = sidebarPane
 
         let expanded = [
-            sidebarPane.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
+            /// Below this a group row is an icon and a truncation, which is
+            /// not a sidebar. The name now outranks the chrome beside it —
+            /// see `SidebarView.header` — so this is a floor on *legibility*
+            /// rather than the thing preventing collapse.
+            sidebarPane.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
             sidebarPane.widthAnchor.constraint(lessThanOrEqualToConstant: 480),
         ]
         NSLayoutConstraint.activate(expanded)

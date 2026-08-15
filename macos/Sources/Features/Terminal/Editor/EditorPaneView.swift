@@ -230,6 +230,16 @@ private struct DocumentView: View {
     /// is the only time they actually change.
     @State private var underlines: [(range: NSRange, color: NSColor)] = []
 
+    /// A diagnostic with its range already resolved against the document.
+    private struct LocatedProblem {
+        let range: NSRange
+        let problem: CodeHoverInfo.Problem
+    }
+
+    /// Every diagnostic, located once. The underlines are a subset of these
+    /// and the hover card reads them directly — see `refreshUnderlines`.
+    @State private var located: [LocatedProblem] = []
+
     /// Translates between the server's vocabulary and the list's.
     ///
     /// `@State` because it has to *survive* body evaluation: it remembers the
@@ -378,15 +388,40 @@ private struct DocumentView: View {
     private func refreshUnderlines() {
         let reported = lsp.diagnostics[document.url.path] ?? []
         guard !reported.isEmpty else {
+            if !located.isEmpty { located = [] }
             if !underlines.isEmpty { underlines = [] }
             return
         }
 
+        /// Resolved **once**, here, and read by both the squiggle and the
+        /// card. They used to share the diagnostics list and convert it
+        /// separately — the underlines when the server spoke, the card when
+        /// the pointer stopped — and a comment claimed they therefore could
+        /// not disagree. They could: every keystroke between the two moved
+        /// the text under one of them, so the squiggle sat where the problem
+        /// *was* while the card asked where it *is*, and hovering the mark
+        /// answered nothing. Sharing the list is not the same as sharing the
+        /// answer.
         let index = LSPLineIndex(document.currentText as NSString)
-        underlines = reported.compactMap { diagnostic in
-            guard let range = index.range(of: diagnostic.range), range.length > 0
-            else { return nil }
-            return (range, Self.color(for: diagnostic.severity))
+        located = reported.compactMap { diagnostic in
+            guard let range = index.range(of: diagnostic.range) else { return nil }
+            return LocatedProblem(
+                range: range,
+                problem: CodeHoverInfo.Problem(
+                    message: diagnostic.message,
+                    source: diagnostic.source,
+                    color: Self.color(for: diagnostic.severity)
+                )
+            )
+        }
+
+        /// A zero-length range is kept above and dropped here, which is the
+        /// one place the two legitimately differ: a server pointing at a
+        /// position rather than a span — a missing semicolon, an unexpected
+        /// end of file — has something to say and nothing to underline.
+        underlines = located.compactMap { found in
+            guard found.range.length > 0 else { return nil }
+            return (found.range, found.problem.color)
         }
     }
 
@@ -488,32 +523,19 @@ private struct DocumentView: View {
 
     /// The diagnostics whose range covers this offset.
     ///
-    /// Read from the same list the underlines come from, so the squiggle and
-    /// the card can never disagree about what is wrong where.
+    /// Read from the ranges `refreshUnderlines` already resolved, so the
+    /// squiggle and the card cannot disagree about where a problem is —
+    /// they are now the same values rather than the same source recomputed
+    /// twice at different moments.
+    ///
+    /// The bound is inclusive, and a zero-length range counts as covering
+    /// where it sits. Both because the offset is an *insertion* index:
+    /// resting on the last character of a word reports the index after it,
+    /// so a half-open test makes the end of every word a dead spot.
     private func problems(at offset: Int) -> [CodeHoverInfo.Problem] {
-        let reported = lsp.diagnostics[document.url.path] ?? []
-        guard !reported.isEmpty else { return [] }
-
-        let index = LSPLineIndex(document.currentText as NSString)
-        return reported.compactMap { diagnostic in
-            guard let range = index.range(of: diagnostic.range),
-                  // Inclusive of the upper bound, and a zero-length range
-                  // counts as covering where it sits. Both because the offset
-                  // is an *insertion* index: resting on the last character of
-                  // a word reports the index after it, so a half-open test
-                  // makes the end of every word a dead spot. Servers that
-                  // point at a position rather than a span — a missing
-                  // semicolon, an unexpected end of file — have nothing but a
-                  // zero-length range to give.
-                  offset >= range.location, offset <= range.upperBound
-            else { return nil }
-
-            return CodeHoverInfo.Problem(
-                message: diagnostic.message,
-                source: diagnostic.source,
-                color: Self.color(for: diagnostic.severity)
-            )
-        }
+        located
+            .filter { offset >= $0.range.location && offset <= $0.range.upperBound }
+            .map(\.problem)
     }
 
     /// One reading of severity for the whole feature: the squiggle under the
