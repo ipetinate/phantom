@@ -94,6 +94,8 @@ struct LSPServerRegistryTests {
         #expect(LSPServerRegistry.languageID(forPath: "/x/HomeView.vue") == "vue")
         #expect(LSPServerRegistry.languageID(forPath: "GitStatus.SWIFT") == "swift")
         #expect(LSPServerRegistry.languageID(forPath: "build.zig") == "zig")
+        #expect(LSPServerRegistry.languageID(forPath: "go.mod") == "go")
+        #expect(LSPServerRegistry.languageID(forPath: "go.sum") == "go")
         #expect(LSPServerRegistry.languageID(forPath: "docker-compose.yml") == "yaml")
     }
 
@@ -141,6 +143,82 @@ struct LSPServerRegistryTests {
                 definition.initializationOptionsKind == .none,
                 "\(definition.languageID) shouldn't need initializationOptions"
             )
+        }
+    }
+
+    /// Every server gets a category. An unclassified default exists, but a
+    /// registry entry that falls into it is a review miss, not a choice.
+    @Test func everyServerHasACategory() {
+        for definition in LSPServerRegistry.all {
+            switch definition.command {
+            case "typescript-language-server", "vue-language-server",
+                 "pyright-langserver", "bash-language-server",
+                 "intelephense", "ruby-lsp":
+                #expect(definition.category == .script, "\(definition.command)")
+            case "sourcekit-lsp", "kotlin-language-server", "rust-analyzer",
+                 "gopls", "zls", "jdtls", "clangd":
+                #expect(definition.category == .compiled, "\(definition.command)")
+            case "vscode-html-language-server", "marksman":
+                #expect(definition.category == .markup, "\(definition.command)")
+            case "vscode-css-language-server":
+                #expect(definition.category == .styles, "\(definition.command)")
+            case "vscode-json-language-server", "yaml-language-server":
+                #expect(definition.category == .data, "\(definition.command)")
+            case "terraform-ls":
+                #expect(definition.category == .infrastructure, "\(definition.command)")
+            default:
+                Issue.record("\(definition.command) falls into the default category")
+            }
+        }
+    }
+
+    /// `uninstallCommand` switches on the *binary*, and the three servers
+    /// that ship inside `vscode-langservers-extracted` are three separate
+    /// binaries. The case was written against the package name instead, so
+    /// it matched no server at all and CSS, HTML and JSON each got a
+    /// permanently disabled Uninstall button.
+    @Test func theServersSharingAnNpmPackageCanBeUninstalled() {
+        for command in [
+            "vscode-css-language-server",
+            "vscode-html-language-server",
+            "vscode-json-language-server",
+        ] {
+            let server = LSPServerRegistry.all.first { $0.command == command }
+            #expect(server?.uninstallCommand == "npm rm -g vscode-langservers-extracted", "\(command)")
+        }
+    }
+
+    /// The general form of the same bug: anything this offers to install
+    /// with a package manager can be removed with one. The servers that
+    /// legitimately have no inverse — `go install`, and the two that ship
+    /// with Xcode — are listed rather than inferred, so adding a server
+    /// without an uninstall is a decision somebody has to write down.
+    @Test func everyPackageManagedServerCanBeUninstalled() {
+        let withoutAnInverse: Set<String> = ["gopls", "sourcekit-lsp", "clangd"]
+
+        for definition in LSPServerRegistry.distinctServers {
+            guard !withoutAnInverse.contains(definition.command) else {
+                #expect(definition.uninstallCommand == nil, "\(definition.command)")
+                continue
+            }
+            #expect(
+                definition.uninstallCommand != nil,
+                "\(definition.command) can be installed but never removed"
+            )
+        }
+    }
+
+    /// Two language ids that share a binary must agree on the category — the
+    /// settings list groups by binary, so a disagreement would split one
+    /// row across two sections.
+    @Test func sharedBinariesAgreeOnCategory() {
+        let byCommand: [String: Set<LSPServerCategory>] = Dictionary(
+            grouping: LSPServerRegistry.all,
+            by: \.command
+        ).mapValues { Set($0.map(\.category)) }
+
+        for (command, categories) in byCommand {
+            #expect(categories.count == 1, "\(command) spans \(categories.count) categories")
         }
     }
 }

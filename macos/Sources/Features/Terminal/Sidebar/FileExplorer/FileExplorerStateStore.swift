@@ -35,12 +35,14 @@ final class FileExplorerStateStore {
         load()
     }
 
+    /// Per build, and migrated from the location the builds shared — the same
+    /// treatment `SidebarGroupStore` gets, for the same reason. The stakes are
+    /// lower here (a debug run costs the release build some expanded folders,
+    /// not its tab order) but the 40-root prune has the same shape as that
+    /// store's, and there is no version of this where two builds should be
+    /// evicting each other's projects.
     private static func defaultFileURL() -> URL {
-        let dir = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!
-            .appendingPathComponent("com.ipetinate.phantom", isDirectory: true)
-        return dir.appendingPathComponent("file-explorer.json")
+        PhantomStateFile.migratedURL(named: "file-explorer.json")
     }
 
     func expanded(forRoot root: String) -> Set<String> {

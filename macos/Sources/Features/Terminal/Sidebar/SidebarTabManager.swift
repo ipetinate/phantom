@@ -15,9 +15,12 @@ final class SidebarTabManager: ObservableObject {
     @Published private(set) var models: [SidebarTabModel] = []
     @Published private(set) var groupingVersion = 0
 
-    /// List animations stay off while a fresh sidebar populates: a new
+    /// List animations stay off until the sidebar has seen its complete
+    /// group and that group has been rendered once. A fresh or restored
     /// window's sidebar first sees only itself, then the whole group a
-    /// beat later — animating that burst unfolds the entire list.
+    /// moment later — animating that burst unfolds the entire list, and a
+    /// restored window catches up on first click. The reveal is never
+    /// animated; animations turn on from the second full-group pass on.
     @Published private(set) var animationsEnabled = false
 
     private weak var window: NSWindow?
@@ -34,6 +37,12 @@ final class SidebarTabManager: ObservableObject {
     private var attentionWindows: Set<ObjectIdentifier> = []
     private var pendingRefresh = false
     private var didInitialPopulation = false
+
+    /// Becomes true the first time a refresh sees the whole tab group at
+    /// once, which is the moment a fresh or restored sidebar's list
+    /// settles. Animations wait until the *second* full-group pass so the
+    /// settle itself renders without unfolding the list.
+    private var hasSeenFullGroup = false
 
     /// Some metadata changes with no pwd/title event to observe — `git
     /// checkout`, or a dev server starting — so a slow timer keeps it fresh.
@@ -52,10 +61,6 @@ final class SidebarTabManager: ObservableObject {
         subscribeCenters()
         refresh()
         didInitialPopulation = true
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.animationsEnabled = true
-        }
 
         metadataRefreshTimer = Timer.scheduledTimer(
             withTimeInterval: 5,
@@ -186,8 +191,18 @@ final class SidebarTabManager: ObservableObject {
     }
 
     /// Coalesces bursts of notifications into a single pass per runloop turn.
+    ///
+    /// Deliberately **not** gated on the sidebar being visible, unlike the
+    /// metadata pass below. A hidden tab's sidebar still has to be *correct*
+    /// when it appears: skipping the reconciliation while hidden is what let
+    /// a background tab sit on a one-row list until the moment it was
+    /// selected, and then catch up all at once — the list visibly unfolding
+    /// from one row to the whole group, in front of whoever just clicked it.
+    /// Reconciling costs a walk over the group's windows and only reassigns
+    /// `models` when membership actually changed, so paying it for a hidden
+    /// tab is cheap; being wrong when it is shown is not.
     func scheduleRefresh() {
-        guard !pendingRefresh, isSidebarVisible else { return }
+        guard !pendingRefresh else { return }
         pendingRefresh = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -233,6 +248,21 @@ final class SidebarTabManager: ObservableObject {
         let ordered = windows.compactMap { modelsById[ObjectIdentifier($0)] }
         if ordered.map(\.id) != models.map(\.id) {
             models = ordered
+        }
+
+        // The list has settled once every window it knows about has a row.
+        // Deliberately not `windows.count > 1`: a window that is not in a
+        // tab group reports a group of one, so that spelling never became
+        // true and its sidebar animated nothing for the rest of the session
+        // — a whole class of user (one window, several splits, no tabs) lost
+        // the animations entirely. What the burst needed protecting from was
+        // the *first* settle, not the absence of tabs.
+        if ordered.count == windows.count {
+            if hasSeenFullGroup {
+                animationsEnabled = true
+            } else {
+                hasSeenFullGroup = true
+            }
         }
     }
 

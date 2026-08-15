@@ -11,13 +11,14 @@ final class SettingsWindowController: NSWindowController {
 
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: true
         )
         window.title = "Settings"
         window.titlebarAppearsTransparent = true
+        window.contentMinSize = NSSize(width: 960, height: 600)
         window.isReleasedWhenClosed = false
         window.center()
         window.setFrameAutosaveName("GhosttySettings")

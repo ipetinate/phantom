@@ -109,6 +109,16 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// own content doesn't reach.
     private var terminalTitlebarFiller: NSView?
 
+    /// The two constraints that place the right pane's chrome against the
+    /// titlebar strip: the filler's bottom edge and the pane tab bar's top.
+    ///
+    /// Both are offset from the terminal's safe area by whatever part of the
+    /// strip the window has stopped reserving, which is zero for an ordinary
+    /// window and the strip's height in native fullscreen. See
+    /// `syncTitlebarStripInsets`.
+    private var terminalTitlebarFillerBottom: NSLayoutConstraint?
+    private var paneTabBarTopConstraint: NSLayoutConstraint?
+
     /// The sidebar pane container and its glass layer (glass effect
     /// modes cover every pane, so the sidebar carries its own).
     private weak var sidebarPane: NSView?
@@ -239,6 +249,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // Whenever our surface tree changes in any way (new split, close split, etc.)
         // we want to invalidate our state.
         invalidateRestorableState()
+
+        // Keep our own session store in sync with the current window set.
+        PhantomSessionStore.shared.scheduleSave()
 
         // Update our zoom state
         if let window = window as? TerminalWindow {
@@ -1325,11 +1338,16 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         let layout = SidebarLayoutModel()
         layout.onNewTab = { [weak self] in
-            guard let self, let window = self.window else { return }
-            _ = Self.newTab(self.ghostty, from: window)
+            self?.newSidebarTab(in: nil)
         }
         layout.onNewClaudeTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningClaude: true)
+        }
+        layout.onNewCodexTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningCodex: true)
+        }
+        layout.onNewOpenCodeTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningOpenCode: true)
         }
         self.sidebarLayout = layout
 
@@ -1343,6 +1361,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             },
             onNewClaudeTabInGroup: { [weak self] group in
                 self?.newSidebarTab(in: group, runningClaude: true)
+            },
+            onNewCodexTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningCodex: true)
+            },
+            onNewOpenCodeTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningOpenCode: true)
             },
             onSpawnTerminalBesideSelection: { [weak self] in
                 self?.newSidebarTabBesideSelection()
@@ -1447,21 +1471,29 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // the strip is the *window's*, not the terminal's, and has to be
         // painted whichever half is on screen.
         rightPane.addSubview(titlebarFiller, positioned: .below, relativeTo: nil)
+        // Meets the terminal's content exactly. It cannot do better than
+        // that: overlapping paints that row twice and reads as a dark
+        // line, and falling short leaves the window showing through as a
+        // light one. Two translucent surfaces can't tile seamlessly —
+        // fixing this properly means one backdrop for the whole window
+        // with the terminal drawing no background of its own.
+        //
+        // The offset carries the part of the strip the window has stopped
+        // reserving, which is nothing at all until native fullscreen — where
+        // the terminal's safe area goes to zero while its scroll view still
+        // insets its content under the detached titlebar, so this is the only
+        // thing left to paint that band.
+        let fillerBottom = titlebarFiller.bottomAnchor.constraint(
+            equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
+        )
         NSLayoutConstraint.activate([
             titlebarFiller.topAnchor.constraint(equalTo: rightPane.topAnchor),
             titlebarFiller.leadingAnchor.constraint(equalTo: rightPane.leadingAnchor),
             titlebarFiller.trailingAnchor.constraint(equalTo: rightPane.trailingAnchor),
-            // Meets the terminal's content exactly. It cannot do better than
-            // that: overlapping paints that row twice and reads as a dark
-            // line, and falling short leaves the window showing through as a
-            // light one. Two translucent surfaces can't tile seamlessly —
-            // fixing this properly means one backdrop for the whole window
-            // with the terminal drawing no background of its own.
-            titlebarFiller.bottomAnchor.constraint(
-                equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
-            ),
+            fillerBottom,
         ])
         self.terminalTitlebarFiller = titlebarFiller
+        self.terminalTitlebarFillerBottom = fillerBottom
 
         // The pane's tab bar, above whichever surface is showing. Added after
         // the terminal so that constraining to it is legal: a constraint
@@ -1484,15 +1516,22 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         tabBarHosting.setContentCompressionResistancePriority(.init(1), for: .horizontal)
         rightPane.addSubview(tabBarHosting)
         let tabBarHeight = tabBarHosting.heightAnchor.constraint(equalToConstant: 0)
+        // Offset by the same strip the filler carries, so the bar sits under
+        // the titlebar rather than behind it in fullscreen. The terminal's
+        // own content lines up with it either way: its SwiftUI inset is the
+        // bar's height, applied on top of whatever the window or its scroll
+        // view has already pushed the content down by.
+        let tabBarTop = tabBarHosting.topAnchor.constraint(
+            equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
+        )
         NSLayoutConstraint.activate([
-            tabBarHosting.topAnchor.constraint(
-                equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
-            ),
+            tabBarTop,
             tabBarHosting.leadingAnchor.constraint(equalTo: rightPane.leadingAnchor),
             tabBarHosting.trailingAnchor.constraint(equalTo: rightPane.trailingAnchor),
             tabBarHeight,
         ])
         self.paneTabBarHeight = tabBarHeight
+        self.paneTabBarTopConstraint = tabBarTop
         self.paneTabBarView = tabBarHosting
 
         let editorHosting = NSHostingView(
@@ -1599,6 +1638,22 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             name: GuiConfigStore.didApply,
             object: nil
         )
+        // The window's own notifications rather than the fullscreen style's
+        // delegate: native fullscreen can be entered from the green button
+        // or from a restored window, and this has to hold whichever way the
+        // window got there.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sidebarFullscreenDidChange(_:)),
+            name: NSWindow.didEnterFullScreenNotification,
+            object: window
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sidebarFullscreenDidChange(_:)),
+            name: NSWindow.didExitFullScreenNotification,
+            object: window
+        )
 
         DispatchQueue.main.async { [weak self] in
             self?.applySharedSidebarWidth()
@@ -1610,24 +1665,24 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// Creates a terminal tab that starts inside the given group.
     ///
     /// Working directory rule: project groups start at the project root;
-    /// manual groups (and the ungrouped section) start at the pwd of the
-    /// currently selected tab. The new surface is pinned to the group so
-    /// later `cd`s never move it out.
+    /// manual groups start at the pwd of the tab selected *inside the
+    /// group*, falling back to the group's first terminal; the ungrouped
+    /// section starts at the configured default home (`~/` unless changed
+    /// in Behaviors). The new surface is pinned to the group it was created
+    /// in — including to *no* group — so later `cd`s never move it in or
+    /// out.
     @discardableResult
     private func newSidebarTab(
         in group: SidebarGroup?,
         runningClaude: Bool = false,
+        runningCodex: Bool = false,
+        runningOpenCode: Bool = false,
         inheritingPane: Bool = false
     ) -> Ghostty.SurfaceView? {
         guard let window else { return nil }
 
         var baseConfig = Ghostty.SurfaceConfiguration()
-        if case .project(let root) = group?.kind {
-            baseConfig.workingDirectory = (root as NSString).expandingTildeInPath
-        } else if let selected = sidebarTabManager?.models.first(where: { $0.isSelected }),
-                  let pwd = selected.pwd, !pwd.isEmpty {
-            baseConfig.workingDirectory = pwd
-        }
+        baseConfig.workingDirectory = sidebarNewTabDirectory(in: group)
 
         guard let controller = Self.newTab(ghostty, from: window, withBaseConfig: baseConfig)
         else { return nil }
@@ -1645,15 +1700,90 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             controller.sidebarLayout?.selectedPane = pane
         }
 
-        if runningClaude, let surface {
-            ClaudeSession.run("claude", in: surface)
+        // Recorded before the agent is even typed, because *we* know which
+        // one it is and the hook might never say. A tab whose hook is not
+        // installed used to leave no trace of having run an agent, so a
+        // restore had nothing to resume from — see `recordAgentStart`.
+        if let surface, let agent = startingAgent(
+            claude: runningClaude,
+            codex: runningCodex,
+            openCode: runningOpenCode
+        ) {
+            TabStateCenter.shared.recordAgentStart(surfaceId: surface.id, agent: agent)
+            ClaudeSession.run(agent.launchCommand, in: surface)
         }
 
-        guard let group, let surface else { return surface }
-        SidebarGroupStore.shared.assign(surfaceId: surface.id, to: group.id)
+        guard let surface else { return nil }
+
+        // Record the group the tab was *created in*, including when that is
+        // no group at all. Leaving the ungrouped case unrecorded is not
+        // neutral: `resolveGroup` then falls through to its pwd claim, and
+        // any project group whose root contains this terminal's directory
+        // adopts it. Opening a terminal outside every group and watching it
+        // jump into one is the bug that behavior produces.
+        SidebarGroupStore.shared.assign(surfaceId: surface.id, to: group?.id)
         sidebarTabManager?.scheduleRefresh()
         controller.sidebarTabManager?.scheduleRefresh()
         return surface
+    }
+
+    /// Which agent a new-tab request is asking for, if any.
+    ///
+    /// Three booleans arrive from three separate sidebar buttons; this is
+    /// where they become the one thing the rest of the flow needs, so that
+    /// recording the agent and launching it cannot disagree about which it
+    /// was.
+    private func startingAgent(
+        claude: Bool,
+        codex: Bool,
+        openCode: Bool
+    ) -> CodingAgent? {
+        if claude { return .claude }
+        if codex { return .codex }
+        if openCode { return .opencode }
+        return nil
+    }
+
+    /// Resolves the working directory for a new sidebar terminal, per the
+    /// sidebar rule:
+    ///  - project groups open at the project root;
+    ///  - manual groups open at the pwd of the tab selected inside the
+    ///    group, else the group's first terminal;
+    ///  - the ungrouped section opens at the configured default home.
+    private func sidebarNewTabDirectory(in group: SidebarGroup?) -> String {
+        switch group?.kind {
+        case .project(let root):
+            return (root as NSString).expandingTildeInPath
+
+        case .manual, .none:
+            if let group {
+                let members = sidebarTabManager?.models.filter { model in
+                    SidebarGroupStore.shared.resolveGroup(
+                        surfaceId: model.surfaceId,
+                        pwd: model.pwd
+                    )?.id == group.id
+                } ?? []
+                if let selected = members.first(where: { $0.isSelected }),
+                   let pwd = selected.pwd, !pwd.isEmpty {
+                    return pwd
+                }
+                if let first = members.first, let pwd = first.pwd, !pwd.isEmpty {
+                    return pwd
+                }
+            }
+            return Self.sidebarDefaultHomeDirectory
+        }
+    }
+
+    /// The home directory new sidebar terminals start in when no group
+    /// rule applies. Defaults to the user's home; overridable in Behaviors.
+    static var sidebarDefaultHomeDirectory: String {
+        let configured = UserDefaults.standard.string(forKey: "SidebarNewTabHomeDirectory") ?? ""
+        let expanded = (configured as NSString).expandingTildeInPath
+        guard !expanded.isEmpty else {
+            return FileManager.default.homeDirectoryForCurrentUser.path
+        }
+        return expanded
     }
 
     /// Opens a file in this window's editor, explaining it when the editor
@@ -1837,6 +1967,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// Keeps the chrome's trailing edge at the sidebar's right edge
     /// (or parked next to the traffic lights when collapsed).
     private func syncSidebarChromeWidth() {
+        // The strip the icons live in is the same strip the panes have to
+        // stay out of, so both are resolved together and every caller of
+        // this — collapse, divider drag, appearance sync, config reload, the
+        // fullscreen transition — keeps them in agreement.
+        syncTitlebarStripInsets()
+
         guard let chrome = sidebarChromeView else { return }
 
         if chrome.superview == nil {
@@ -1860,6 +1996,77 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // Keep the centered title out of the chrome it would otherwise
         // overlap: the icons end where this constraint puts them.
         (window as? TerminalWindow)?.titlebarLeadingInset = constraint.constant + 12
+    }
+
+    /// Hands both panes whatever part of the titlebar strip the window has
+    /// stopped reserving, so the sidebar's first row, the terminal's filler
+    /// and the pane tab bar all sit against the strip in native fullscreen
+    /// the way they do in an ordinary window.
+    ///
+    /// The terminal pane is the yardstick for what *is* reserved because it
+    /// is the view AppKit hands the strip to — the filler has always been
+    /// measured off exactly this inset (see `makeSidebarSplitView`), and it
+    /// reads zero in fullscreen, which is the shortfall put back here.
+    ///
+    /// No mode check, because none is needed: `NSTitlebarView` lives inside
+    /// the titlebar container, and the container is what the window stops its
+    /// content below. The measured strip can therefore never exceed what the
+    /// window reserves outside of fullscreen, so the arithmetic yields zero
+    /// there on its own and windowed layout is left exactly as it was.
+    private func syncTitlebarStripInsets() {
+        guard let window else { return }
+
+        let shortfall = SidebarLayoutModel.titlebarShortfall(
+            titlebarHeight: visibleTitlebarHeight(of: window),
+            reservedByWindow: terminalPaneView?.safeAreaInsets.top ?? 0
+        )
+
+        // The filler's bottom and the tab bar's top hang off the terminal's
+        // safe area, so both take the shortfall as their offset: nothing
+        // moves at zero, and in fullscreen both land on the strip's edge.
+        terminalTitlebarFillerBottom?.constant = shortfall
+        paneTabBarTopConstraint?.constant = shortfall
+
+        // Assigned only on a real change: this runs on every divider drag
+        // and every appearance sync, and a `@Published` write invalidates
+        // the whole sidebar body whether the value moved or not.
+        guard let layout = sidebarLayout,
+              abs(layout.titlebarInset - shortfall) > 0.5
+        else { return }
+        layout.titlebarInset = shortfall
+    }
+
+    /// The height of the titlebar strip this window actually shows, zero
+    /// when it shows none.
+    ///
+    /// The hidden-titlebar style keeps the traffic lights and their
+    /// container around and hides them, and non-native fullscreen drops
+    /// `.titled` altogether so there are no buttons to ask. Neither has a
+    /// strip for the sidebar to stay clear of.
+    private func visibleTitlebarHeight(of window: NSWindow) -> CGFloat {
+        guard let titlebar = window.standardWindowButton(.closeButton)?.superview,
+              !titlebar.isHiddenOrHasHiddenAncestor
+        else { return 0 }
+        return titlebar.frame.height
+    }
+
+    /// Re-resolves the titlebar strip across a fullscreen transition.
+    ///
+    /// Entering native fullscreen moves the titlebar into its own window,
+    /// which both changes the strip the panes must reserve and can hand the
+    /// chrome a new titlebar view to live in. Both helpers are idempotent, so
+    /// exiting runs the same path back.
+    @objc private func sidebarFullscreenDidChange(_ notification: Notification) {
+        attachSidebarChrome()
+        syncTitlebarStripInsets()
+
+        // Again on the next turn: the fullscreen titlebar is not always laid
+        // out by the time the notification lands, and an unmeasured strip
+        // reads as no strip at all.
+        DispatchQueue.main.async { [weak self] in
+            self?.attachSidebarChrome()
+            self?.syncTitlebarStripInsets()
+        }
     }
 
     // MARK: NSSplitViewDelegate
@@ -1956,6 +2163,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     override func windowWillClose(_ notification: Notification) {
         super.windowWillClose(notification)
+
+        // A closed window leaves the session store too.
+        PhantomSessionStore.shared.scheduleSave()
+
         cancelPendingInitialPresentation()
         self.relabelTabs()
 

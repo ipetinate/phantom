@@ -97,13 +97,21 @@ struct CodeHoverPersistenceTests {
             return CodeHoverInfo()
         }
 
+        // The delay is stated here rather than taken from the view's default,
+        // because this test's correctness rests on a *ratio*: the pointer must
+        // move on while the first request is still pending. With the shipped
+        // 450ms and a 100ms gap the margin was 4.5×, and a machine running the
+        // rest of the suite in parallel overran it — the first request fired,
+        // two look-ups ran, and the test failed for a fact about the host
+        // rather than about cancellation. 600ms against 20ms is 30×, and the
+        // wait afterwards clears the delay with room to spare.
+        textView.hoverFetchDelay = .milliseconds(600)
+
         textView.mouseMoved(with: moveEvent(x: 10, y: 190))
-        // Well inside the 450ms fetch delay, so the first request is still
-        // pending when the pointer moves on.
-        try await Task.sleep(for: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(20))
         textView.mouseMoved(with: moveEvent(x: 300, y: 190))
 
-        try await Task.sleep(for: .milliseconds(700))
+        try await Task.sleep(for: .milliseconds(1500))
         #expect(offsets.count == 1, "only the latest hover's fetch should have run")
     }
 }

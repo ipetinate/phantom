@@ -24,6 +24,14 @@ enum BackportKeyPressResult {
     case ignored
 }
 
+/// A key press delivered to a focused view: which key, and which
+/// modifiers were held with it.
+struct BackportKeyPress {
+    let key: Character
+    let modifiers: EventModifiers
+    let characters: String?
+}
+
 extension Backport where Content: View {
     func pointerVisibility(_ v: BackportVisibility) -> some View {
         #if canImport(AppKit)
@@ -49,12 +57,59 @@ extension Backport where Content: View {
         #endif
     }
 
+    /// Drops the system focus ring while leaving the view focusable.
+    ///
+    /// The two are separate needs and SwiftUI ties them together: a view has
+    /// to be `focusable()` to receive key presses, and being focusable is
+    /// what draws the ring. Somewhere like the file tree — which answers
+    /// arrow keys and shortcuts, but is a sidebar list rather than a control
+    /// — the keyboard behavior is wanted and the blue outline around the
+    /// whole box is not.
+    ///
+    /// A no-op on macOS 13, where the modifier doesn't exist; the ring stays,
+    /// which is the pre-existing behavior rather than a regression.
+    func focusEffectDisabled() -> some View {
+        #if canImport(AppKit)
+        if #available(macOS 14, *) {
+            return content.focusEffectDisabled()
+        } else {
+            return content
+        }
+        #else
+        return content
+        #endif
+    }
+
     /// Backported onKeyPress that works on macOS 14+ and is a no-op on macOS 13.
     func onKeyPress(_ key: KeyEquivalent, action: @escaping (EventModifiers) -> BackportKeyPressResult) -> some View {
         #if canImport(AppKit)
         if #available(macOS 14, *) {
             return content.onKeyPress(key, phases: .down, action: { keyPress in
                 switch action(keyPress.modifiers) {
+                case .handled: return .handled
+                case .ignored: return .ignored
+                }
+            })
+        } else {
+            return content
+        }
+        #else
+        return content
+        #endif
+    }
+
+    /// Backported free-form onKeyPress that works on macOS 14+ and is a
+    /// no-op on macOS 13. Unlike the keyed variant this reports *which* key
+    /// was pressed, which is what a user-configurable shortcut needs.
+    func onKeyPress(_ action: @escaping (BackportKeyPress) -> BackportKeyPressResult) -> some View {
+        #if canImport(AppKit)
+        if #available(macOS 14, *) {
+            return content.onKeyPress(phases: .down, action: { press in
+                switch action(BackportKeyPress(
+                    key: press.key.character,
+                    modifiers: press.modifiers,
+                    characters: press.characters
+                )) {
                 case .handled: return .handled
                 case .ignored: return .ignored
                 }

@@ -52,7 +52,7 @@ struct ReferencesView: View {
             HStack {
                 Text("References")
                     .font(palette.font(size: 13).weight(.semibold))
-                Text("\(references.count)")
+                Text(verbatim: "\(references.count)")
                     .font(palette.font(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -85,7 +85,7 @@ struct ReferencesView: View {
             onSelect(reference)
         } label: {
             HStack(spacing: 8) {
-                Text("\(reference.line)")
+                Text(verbatim: "\(reference.line)")
                     .font(palette.font(size: 11))
                     .foregroundStyle(.secondary)
                     .frame(width: 44, alignment: .trailing)

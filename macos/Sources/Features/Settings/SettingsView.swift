@@ -15,6 +15,7 @@ struct SettingsRootView: View {
         case sidebar
         case files
         case behaviors
+        case keyboardShortcuts
         case languageServers
         case agents
 
@@ -28,6 +29,7 @@ struct SettingsRootView: View {
             case .sidebar: return "Sidebar"
             case .files: return "Files"
             case .behaviors: return "Behaviors"
+            case .keyboardShortcuts: return "Keyboard Shortcuts"
             case .languageServers: return "Language Servers"
             case .agents: return "Agents"
             }
@@ -41,6 +43,7 @@ struct SettingsRootView: View {
             case .sidebar: return "sidebar.left"
             case .files: return "doc.text"
             case .behaviors: return "slider.horizontal.3"
+            case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
             case .agents: return "sparkles"
             }
@@ -56,7 +59,12 @@ struct SettingsRootView: View {
                     .tag(section)
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
+            // Wide enough for the longest section name at the window's
+            // opening width. "Keyboard Shortcuts" is the longest, and at an
+            // ideal of 180 it opened already truncated to "Keyboard
+            // Shortc…" — a settings list that hides what it is offering
+            // before you have touched anything.
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
         } detail: {
             switch selection {
             case .general:
@@ -71,13 +79,15 @@ struct SettingsRootView: View {
                 FilesSettingsView()
             case .behaviors:
                 BehaviorsSettingsView(ghostty: ghostty, store: store)
+            case .keyboardShortcuts:
+                KeyboardShortcutsSettingsView()
             case .languageServers:
                 LanguageServersSettingsView()
             case .agents:
                 AgentsSettingsView()
             }
         }
-        .frame(minWidth: 700, minHeight: 480)
+        .frame(minWidth: 960, minHeight: 600)
     }
 }
 
@@ -223,6 +233,7 @@ struct BehaviorsSettingsView: View {
 
     @AppStorage("SidebarRestoreAgentSessions") private var restoreAgentSessions = true
     @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
+    @AppStorage("SidebarNewTabHomeDirectory") private var newTabHomeDirectory = ""
     @AppStorage("AgentNotificationsEnabled") private var agentNotifications = true
     @AppStorage(FileOpenTarget.defaultsKey)
     private var fileOpenTarget = FileOpenTarget.alwaysNewTerminal.rawValue
@@ -254,11 +265,23 @@ struct BehaviorsSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Sidebar") {
+            Section {
                 Picker("New Terminal Position", selection: $newTabPosition) {
                     Text("Bottom of List").tag("end")
                     Text("Top of List").tag("start")
                 }
+
+                TextField(
+                    "New Terminal Home Directory",
+                    text: $newTabHomeDirectory,
+                    prompt: Text("~/")
+                )
+            } header: {
+                Text("Sidebar")
+            } footer: {
+                Text("New terminals and agents created by the sidebar start in the default home directory (`~/`) unless a group's project path applies. Type a path like `~/dev` to change it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -287,57 +310,105 @@ struct BehaviorsSettingsView: View {
 /// that surface agent activity in the sidebar. Claude Code today; more
 /// agents later.
 struct AgentsSettingsView: View {
-    @State private var installed = ClaudeHooksInstaller.isInstalled
+    @State private var claudeInstalled = ClaudeHooksInstaller.isInstalled
+    @State private var codexInstalled = CodexHooksInstaller.isInstalled
+    @State private var openCodeInstalled = OpenCodeHooksInstaller.isInstalled
     @State private var feedback: String?
+
+    @AppStorage("SidebarShowClaude") private var sidebarShowClaude = true
+    @AppStorage("SidebarShowCodex") private var sidebarShowCodex = true
+    @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = true
+    @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = true
+    @AppStorage("SidebarShowOpenCode") private var sidebarShowOpenCode = true
+    @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = true
 
     var body: some View {
         Form {
+            Section("Sidebar") {
+                Toggle(isOn: $sidebarShowClaude) {
+                    HStack(spacing: 6) { ClaudeIcon(size: 14, tint: .original); Text("Claude Code") }
+                }
+                .toggleStyle(.switch)
+                Toggle(isOn: $sidebarShowCodex) {
+                    HStack(spacing: 6) { CodexIcon(size: 14, originalColors: true); Text("Codex") }
+                }
+                .toggleStyle(.switch)
+                Toggle(isOn: $sidebarShowOpenCode) {
+                    HStack(spacing: 6) { OpenCodeIcon(size: 14, originalColors: true); Text("OpenCode") }
+                }
+                .toggleStyle(.switch)
+            }
+
             Section {
-                LabeledContent {
-                    HStack(spacing: 10) {
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(installed ? Color.green : Color.secondary)
-                                .frame(width: 7, height: 7)
-                            Text(installed ? "Hooks installed" : "Not installed")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if installed {
-                            Button("Uninstall") {
-                                let ok = ClaudeHooksInstaller.uninstall()
-                                installed = ClaudeHooksInstaller.isInstalled
-                                feedback = ok && !installed
-                                    ? "Hooks removed"
-                                    : "Removal failed: \(ClaudeHooksInstaller.lastError ?? "check ~/.claude/settings.json")"
-                            }
-                        } else {
-                            Button("Install") {
-                                let ok = ClaudeHooksInstaller.install()
-                                installed = ClaudeHooksInstaller.isInstalled
-                                feedback = ok && installed
-                                    ? "Hooks installed \u{2713}"
-                                    : "Install failed: \(ClaudeHooksInstaller.lastError ?? "status did not update")"
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        ClaudeIcon(size: 14, tint: .original)
-                        Text("Claude Code")
-                    }
+                Toggle(isOn: $groupShowClaude) {
+                    HStack(spacing: 6) { ClaudeIcon(size: 14, tint: .original); Text("Claude Code") }
                 }
-
-                if let feedback {
-                    Text(feedback)
-                        .font(.caption)
-                        .foregroundStyle(feedback.contains("failed") ? .red : .secondary)
+                .toggleStyle(.switch)
+                Toggle(isOn: $groupShowCodex) {
+                    HStack(spacing: 6) { CodexIcon(size: 14, originalColors: true); Text("Codex") }
                 }
+                .toggleStyle(.switch)
+                Toggle(isOn: $groupShowOpenCode) {
+                    HStack(spacing: 6) { OpenCodeIcon(size: 14, originalColors: true); Text("OpenCode") }
+                }
+                .toggleStyle(.switch)
+            } header: {
+                Text("Groups")
+            } footer: {
+                Text("Control the new-agent buttons independently in the main sidebar and in each group header.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                agentHookRow(
+                    title: "Claude Code",
+                    icon: AnyView(ClaudeIcon(size: 14, tint: .original)),
+                    installed: claudeInstalled,
+                    install: {
+                        let ok = ClaudeHooksInstaller.install()
+                        claudeInstalled = ClaudeHooksInstaller.isInstalled
+                        feedback = ok && claudeInstalled ? "Claude hooks installed ✓" : "Claude install failed: \(ClaudeHooksInstaller.lastError ?? "status did not update")"
+                    },
+                    uninstall: {
+                        let ok = ClaudeHooksInstaller.uninstall()
+                        claudeInstalled = ClaudeHooksInstaller.isInstalled
+                        feedback = ok && !claudeInstalled ? "Claude hooks removed" : "Claude removal failed"
+                    }
+                )
+                agentHookRow(
+                    title: "Codex",
+                    icon: AnyView(CodexIcon(size: 14, originalColors: true)),
+                    installed: codexInstalled,
+                    install: {
+                        let ok = CodexHooksInstaller.install()
+                        codexInstalled = CodexHooksInstaller.isInstalled
+                        feedback = ok && codexInstalled ? "Codex hooks installed ✓" : "Codex install failed: \(CodexHooksInstaller.lastError ?? "status did not update")"
+                    },
+                    uninstall: {
+                        let ok = CodexHooksInstaller.uninstall()
+                        codexInstalled = CodexHooksInstaller.isInstalled
+                        feedback = ok && !codexInstalled ? "Codex hooks removed" : "Codex removal failed"
+                    }
+                )
+                agentHookRow(
+                    title: "OpenCode",
+                    icon: AnyView(OpenCodeIcon(size: 14, originalColors: true)),
+                    installed: openCodeInstalled,
+                    install: {
+                        openCodeInstalled = OpenCodeHooksInstaller.install()
+                        feedback = openCodeInstalled ? "OpenCode hooks installed ✓" : "OpenCode install failed"
+                    },
+                    uninstall: {
+                        openCodeInstalled = !OpenCodeHooksInstaller.uninstall()
+                        feedback = openCodeInstalled ? "OpenCode removal failed" : "OpenCode hooks removed"
+                    }
+                )
+                if let feedback { Text(feedback).font(.caption).foregroundStyle(feedback.contains("failed") ? .red : .secondary) }
             } header: {
                 Text("Hooks")
             } footer: {
-                Text("Installs a hook script in ~/.claude/hooks and registers it in ~/.claude/settings.json (existing hooks are preserved). With the hooks in place, tabs running Claude Code show a spinner while it works, a bubble while it waits for input, and an attention dot when a response is ready — and sessions resume on window restore.")
+                Text("Installs Phantom hooks for each agent while preserving existing configuration. Hooks update the tab activity indicator when an agent is working, waiting, or done.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -346,7 +417,9 @@ struct AgentsSettingsView: View {
         .navigationTitle("Agents")
         .onAppear {
             ClaudeHooksInstaller.logStatus()
-            installed = ClaudeHooksInstaller.isInstalled
+            claudeInstalled = ClaudeHooksInstaller.isInstalled
+            codexInstalled = CodexHooksInstaller.isInstalled
+            openCodeInstalled = OpenCodeHooksInstaller.isInstalled
         }
         // Claude Code owns this settings file too and rewrites it when its
         // own settings change, which can drop our registrations. Recheck on
@@ -356,7 +429,29 @@ struct AgentsSettingsView: View {
                 for: NSApplication.didBecomeActiveNotification
             )
         ) { _ in
-            installed = ClaudeHooksInstaller.isInstalled
+            claudeInstalled = ClaudeHooksInstaller.isInstalled
+            codexInstalled = CodexHooksInstaller.isInstalled
+            openCodeInstalled = OpenCodeHooksInstaller.isInstalled
+        }
+    }
+
+    private func agentHookRow(
+        title: String,
+        icon: AnyView,
+        installed: Bool,
+        install: @escaping () -> Void,
+        uninstall: @escaping () -> Void
+    ) -> some View {
+        LabeledContent {
+            HStack(spacing: 10) {
+                HStack(spacing: 4) {
+                    Circle().fill(installed ? Color.green : Color.secondary).frame(width: 7, height: 7)
+                    Text(installed ? "Hooks installed" : "Not installed").font(.caption).foregroundStyle(.secondary)
+                }
+                Button(installed ? "Uninstall" : "Install") { installed ? uninstall() : install() }
+            }
+        } label: {
+            HStack(spacing: 6) { icon; Text(title) }
         }
     }
 }

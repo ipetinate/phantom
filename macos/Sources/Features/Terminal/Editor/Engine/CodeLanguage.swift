@@ -73,6 +73,12 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
         ".zshenv": .shell,
         ".gitignore": .plain,
         ".env": .shell,
+        // By name, not extension: `.mod` and `.sum` belong to plenty of
+        // things that are not Go — a Fortran module, a checksum list — and
+        // matching the extension gave all of them Go's syntax.
+        "go.mod": .go,
+        "go.sum": .go,
+        "go.work": .go,
     ]
 
     static func resolve(fileName: String) -> CodeLanguage {

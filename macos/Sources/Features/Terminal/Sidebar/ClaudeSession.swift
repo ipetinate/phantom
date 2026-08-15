@@ -3,29 +3,57 @@ import AppKit
 /// Starting a Claude Code session inside a terminal surface — both for a
 /// tab opened from the sidebar and for one resuming after a restore.
 enum ClaudeSession {
-    /// How long to give the shell before typing into it. Text sent before
-    /// the prompt is ready is swallowed.
-    private static let shellStartupDelay: TimeInterval = 2.0
+    /// How long to keep polling for the shell before giving up. If the
+    /// shell isn't running in the foreground within this window the
+    /// command is dropped rather than injected into a dead surface.
+    private static let shellWaitTimeout: TimeInterval = 10.0
 
-    /// The exact bytes sent to the surface: a carriage return, not a line
-    /// feed, which is the byte Enter actually sends. A line feed is not:
-    /// line editors that treat injected text as a paste insert it
-    /// literally, leaving the command sitting at the prompt unexecuted.
-    ///
-    /// Pulled out of `run` so this one detail — the whole reason a prior
-    /// version of this sat unexecuted — is covered by a test rather than
-    /// only a comment.
+    /// How often to poll the surface for the shell's arrival.
+    private static let shellPollInterval: TimeInterval = 0.05
+
     static func commandLine(for command: String) -> String {
         "\(command)\r"
     }
 
-    /// Types `command` into the surface and submits it once the shell is up.
+    /// Types `command` into the surface and submits it once the shell is
+    /// running in the foreground. Unlike a fixed startup delay, polling the
+    /// foreground PID means a slow-to-initialize shell doesn't swallow the
+    /// command, and a fast shell doesn't wait needlessly.
     @MainActor
     static func run(_ command: String, in surface: Ghostty.SurfaceView) {
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + shellStartupDelay
-        ) { [weak surface] in
-            surface?.surfaceModel?.sendText(Self.commandLine(for: command))
+        sendWhenShellReady(command, in: surface, deadline: Date().addingTimeInterval(shellWaitTimeout))
+    }
+
+    @MainActor
+    private static func sendWhenShellReady(
+        _ command: String,
+        in surface: Ghostty.SurfaceView,
+        deadline: Date
+    ) {
+        if surface.surfaceModel?.foregroundPID != nil {
+            send(command, in: surface)
+            return
         }
+        guard Date() < deadline else { return }
+
+        // Weakly, so a tab closed while its shell is still starting can go.
+        // Held strongly, the poll kept the surface — and the terminal behind
+        // it — alive for the rest of the ten seconds, redispatching every
+        // 50ms at a target nobody can see any more.
+        DispatchQueue.main.asyncAfter(deadline: .now() + shellPollInterval) { [weak surface] in
+            guard let surface else { return }
+            sendWhenShellReady(command, in: surface, deadline: deadline)
+        }
+    }
+
+    @MainActor
+    private static func send(_ command: String, in surface: Ghostty.SurfaceView) {
+        guard let model = surface.surfaceModel else { return }
+        // Text injection is intentionally separate from Enter: sendText
+        // treats control bytes as literal pasted text and does not emit
+        // the terminal key event needed to execute the command.
+        model.sendText(command)
+        model.sendKeyEvent(Ghostty.Input.KeyEvent(key: .enter, action: .press))
+        model.sendKeyEvent(Ghostty.Input.KeyEvent(key: .enter, action: .release))
     }
 }

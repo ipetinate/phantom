@@ -65,6 +65,25 @@ final class LSPCenter: ObservableObject {
     /// document but of the pair.
     private var announced: [String: Key] = [:]
 
+    /// Which server binaries are on the login `PATH`, resolved off the main
+    /// actor and republished whenever that could have changed.
+    ///
+    /// Locating a command means reading the login shell's `PATH`, and
+    /// resolving that runs `$SHELL -lic` with a five-second timeout the
+    /// first time it is asked. The Settings list asked for it from inside
+    /// `body`, once per row, on the main actor — twenty blocking shells to
+    /// draw one window. Nothing reads this before the first probe answers;
+    /// until then the status is `unknown`, which is the honest thing to say
+    /// and the one state that doesn't invite the user to install something
+    /// they already have.
+    @Published private(set) var installedCommands: Set<String> = []
+
+    /// Whether the probe has answered at least once. See `installedCommands`.
+    @Published private(set) var hasProbedInstalls = false
+
+    private var isProbingInstalls = false
+    private var probeRequestedAgain = false
+
     /// Bumped whenever a server that was missing becomes available, so the
     /// open documents can introduce themselves to it.
     ///
@@ -94,6 +113,7 @@ final class LSPCenter: ObservableObject {
 
     private init() {
         watchPathForInstalls()
+        refreshInstalledCommands()
 
         // Installing happens in the terminal and is followed by coming back
         // to the editor. Free to check, and it is the actual gesture.
@@ -107,6 +127,50 @@ final class LSPCenter: ObservableObject {
 
     @objc private func applicationBecameActive() {
         recheckMissingServers()
+        refreshInstalledCommands()
+    }
+
+    /// Re-resolves which server binaries exist, off the main actor, and
+    /// publishes the answer for anything that draws from it.
+    ///
+    /// Coalesced rather than queued: three notifications arriving together —
+    /// the `PATH` watcher, app activation, an install finishing — are one
+    /// question. A request that arrives *during* a probe is asked again
+    /// afterwards instead of being dropped, because the probe in flight
+    /// read its `PATH` before whatever just changed it: that is exactly the
+    /// install whose new binary would otherwise stay invisible.
+    func refreshInstalledCommands() {
+        guard !isProbingInstalls else {
+            probeRequestedAgain = true
+            return
+        }
+        isProbingInstalls = true
+
+        let commands = Set(
+            LSPServerRegistry.distinctServers.map { Self.effectiveDefinition($0).command }
+        )
+        Task { [weak self] in
+            let found = await Task.detached(priority: .utility) { () -> Set<String> in
+                let searchPath = LoginEnvironment.executableSearchPath()
+                return commands.filter { LSPProcess.locate($0, searchPath: searchPath) != nil }
+            }.value
+
+            guard let self else { return }
+            self.isProbingInstalls = false
+            self.hasProbedInstalls = true
+            self.installedCommands = found
+
+            guard self.probeRequestedAgain else { return }
+            self.probeRequestedAgain = false
+            self.refreshInstalledCommands()
+        }
+    }
+
+    /// Whether this server's binary is on the login `PATH`, from the last
+    /// probe rather than a fresh one. False until the first probe answers —
+    /// ask `hasProbedInstalls` to tell that apart from a real absence.
+    func isInstalled(_ server: LSPServerDefinition) -> Bool {
+        installedCommands.contains(Self.effectiveDefinition(server).command)
     }
 
     /// Watches the `PATH` directories so an install is noticed as it happens.
@@ -140,6 +204,14 @@ final class LSPCenter: ObservableObject {
     /// into an append-only list and nothing ever looked again, so the
     /// banner outlived the install and only a restart cleared it — the
     /// signature of a cache with no invalidation.
+    /// The Settings install/uninstall flow calls this when a server binary
+    /// appears or disappears, so the "Install"/"Uninstall" toggle and any
+    /// "not installed" banner re-check from a fresh locate.
+    func noteAvailabilityChanged() {
+        availabilityGeneration += 1
+        refreshInstalledCommands()
+    }
+
     func recheckMissingServers() {
         let notInstalledCommands = Set(status.compactMap { key, value -> String? in
             guard case .notInstalled = value else { return nil }
@@ -149,7 +221,7 @@ final class LSPCenter: ObservableObject {
 
         Task { [weak self] in
             let found = await Task.detached(priority: .utility) { () -> Set<String> in
-                var searchPath = LoginEnvironment.loginPath() ?? ""
+                var searchPath = LoginEnvironment.executableSearchPath()
                 var located = notInstalledCommands.filter {
                     LSPProcess.locate($0, searchPath: searchPath) != nil
                 }
@@ -159,7 +231,7 @@ final class LSPCenter: ObservableObject {
                 // One retry on a fresh resolve tells the two apart.
                 if located.isEmpty {
                     LoginEnvironment.invalidate()
-                    searchPath = LoginEnvironment.loginPath() ?? ""
+                    searchPath = LoginEnvironment.executableSearchPath()
                     located = notInstalledCommands.filter {
                         LSPProcess.locate($0, searchPath: searchPath) != nil
                     }
@@ -287,6 +359,46 @@ final class LSPCenter: ObservableObject {
     func status(forPath path: String) -> LSPServerStatus? {
         guard let key = key(forPath: path) else { return nil }
         return status[key]
+    }
+
+    /// Aggregates installation and runtime state for the Settings screen.
+    /// A server can be active in more than one workspace, so the count is
+    /// included instead of pretending there is one global process.
+    func status(for server: LSPServerDefinition) -> LSPServerStatusSnapshot {
+        let states = status.compactMap { key, value -> LSPServerStatus? in
+            guard let definition = LSPServerRegistry.server(forLanguage: key.languageID),
+                  Self.effectiveDefinition(definition).command == server.command
+            else { return nil }
+            return value
+        }
+
+        let active = states.filter { if case .running = $0 { return true }; return false }.count
+        if active > 0 {
+            return LSPServerStatusSnapshot(state: .running, activeWorkspaceCount: active)
+        }
+        if states.contains(where: { if case .starting = $0 { return true }; return false }) {
+            return LSPServerStatusSnapshot(state: .starting, activeWorkspaceCount: 0)
+        }
+        if let failure = states.first(where: { $0.isFailure && !isNotInstalled($0) }) {
+            return LSPServerStatusSnapshot(
+                state: .error(failure.summary), activeWorkspaceCount: 0
+            )
+        }
+
+        // From the cached probe, never a fresh one: this is called from a
+        // SwiftUI `body`, once per row. See `installedCommands`.
+        guard hasProbedInstalls else {
+            return LSPServerStatusSnapshot(state: .unknown, activeWorkspaceCount: 0)
+        }
+        return LSPServerStatusSnapshot(
+            state: isInstalled(server) ? .installed : .notInstalled,
+            activeWorkspaceCount: 0
+        )
+    }
+
+    private func isNotInstalled(_ value: LSPServerStatus) -> Bool {
+        if case .notInstalled = value { return true }
+        return false
     }
 
     /// The registry's definition plus any override, for the language this
@@ -514,7 +626,13 @@ final class LSPCenter: ObservableObject {
         starting.insert(key)
         defer { starting.remove(key) }
 
-        let searchPath = LoginEnvironment.loginPath() ?? ""
+        // Off the main actor: resolving this runs the login shell the first
+        // time it is asked, and this function is main-actor-isolated — the
+        // window would be frozen for the whole of it, on the first code
+        // file opened in a session.
+        let searchPath = await Task.detached(priority: .userInitiated) {
+            LoginEnvironment.executableSearchPath()
+        }.value
         guard LSPProcess.locate(definition.command, searchPath: searchPath) != nil else {
             status[key] = .notInstalled
             return nil

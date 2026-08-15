@@ -70,3 +70,42 @@ enum LSPServerStatus: Equatable, Sendable {
         }
     }
 }
+
+/// Aggregated status for a server binary across all workspaces currently
+/// known to Phantom. Settings has no single file path to use, so this is the
+/// truthful status surface for the server list.
+struct LSPServerStatusSnapshot: Equatable, Sendable {
+    enum State: Equatable, Sendable {
+        case unknown
+        case notInstalled
+        case installed
+        case starting
+        case running
+        case error(String)
+    }
+
+    let state: State
+    let activeWorkspaceCount: Int
+
+    var label: String {
+        switch state {
+        case .unknown: return "Unknown"
+        case .notInstalled: return "Not installed"
+        case .installed: return "Installed"
+        case .starting: return "Starting"
+        case .running: return activeWorkspaceCount > 0 ? "Running" : "Installed"
+        case .error: return "Error"
+        }
+    }
+
+    var systemImage: String {
+        switch state {
+        case .unknown: return "questionmark.circle"
+        case .notInstalled: return "circle.dashed"
+        case .installed: return "checkmark.circle"
+        case .starting: return "circle.dotted.and.circle"
+        case .running: return "checkmark.circle.fill"
+        case .error: return "exclamationmark.triangle.fill"
+        }
+    }
+}

@@ -76,6 +76,21 @@ final class TerminalRestorableState: TerminalRestorable {
     var titleOverride: String? {
         internalState.titleOverride
     }
+    var frame: CGRect? {
+        internalState.frame
+    }
+    var tabGroupID: Int? {
+        internalState.tabGroupID
+    }
+    var tabIndex: Int? {
+        internalState.tabIndex
+    }
+    var isSelectedTab: Bool? {
+        internalState.isSelectedTab
+    }
+    var isFullscreen: Bool? {
+        internalState.isFullscreen
+    }
 
     /// Internal State we use to perform unit tests
     ///
@@ -86,6 +101,19 @@ final class TerminalRestorableState: TerminalRestorable {
 
     init(from controller: TerminalController) {
         internalState = .init(from: controller)
+    }
+
+    init(
+        from controller: TerminalController,
+        tabGroupID: Int?,
+        tabIndex: Int?,
+        isSelectedTab: Bool?
+    ) {
+        internalState = .init(
+            from: controller,
+            tabGroupID: tabGroupID,
+            tabIndex: tabIndex,
+            isSelectedTab: isSelectedTab)
     }
 
     required init(copy other: TerminalRestorableState) {
@@ -141,6 +169,18 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
         // don't have to deal with config reloads.
         if appDelegate.ghostty.config.windowSaveState == "never" {
             AppDelegate.logger.warning("skip restoration: window-save-state=never")
+            completionHandler(nil, nil)
+            return
+        }
+
+        // If our own session store has a saved session, stand macOS's
+        // restore down entirely: it is unreliable at capturing every window
+        // that was open at quit time, while ours is authoritative. The
+        // store is seeded with whatever macOS restored on the first launch
+        // after this landed, and takes over from there. See
+        // `PhantomSessionStore`.
+        if PhantomSessionStore.shared.hasSavedSession {
+            AppDelegate.logger.warning("skip restoration: restoring from own session store")
             completionHandler(nil, nil)
             return
         }

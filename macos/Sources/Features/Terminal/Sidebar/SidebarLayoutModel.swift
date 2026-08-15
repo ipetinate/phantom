@@ -30,6 +30,12 @@ final class SidebarLayoutModel: ObservableObject {
     /// Creates a new terminal tab that immediately starts a Claude session.
     var onNewClaudeTab: () -> Void = {}
 
+    /// Creates a new terminal tab that immediately starts a Codex session.
+    var onNewCodexTab: () -> Void = {}
+
+    /// Creates a new terminal tab that immediately starts an OpenCode session.
+    var onNewOpenCodeTab: () -> Void = {}
+
     /// Which panel the sidebar is showing.
     ///
     /// Per-window, and deliberately **not** persisted. Every terminal tab is
@@ -43,6 +49,47 @@ final class SidebarLayoutModel: ObservableObject {
     /// already observe this object, so the panel switch reaches the sidebar
     /// body and the titlebar buttons with no extra wiring.
     @Published var selectedPane: SidebarPane = .terminals
+
+    /// How much of the window's titlebar strip the sidebar keeps clear on
+    /// its own, applied as top padding by `SidebarView`.
+    ///
+    /// Zero for an ordinary window, where AppKit already reserves the strip
+    /// for us. In native fullscreen it is the strip's full height, because
+    /// there AppKit reserves none of it — see `titlebarShortfall`.
+    ///
+    /// Per window rather than app-wide: one window can be fullscreen while
+    /// its siblings are not, and each sidebar has to answer for its own.
+    @Published var titlebarInset: CGFloat = 0
+
+    /// The part of the titlebar strip the window is not reserving.
+    ///
+    /// The one number behind the whole fullscreen strip: the sidebar takes it
+    /// as padding, and the terminal pane's filler and tab bar take it as the
+    /// offset from the terminal's safe area (`syncTitlebarStripInsets`).
+    ///
+    /// While a window is ordinary, its titlebar belongs to it: the content
+    /// stops below the strip, and the sidebar's first row lands under the
+    /// traffic lights without anyone arranging it. Native fullscreen moves
+    /// the titlebar into a separate `NSToolbarFullScreenWindow` and hands
+    /// the whole frame back as content, so nothing is reserved any more —
+    /// while the traffic lights and the sidebar's own titlebar icons keep
+    /// drawing over that strip. That is how the pane switcher ended up
+    /// underneath the close button in fullscreen, and how the strip over the
+    /// terminal went back to showing the bare window.
+    ///
+    /// A difference rather than a flat strip height, so it cannot double up
+    /// and needs no mode to switch on. Whatever the window still reserves is
+    /// subtracted, and outside fullscreen that is always the larger of the two
+    /// — `NSTitlebarView` is measured inside the titlebar container, which is
+    /// what the window stops its content below — so this is zero there
+    /// structurally, and a macOS that starts reserving the strip in fullscreen
+    /// again returns to zero on its own instead of insetting anything twice.
+    static func titlebarShortfall(
+        titlebarHeight: CGFloat,
+        reservedByWindow: CGFloat
+    ) -> CGFloat {
+        max(0, titlebarHeight - max(0, reservedByWindow))
+    }
 }
 
 /// The sidebar | terminal split view, with a user-configurable divider:

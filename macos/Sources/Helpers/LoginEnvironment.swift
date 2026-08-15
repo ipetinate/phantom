@@ -26,6 +26,12 @@ enum LoginEnvironment {
     private static var cachedPath: String?
     private static var didResolve = false
 
+    /// Serializes the resolution itself, so concurrent callers share one
+    /// login shell rather than each starting their own. Separate from
+    /// `lock`, which guards only the cached value and is never held across
+    /// the subprocess.
+    private static let resolveQueue = DispatchQueue(label: "phantom.login-environment.resolve")
+
     /// The environment to hand a subprocess: the current one with `PATH`
     /// replaced, when the login shell's could be resolved.
     ///
@@ -35,6 +41,19 @@ enum LoginEnvironment {
     static func environment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         if let path = loginPath() { env["PATH"] = path }
+        return env
+    }
+
+    /// The environment for a subprocess that runs developer tooling: the
+    /// login shell's `PATH` plus the directories where package managers
+    /// install user binaries (`GOBIN`, `~/go/bin`, …).
+    ///
+    /// A server's own subprocesses inherit this, so a tool the server shells
+    /// out to benefits too, not just the executable `Process` launches
+    /// directly.
+    static func executableEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = executableSearchPath()
         return env
     }
 
@@ -55,23 +74,71 @@ enum LoginEnvironment {
 
     /// Resolves and caches the login shell's `PATH`. Blocking; call from a
     /// background task.
+    ///
+    /// Callers that arrive while a resolution is in flight wait for it
+    /// rather than starting their own. The lock only ever guarded the
+    /// *cache*, not the work: everyone who asked before the first answer
+    /// landed saw `didResolve == false` and ran their own login shell.
+    /// Restoring a session asks all at once — every surface and every
+    /// language server wants the path — so a dozen interactive shells
+    /// started together, each sourcing the whole of `.zshrc`. The machine
+    /// spends its time on that instead of on the terminals that were being
+    /// restored, which is what makes them come back unresponsive.
     static func loginPath() -> String? {
-        lock.lock()
-        if didResolve {
-            let cached = cachedPath
+        if let cached = cachedResult() { return cached }
+
+        // Serialized so the shell runs once. The second check inside is
+        // what makes everyone queued behind the first caller take its
+        // answer instead of repeating the work.
+        return resolveQueue.sync {
+            if let cached = cachedResult() { return cached }
+
+            let resolved = resolve()
+
+            lock.lock()
+            cachedPath = resolved
+            didResolve = true
             lock.unlock()
-            return cached
+
+            return resolved
         }
-        lock.unlock()
+    }
 
-        let resolved = resolve()
-
+    /// The cached path, or nil when nothing has been resolved yet.
+    ///
+    /// A resolution that *failed* is still a resolution: it is cached as a
+    /// nil path with `didResolve` set, so a machine where the login shell
+    /// cannot answer does not pay for it again on every call.
+    private static func cachedResult() -> String?? {
         lock.lock()
-        cachedPath = resolved
-        didResolve = true
-        lock.unlock()
+        defer { lock.unlock() }
+        return didResolve ? .some(cachedPath) : nil
+    }
 
-        return resolved
+    /// Search path for tools installed outside the login shell's PATH.
+    ///
+    /// Go installs user binaries in GOBIN or GOPATH/bin by default. GUI apps
+    /// are often launched without the shell configuration that contains
+    /// those directories, so LSPs such as gopls would otherwise appear to be
+    /// missing even after `go install` succeeds.
+    static func executableSearchPath() -> String {
+        var directories: [String] = []
+        if let path = loginPath() {
+            directories.append(contentsOf: path.split(separator: ":").map(String.init))
+        }
+
+        let environment = ProcessInfo.processInfo.environment
+        if let gobin = environment["GOBIN"], !gobin.isEmpty {
+            directories.append(gobin)
+        }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let gopath = environment["GOPATH"] ?? "\(home)/go"
+        directories.append(contentsOf: gopath.split(separator: ":").map { "\($0)/bin" })
+        directories.append("\(home)/go/bin")
+
+        var seen = Set<String>()
+        return directories.filter { seen.insert($0).inserted }.joined(separator: ":")
     }
 
     private static func resolve() -> String? {

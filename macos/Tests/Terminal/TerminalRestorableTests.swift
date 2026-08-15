@@ -109,6 +109,81 @@ struct TerminalRestorableTests {
         #expect(v7Generic.surfaceTree.contains(where: { $0.id.uuidString == "953CE952-D91D-4D36-AC72-9D0F1F6BCE73" }))
         #expect(v7Generic.surfaceTree.contains(where: { $0.id.uuidString == "D3223569-2E01-4BC5-9DB2-DBFC3AFF46D1" }))
     }
+
+    // The session store persists `TerminalRestorableState` as JSON. Sessions
+    // saved before tab-group tracking must still decode with the new fields
+    // as nil (standalone windows).
+    //
+    // Decoded through the dummy, like every other test here. Decoding the
+    // real `TerminalRestorableState` reaches `Ghostty.SurfaceView`'s
+    // decoder, which builds a live libghostty surface and spawns a shell —
+    // in the test host, which *is* the app. See the note on
+    // `DummyTerminalRestorableState`.
+    @MainActor
+    @Test func sessionJSONWithoutTabGroupFieldsDecodes() throws {
+        let oldJSON = """
+        [
+          {
+            "focusedSurface": "f1",
+            "surfaceTree": {
+              "root": {
+                "view": {"id": "926F3F2A-824C-40C9-87CA-2CDCA4E11049"}
+              },
+              "version": 1
+            },
+            "effectiveFullscreenMode": null,
+            "tabColor": null,
+            "titleOverride": null,
+            "frame": [[0, 0], [1710, 1073]]
+          }
+        ]
+        """
+        let states = try JSONDecoder().decode(
+            [DummyTerminalRestorableState].self,
+            from: Data(oldJSON.utf8))
+        #expect(states.count == 1)
+        #expect(states[0].internalState.tabGroupID == nil)
+        #expect(states[0].internalState.tabIndex == nil)
+        #expect(states[0].internalState.frame == CGRect(x: 0, y: 0, width: 1710, height: 1073))
+    }
+
+    // Round-trips the tab-group fields so save/restore preserves group
+    // membership and tab order.
+    @MainActor
+    @Test func sessionJSONTabGroupFieldsRoundTrip() throws {
+        let json = """
+        [
+          {
+            "focusedSurface": "t1",
+            "surfaceTree": {
+              "root": {
+                "view": {"id": "AC5E829B-85FD-4C69-B196-2EE469C72A90"}
+              },
+              "version": 1
+            },
+            "effectiveFullscreenMode": null,
+            "tabColor": null,
+            "titleOverride": null,
+            "frame": null,
+            "tabGroupID": 3,
+            "tabIndex": 1
+          }
+        ]
+        """
+        let states = try JSONDecoder().decode(
+            [DummyTerminalRestorableState].self,
+            from: Data(json.utf8))
+        #expect(states.count == 1)
+        #expect(states[0].internalState.tabGroupID == 3)
+        #expect(states[0].internalState.tabIndex == 1)
+
+        let reencoded = try JSONEncoder().encode(states)
+        let again = try JSONDecoder().decode(
+            [DummyTerminalRestorableState].self,
+            from: reencoded)
+        #expect(again[0].internalState.tabGroupID == 3)
+        #expect(again[0].internalState.tabIndex == 1)
+    }
 }
 
 private extension TerminalRestorableTests {
@@ -136,6 +211,22 @@ private extension TerminalRestorableTests {
 
 // MARK: - Dummy States
 
+/// Stands in for `TerminalRestorableState` in every test here, and must
+/// keep doing so.
+///
+/// ⚠️ **Never decode the real `TerminalRestorableState` in a test.** Its
+/// surface tree is `SplitTree<Ghostty.SurfaceView>`, and
+/// `SurfaceView.init(from:)` reaches for `NSApp.delegate`'s live
+/// `ghostty.app` and builds an actual libghostty surface — which spawns a
+/// real shell. The test host *is* Phantom.app (`TEST_HOST` in the project),
+/// so those surfaces are real, orphaned, and never closed; the shells they
+/// start outlive the test. Enough of them and the host dies mid-suite,
+/// which xctest reports as every remaining test failing at 0.000 seconds —
+/// a whole-suite failure with no crash log and nothing pointing back here.
+///
+/// `InternalState` is generic in its view type precisely so tests can swap
+/// in `MockView`, which decodes to nothing but a `UUID`. The JSON is
+/// otherwise identical, so this loses no coverage of the envelope fields.
 @MainActor
 private final class DummyTerminalRestorableState: TerminalRestorable {
     static var version: Int {

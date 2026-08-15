@@ -233,6 +233,27 @@ class AppDelegate: NSObject,
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
 
+        // Bring already-installed agent hooks up to this build's version.
+        //
+        // Installing them once was a one-way door: the check for "installed"
+        // asks whether the file is there, so a script written by an older
+        // Phantom stayed, the UI reported it as installed, and the only
+        // action offered was to remove it. A hook from before session ids
+        // existed therefore went on not capturing them — which looks exactly
+        // like the resume being broken. These files are generated and never
+        // hand-edited, so rewriting one costs nothing.
+        ClaudeHooksInstaller.repairIfStale()
+        CodexHooksInstaller.repairIfStale()
+        OpenCodeHooksInstaller.repairIfStale()
+
+        // Restore our own persisted session. macOS's restoration has either
+        // run already (restoring, or standing down in favor of ours), or
+        // runs right after launch — it never creates a window when our store
+        // has a session. This must happen before `applicationDidBecomeActive`
+        // decides whether to open a default window, so a CLI launch restores
+        // too (see `PhantomSessionStore`).
+        PhantomSessionStore.shared.restoreIfNeeded()
+
         // Start our update checker.
         updateController.startUpdater()
 
@@ -352,6 +373,20 @@ class AppDelegate: NSObject,
                 NSApp.arrangeInFront(nil)
             }
         }
+
+        // Once macOS's restoration session has fully settled, record the
+        // resulting window set so the next launch restores from our store
+        // (see `PhantomSessionStore`).
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidFinishRestoringWindows(_:)),
+            name: NSApplication.didFinishRestoringWindowsNotification,
+            object: nil
+        )
+    }
+
+    @objc private func applicationDidFinishRestoringWindows(_ notification: Notification) {
+        PhantomSessionStore.shared.scheduleSave()
     }
 
     func applicationDidHide(_ notification: Notification) {
@@ -422,6 +457,9 @@ class AppDelegate: NSObject,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+
+        // Final authoritative write of our own session store.
+        PhantomSessionStore.shared.saveNow()
     }
 
     /// This is called when the application is already open and someone double-clicks the icon
@@ -431,18 +469,31 @@ class AppDelegate: NSObject,
         // of focusing one of them.
         guard !flag else { return true }
 
-        // If we have any windows in our terminal manager we don't do anything.
-        // This is possible with flag set to false if there a race where the
-        // window is still initializing and is not visible but the user clicked
-        // the dock icon.
-        guard TerminalController.all.isEmpty else { return true }
-
         // If the application isn't active yet then we don't want to process
         // this because we're not ready. This happens sometimes in Xcode runs
         // but I haven't seen it happen in releases. I'm unsure why.
         guard applicationHasBecomeActive else { return true }
 
-        // No visible windows, open a new one.
+        /// No visible windows. The session, if there is one, is what the
+        /// reader is reopening the app to get back — see `newWindow`. This is
+        /// asked before the window check below because a restore is the
+        /// better answer whenever there is a session to restore.
+        if PhantomSessionStore.shared.restoreIfNeeded() { return false }
+
+        /// Nothing was restored: either there is no session, or the reader
+        /// asked for none to be kept. Open a window, unless one is already on
+        /// its way up — with `flag` false that can still happen, in the race
+        /// where a window is initializing and not yet visible when the dock
+        /// icon is clicked.
+        ///
+        /// Not `TerminalController.all.isEmpty`, which was the check here and
+        /// is never empty after the first window closes: it counts windows
+        /// AppKit has not released yet. So with `window-save-state = never`
+        /// — or on a first ever launch — clicking the dock icon did nothing
+        /// at all, and went on doing nothing. See
+        /// `PhantomSessionStore.isOpen`.
+        guard !PhantomSessionStore.hasReachableTerminalWindows else { return true }
+
         _ = TerminalController.newWindow(ghostty)
         return false
     }
@@ -496,7 +547,7 @@ class AppDelegate: NSObject,
             // may want to show this as a sheet on the focused window (especially if we're
             // opening a tab). I'm not sure.
             let alert = NSAlert()
-            alert.messageText = "Allow Ghostty to execute \"\(filename)\"?"
+            alert.messageText = "Allow \(appDisplayName) to execute \"\(filename)\"?"
             alert.addButton(withTitle: "Allow")
             alert.addButton(withTitle: "Cancel")
             alert.alertStyle = .warning
@@ -941,6 +992,15 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func newWindow(_ sender: Any?) {
+        // Asking for a window with none open is the same request as
+        // launching with none open, and deserves the same answer: the
+        // session comes back. Quitting is not the only way to end up with
+        // nothing on screen — closing the last window leaves the app
+        // running, and a blank window there loses the arrangement just as
+        // completely as a lost restore would. Once it has been brought
+        // back, windows exist, so the next New Window is an ordinary one.
+        if PhantomSessionStore.shared.restoreIfNeeded() { return }
+
         _ = TerminalController.newWindow(ghostty)
     }
 
@@ -1309,7 +1369,7 @@ extension AppDelegate {
         if controllersNeedConfirmation.count == 1 {
             Task {
                 let response = await controllersNeedConfirmation[0].confirmCloseAsync(
-                    messageText: "Quit Ghostty?",
+                    messageText: "Quit \(appDisplayName)?",
                     informativeText: "The terminal still has a running process. If you quit, the process will be killed.",
                     confirmButtonTitle: "Terminate",
                 )
@@ -1347,7 +1407,7 @@ extension AppDelegate {
         Task {
             for controller in controllers {
                 let response = await controller.confirmCloseAsync(
-                    messageText: "Quit Ghostty?",
+                    messageText: "Quit \(appDisplayName)?",
                     informativeText: "The terminal still has a running process. If you quit, the process will be killed.",
                     confirmButtonTitle: "Terminate",
                 )
