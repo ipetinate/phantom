@@ -592,13 +592,22 @@ enum LSPServerRegistry {
     ///
     /// **The native entry is never one of them, and the reason is not that it
     /// would not help.** It is that a `.vue` handed to `tsc --lsp` panics the
-    /// process — see `nativeTypeScriptExtensions`. So a project whose
-    /// TypeScript is 7 gets the template half and no script half at all, and
-    /// that has to be *said* rather than left as silence: the answer is "Vue
-    /// needs TypeScript 6.x in this project", not an empty completion list.
+    /// process — see `nativeTypeScriptExtensions`.
+    ///
+    /// **Both are returned even when the project cannot run the second one,
+    /// and that is deliberate.** Pruning it here was the first shape of this
+    /// function and it produced exactly the silence the feature exists to
+    /// remove: a server that is never routed is never launched, so the
+    /// sentence explaining *why* it is missing — which lives in the
+    /// `initializationOptions` resolution — never runs either. The reader got
+    /// a working template, an empty `<script>`, and nothing to read.
+    ///
+    /// So routing answers "who serves this language" and launching answers
+    /// "can it actually run here". The second question has a voice; the first
+    /// one does not. Nothing is spawned on the failing path — the options
+    /// resolve before any process exists.
     private static func vueServers(toolchain: TypeScriptToolchain) -> [LSPServerDefinition] {
         guard let vue = server(forLanguage: "vue") else { return [] }
-        guard case .tsserver = toolchain else { return [vue] }
         return [vue, vueTypeScriptServer]
     }
 

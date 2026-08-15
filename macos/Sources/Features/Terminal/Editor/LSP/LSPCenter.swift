@@ -625,8 +625,27 @@ final class LSPCenter: ObservableObject {
     /// when no server — registry or override — is known for this language
     /// at all, which is the ordinary case for most files a terminal opens.
     func status(forPath path: String) -> LSPServerStatus? {
-        guard let key = key(forPath: path) else { return nil }
+        guard let key = speakingKey(forPath: path) else { return nil }
         return status[key]
+    }
+
+    /// The server this file's banner should speak for.
+    ///
+    /// The primary while everything is healthy, and otherwise **the first one
+    /// in a failure state**. A `.vue` has two servers and they fail
+    /// independently: the template half can be running perfectly while the
+    /// script half has nothing to run against. A banner that only ever spoke
+    /// for the primary would report that as health — the reader would get a
+    /// working template, an empty `<script>`, and no sentence anywhere — which
+    /// is the exact silence this whole path exists to remove.
+    ///
+    /// `definition(forPath:)` and `log(forPath:)` follow the same choice, so
+    /// the name in the banner, the sentence and the log all belong to the same
+    /// server. Naming one server while explaining another is worse than saying
+    /// nothing.
+    private func speakingKey(forPath path: String) -> Key? {
+        let keys = keys(forPath: path)
+        return keys.first { status[$0]?.isFailure == true } ?? keys.first
     }
 
     /// Aggregates installation and runtime state for the Settings screen.
@@ -678,15 +697,16 @@ final class LSPCenter: ObservableObject {
     /// the registry's, or an extension's where one owns the file type. What a
     /// banner names and what "Check Again" or a log panel act on.
     func definition(forPath path: String) -> LSPServerDefinition? {
-        guard let base = Self.resolvedServer(forPath: path) else { return nil }
-        return Self.effectiveDefinition(base)
+        let servers = Self.resolvedServers(forPath: path)
+        guard let key = speakingKey(forPath: path) else { return servers.first }
+        return servers.first { $0.command == key.command } ?? servers.first
     }
 
     /// The server's recent stderr, oldest first. Kept after the process
     /// exits or fails to start — that is precisely when it is worth
     /// reading.
     func log(forPath path: String) -> [String] {
-        guard let key = key(forPath: path) else { return [] }
+        guard let key = speakingKey(forPath: path) else { return [] }
         return serverLogs[key] ?? []
     }
 

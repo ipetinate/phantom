@@ -140,12 +140,38 @@ struct TypeScriptRoutingTests {
         #expect(servers.last?.initializationOptionsKind == .vueTypeScriptPlugin)
     }
 
-    /// In a TypeScript 7 project the `<script>` half is dropped and the
-    /// template half is kept. Degrading, not failing — and the reason it
-    /// cannot fall back to the native server is the test below.
-    @Test func aVueFileInASevenProjectKeepsItsTemplateAndLosesItsScript() {
+    /// **Both are routed even in a project that cannot run the second one.**
+    ///
+    /// Pruning it here was the first shape of this and it produced exactly the
+    /// silence the feature exists to remove: a server that is never routed is
+    /// never launched, so the sentence explaining why the `<script>` block is
+    /// dead — which lives in the `initializationOptions` resolution — never
+    /// runs either. The reader got a working template, an empty script, and
+    /// nothing to read.
+    ///
+    /// Routing answers "who serves this language"; launching answers "can it
+    /// run here". Only the second question has a voice.
+    @Test func aVueFileRoutesBothServersEvenWhenTheProjectCannotRunTheSecond() {
         let servers = LSPServerRegistry.servers(forPath: "/p/App.vue", toolchain: .native)
-        #expect(servers.map(\.command) == ["vue-language-server"])
+        #expect(servers.map(\.command) == ["vue-language-server", "typescript-language-server"])
+    }
+
+    /// And the refusal it will produce says the three things a reader needs:
+    /// which TypeScript is here, that 6.x is what the script half wants, and
+    /// that Phantom **will not try** — silence and refusal look identical on
+    /// screen, and only one of them is honest.
+    @Test func theRefusalReachesTheReaderRatherThanBeingPruned() {
+        let outcome = LSPInitializationOptions.vueTypeScriptPlugin(
+            root: "/p/definitely-not-a-real-project-\(UUID().uuidString)"
+        )
+
+        guard case .failure(let reason) = outcome else {
+            Issue.record("a project with no TypeScript resolved plugin options")
+            return
+        }
+        #expect(reason.contains("will not start"))
+        #expect(reason.contains("template"))
+        #expect(reason.contains("6"))
     }
 
     // MARK: The one that must never regress
