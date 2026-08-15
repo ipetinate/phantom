@@ -113,7 +113,8 @@ struct PhantomSessionStoreTests {
     @Test func anEmptySaveNeverReplacesASession() {
         #expect(!PhantomSessionStore.shouldWrite(
             stateCount: 0,
-            over: .readable(count: 3, isVersioned: true)))
+            over: .readable(count: 3, isVersioned: true),
+            mayShrink: true))
     }
 
     /// A file we cannot read is still a session — the reader may be one
@@ -121,23 +122,110 @@ struct PhantomSessionStoreTests {
     /// decode failure compounded: the load returned nothing, so the guard
     /// never engaged, so the next save wrote `[]` over it.
     @Test func anEmptySaveNeverReplacesAnUnreadableSession() {
-        #expect(!PhantomSessionStore.shouldWrite(stateCount: 0, over: .unreadable))
+        #expect(!PhantomSessionStore.shouldWrite(
+            stateCount: 0,
+            over: .unreadable,
+            mayShrink: true))
     }
 
     @Test func anEmptySaveIsFineWhenThereIsNothingToLose() {
-        #expect(PhantomSessionStore.shouldWrite(stateCount: 0, over: .absent))
         #expect(PhantomSessionStore.shouldWrite(
             stateCount: 0,
-            over: .readable(count: 0, isVersioned: true)))
+            over: .absent,
+            mayShrink: true))
+        #expect(PhantomSessionStore.shouldWrite(
+            stateCount: 0,
+            over: .readable(count: 0, isVersioned: true),
+            mayShrink: true))
     }
 
     /// Deliberate, and the reason the empty guard is not a "never shrink"
     /// guard: closing one of three windows has to leave a session of two, or
-    /// a session could only ever grow.
+    /// a session could only ever grow. This is the case the quitting rule
+    /// below must not take away.
     @Test func aShorterSaveDoesReplaceALongerSession() {
         #expect(PhantomSessionStore.shouldWrite(
             stateCount: 1,
-            over: .readable(count: 3, isVersioned: true)))
+            over: .readable(count: 3, isVersioned: true),
+            mayShrink: true))
+    }
+
+    // MARK: Deciding Whether To Write While Quitting
+
+    /// The data loss this term exists for, measured: quitting through Review
+    /// Windows with ten terminals open closes them one at a time, and the
+    /// debounced save lands between the closes. Nine, eight, seven, six, five,
+    /// four — the session file followed the teardown down, and the next launch
+    /// restored what was left of it. The windows were not the reader giving
+    /// terminals up, they were the quit taking them.
+    @Test func aShorterSaveIsRefusedOnceTheAppIsQuitting() {
+        #expect(!PhantomSessionStore.shouldWrite(
+            stateCount: 9,
+            over: .readable(count: 10, isVersioned: true),
+            mayShrink: false))
+    }
+
+    /// Losing one terminal is the same bug as losing nine, and the guard is
+    /// not a threshold.
+    @Test func evenOneTerminalShortIsRefusedWhileQuitting() {
+        #expect(!PhantomSessionStore.shouldWrite(
+            stateCount: 2,
+            over: .readable(count: 3, isVersioned: true),
+            mayShrink: false))
+    }
+
+    /// Quitting is not a reason to stop writing. The window set is usually
+    /// exactly what the session already holds, and that save carries
+    /// everything about it that is not the count — which tab each window was
+    /// showing, where it sat, what its title had been overridden to.
+    @Test func aSaveOfTheSameLengthStillLandsWhileQuitting() {
+        #expect(PhantomSessionStore.shouldWrite(
+            stateCount: 3,
+            over: .readable(count: 3, isVersioned: true),
+            mayShrink: false))
+    }
+
+    /// A window opened after the last save is still the reader's, and quitting
+    /// is not a reason to lose it either. Only shrinking is refused.
+    @Test func aLongerSaveStillLandsWhileQuitting() {
+        #expect(PhantomSessionStore.shouldWrite(
+            stateCount: 4,
+            over: .readable(count: 3, isVersioned: true),
+            mayShrink: false))
+    }
+
+    /// The empty guard is the one that was already there, and quitting does
+    /// not need it to be reached to hold: an empty save is short as well as
+    /// empty, and refused for both reasons.
+    @Test func anEmptySaveIsStillRefusedWhileQuitting() {
+        #expect(!PhantomSessionStore.shouldWrite(
+            stateCount: 0,
+            over: .readable(count: 3, isVersioned: true),
+            mayShrink: false))
+    }
+
+    /// Nothing to shrink from, so nothing to refuse. A first quit on a machine
+    /// with no session file has to be able to write one.
+    @Test func quittingStillWritesTheFirstSessionThereHasEverBeen() {
+        #expect(PhantomSessionStore.shouldWrite(
+            stateCount: 3,
+            over: .absent,
+            mayShrink: false))
+    }
+
+    /// An unreadable file has no count to be shorter than, so the shrink rule
+    /// has nothing to say and the rule that was already here decides: real
+    /// terminals replace a file we cannot make sense of, and an empty save
+    /// leaves it alone.
+    @Test func quittingLeavesAnUnreadableSessionToTheRuleThatAlreadyHadIt() {
+        #expect(PhantomSessionStore.shouldWrite(
+            stateCount: 3,
+            over: .unreadable,
+            mayShrink: false))
+        #expect(!PhantomSessionStore.shouldWrite(
+            stateCount: 0,
+            over: .unreadable,
+            mayShrink: false))
     }
 
     // MARK: Reading The File Without Building It
@@ -173,7 +261,10 @@ struct PhantomSessionStoreTests {
     @Test func aMalformedSessionFileIsLeftAlone() {
         let summary = PhantomSessionStore.inspect(Data("{not json".utf8))
         #expect(summary == .unreadable)
-        #expect(!PhantomSessionStore.shouldWrite(stateCount: 0, over: summary))
+        #expect(!PhantomSessionStore.shouldWrite(
+            stateCount: 0,
+            over: summary,
+            mayShrink: true))
     }
 
     @Test func anEmptyFileIsUnreadableRatherThanAnEmptySession() {
@@ -189,7 +280,10 @@ struct PhantomSessionStoreTests {
         """
         let summary = PhantomSessionStore.inspect(Data(json.utf8))
         #expect(summary == .unreadable)
-        #expect(!PhantomSessionStore.shouldWrite(stateCount: 0, over: summary))
+        #expect(!PhantomSessionStore.shouldWrite(
+            stateCount: 0,
+            over: summary,
+            mayShrink: true))
     }
 
     @Test func anEnvelopeWithNoVersionIsUnreadable() {

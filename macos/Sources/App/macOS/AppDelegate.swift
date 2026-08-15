@@ -419,6 +419,16 @@ class AppDelegate: NSObject,
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        /// The session as it stands at the moment the reader asked to quit,
+        /// while every window they have is certainly still theirs. Everything
+        /// after this point is the quit happening — windows the review closes,
+        /// windows AppKit tears down — and none of it may make the session
+        /// smaller, which is what `quitBegan` goes on to enforce. Recording it
+        /// here rather than relying on the last debounced save is what keeps a
+        /// window closed a moment before quitting from coming back.
+        PhantomSessionStore.shared.saveNow()
+        PhantomSessionStore.shared.quitBegan()
+
         let windows = NSApplication.shared.windows
         if windows.isEmpty { return .terminateNow }
 
@@ -1377,6 +1387,7 @@ extension AppDelegate {
                 if [.OK, .alertFirstButtonReturn].contains(response) {
                     await NSApp.reply(toApplicationShouldTerminate: true)
                 } else {
+                    PhantomSessionStore.shared.quitWasCancelled()
                     await NSApp.reply(toApplicationShouldTerminate: false)
                 }
             }
@@ -1398,6 +1409,7 @@ extension AppDelegate {
             case .alertSecondButtonReturn:
                 return .terminateNow
             default:
+                PhantomSessionStore.shared.quitWasCancelled()
                 return .terminateCancel
             }
         }
@@ -1417,6 +1429,7 @@ extension AppDelegate {
                     await controller.window?.close()
                     continue
                 } else {
+                    PhantomSessionStore.shared.quitWasCancelled()
                     await NSApp.reply(toApplicationShouldTerminate: false)
                     // Cancel the review
                     return
