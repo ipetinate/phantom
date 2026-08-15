@@ -26,7 +26,17 @@ struct EditorEngineBoundaryTests {
     /// carrying no path — and the shortcut of reading the manifest or the
     /// catalog directly from the highlighter would work, once, and take the
     /// validation with it.
+    ///
+    /// `CompletionSettings` is a prefix for the same reason, and covers the
+    /// store as well as the value. The completion preferences are keyed by
+    /// **language id**, and the engine has no idea what language it is
+    /// showing — so the host has to collapse "completion is on, and on for
+    /// this language" into the single `Bool` that crosses as
+    /// `CodeEditorConfiguration.completionEnabled`. An engine that could
+    /// name the store would resolve the language itself, and the one place
+    /// that decision is made would become two.
     private static let forbidden = [
+        "CompletionSettings",
         "ThemePalette",
         "LanguageCatalog",
         "LanguageManifest",

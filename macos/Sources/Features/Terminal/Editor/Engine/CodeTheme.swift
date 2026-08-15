@@ -117,6 +117,41 @@ struct CodeEditorConfiguration: Equatable {
     var closesQuotes: Bool = true
     var closesTags: Bool = true
 
+    /// Whether the completion list may open at all.
+    ///
+    /// One flag rather than a global and a per-language pair, because the
+    /// engine has no idea what language it is showing — the host resolves
+    /// "completion is on, and it is on for *this* language" into a single
+    /// yes before the value gets here. Same direction as everything else in
+    /// this type: the engine is told, it does not ask.
+    ///
+    /// **Read on every keystroke, like the three switches above it and
+    /// unlike everything above those.** The rest of this type describes how
+    /// the text is drawn, so it is consulted when appearance is applied;
+    /// this decides whether a keystroke opens a list, so it has to be
+    /// current at the moment the key is pressed rather than at the moment
+    /// the view was last restyled — which is the bug `showsMinimap`
+    /// documents, and the reason its consumer belongs outside the
+    /// `unchanged` guard in `applyAppearance`.
+    var completionEnabled: Bool = true
+
+    /// Whether the list falls back to words already in the buffer.
+    ///
+    /// Separate from `completionEnabled` because they fail differently: the
+    /// fallback is what makes a language with no server installed still
+    /// complete, and it is also what puts a variable name from a comment
+    /// beside the server's answer. Somebody who dislikes the second should
+    /// not have to lose the first.
+    var completesFromBuffer: Bool = true
+
+    /// How long the caret rests before suggestions are asked for.
+    ///
+    /// Part of the configuration rather than left at the engine's own
+    /// default so that changing it in Settings is a change the running
+    /// editor notices — a value read once when the view was built would do
+    /// nothing until the file was reopened.
+    var completionFetchDelay: Duration = .milliseconds(120)
+
     static var `default`: CodeEditorConfiguration {
         CodeEditorConfiguration(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
@@ -129,7 +164,10 @@ struct CodeEditorConfiguration: Equatable {
             showsMinimap: true,
             closesBrackets: true,
             closesQuotes: true,
-            closesTags: true
+            closesTags: true,
+            completionEnabled: true,
+            completesFromBuffer: true,
+            completionFetchDelay: .milliseconds(120)
         )
     }
 }

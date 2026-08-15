@@ -133,6 +133,58 @@ struct LSPServerOverrideStoreTests {
         }
     }
 
+    /// The one this suite most needed and did not have.
+    ///
+    /// `effectiveDefinition` rebuilds the definition from a literal, so a
+    /// field left out of that literal silently reverts to its default — and
+    /// for `origin` the default is `.builtIn`, which is the trust gate
+    /// answering "yes" without asking. A contributed server whose command
+    /// happens to have an override entry would then launch with no prompt at
+    /// all: the whole control bypassed by an omission nobody would see in
+    /// review. The comment above that literal says a test pins it; this is
+    /// that test.
+    @Test func anOverrideDoesNotLaunderAContributedServerIntoABuiltInOne() {
+        withCleanDefaults {
+            let provenance = ExtensionProvenance(
+                extensionID: "acme.elixir",
+                digest: "aa11",
+                manifestPath: "/Users/x/.config/phantom/extensions/acme.elixir/extension.json",
+                scope: .user
+            )
+            let contributed = LSPServerDefinition(
+                languageID: "elixir",
+                displayName: "Elixir",
+                command: "elixir-ls",
+                arguments: ["--stdio"],
+                installHint: "brew install elixir-ls",
+                origin: .manifest(provenance)
+            )
+
+            var override = LSPServerOverride()
+            override.command = "/custom/elixir-ls"
+            LSPServerOverrideStore.set(override, for: contributed.command)
+
+            let effective = LSPCenter.effectiveDefinition(contributed)
+            #expect(effective.command == "/custom/elixir-ls")
+            #expect(effective.origin == .manifest(provenance))
+
+            /// Stated as the thing that actually matters: the gate still has
+            /// something to ask about.
+            #expect(
+                LanguageTrust.verdict(
+                    for: LanguageTrust.Subject(
+                        origin: effective.origin,
+                        digest: provenance.digest,
+                        command: effective.command,
+                        resolvedPath: "/custom/elixir-ls",
+                        workspaceRoot: "/Users/x/project"
+                    ),
+                    record: nil
+                ) == .ask(.firstRun)
+            )
+        }
+    }
+
     /// The override is keyed by the *default* command, so it applies
     /// equally to every language id that shares one binary.
     @Test func anOverrideAppliesToEveryLanguageSharingTheBinary() {
