@@ -19,6 +19,48 @@ import Foundation
 /// holds hundreds of tags; allocating a string for each of them on every
 /// keystroke, only to throw all but one away, is the cost `CodeWordIndex`
 /// was written to avoid.
+///
+/// # What this gets wrong, on purpose
+///
+/// A heuristic that claims to be exact is one nobody can reason about, so
+/// here is the whole list. Each was measured, not assumed. Fixing any of them
+/// costs lexing the document on every keystroke, which is the one thing this
+/// file exists not to do.
+///
+/// 1. **`.ts` closes nothing at all.** A whole file kind given up deliberately:
+///    JSX is a syntax error there, so `<` can only be a generic and closing it
+///    would always be wrong. `CodeTagDialect` is a table so this is one row to
+///    change.
+/// 2. **A closing tag inside a string pops the element it names.** After
+///    `<div>` and `{"</div>"}`, a `</` completes nothing — the string emptied
+///    the stack. This is the price of a rule that cannot be avoided: the
+///    identifier lookbehind must *not* apply to closing tags, because
+///    `bold</b>` has a word character right before the `<`, and suppressing
+///    there would mean never popping anything. It costs accuracy in `</`
+///    completion only, never a spurious insertion, and an unmatched name is
+///    ignored rather than believed.
+/// 3. **`.html` has no script or style region gate.** Inside an inline
+///    `<script>`, `if (a<b>` closes a `</b>`. Excluding those regions costs
+///    four more searches per keystroke and brings its own hazard — the string
+///    `"</script>"` inside the script — for a case the lookbehind rules
+///    already cover better than expected: `i < n` fails on the space,
+///    `Array<string>` on the identifier, `` `<div>` `` on the quote.
+/// 4. **Markup inside a `//` or `/* */` comment still closes.** Only
+///    `<!-- -->` is tracked. Narrower than it sounds: the lookbehind rules
+///    kill the commented cases that contain an identifier or a quote.
+/// 5. **A `<script>` further above than the region probe window** makes an
+///    SFC's script block read as markup.
+/// 6. **An element opened above the scan window does not complete.** It
+///    refuses rather than guessing, which is the right way round: its opening
+///    tag is off screen too.
+/// 7. **`<>` fragments produce nothing.** There is no name to check. Typing
+///    `>` inserts nothing and `</>` pops nothing, so the two stay balanced —
+///    a missing feature rather than a wrong answer.
+///
+/// Two smaller ones, for whoever reads a bug report about them. The quote
+/// lookbehind is uniform across dialects, so `<p>He said "<b>` gets no close.
+/// And the character classes are ASCII, per the precedent `CodeWordIndex`
+/// states, so a non-ASCII identifier before a `<` will not suppress a generic.
 enum CodeTagClose {
     /// How far above the caret the forward scan starts, in UTF-16 units.
     ///
