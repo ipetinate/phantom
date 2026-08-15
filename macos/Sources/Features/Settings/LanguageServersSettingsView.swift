@@ -128,7 +128,12 @@ struct LanguageServersSettingsView: View {
         // Opening this screen is the moment the answer matters, and it is
         // also the moment after which the user most often installs something
         // in the terminal next to it.
-        .task { lsp.refreshInstalledCommands() }
+        .task {
+            lsp.refreshInstalledCommands()
+            /// One `npm root -g` for the whole screen, here rather than in a
+            /// popover's `body`. See `LSPDependencyCenter`.
+            LSPDependencyCenter.shared.refresh()
+        }
     }
 
     @ViewBuilder
@@ -471,10 +476,12 @@ private enum ServerInstallOperation: Equatable {
 private struct LanguageServerOverrideForm: View {
     let server: LSPServerDefinition
     @ObservedObject private var lsp = LSPCenter.shared
+    @ObservedObject private var dependencies = LSPDependencyCenter.shared
     @State private var operation: ServerInstallOperation = .none
     @State private var operationError: String?
     @State private var operationOutput: [String] = []
     @State private var showUninstallConfirmation = false
+    @State private var showDependencies = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -597,16 +604,18 @@ private struct LanguageServerOverrideForm: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            } else if isInstalled {
-                Button(role: .destructive) {
-                    showUninstallConfirmation = true
-                } label: {
-                    Label("Uninstall", systemImage: "trash")
+            } else if let plan = server.dependencyPlan {
+                /// A server whose binary is present can still be unusable
+                /// because a package beside it is missing, and that is the
+                /// case this whole popover exists for: `vue-language-server`
+                /// on `PATH` used to mean "Uninstall" and nothing else, with
+                /// `@vue/typescript-plugin` unreachable from any screen.
+                HStack(spacing: 8) {
+                    dependencyButton(plan)
+                    if isInstalled { uninstallButton }
                 }
-                .disabled(server.uninstallCommand == nil)
-                .help(server.uninstallCommand == nil
-                    ? "No automatic uninstall for this server."
-                    : "Removes the server and its packages")
+            } else if isInstalled {
+                uninstallButton
             } else {
                 Button {
                     runOperation(.installing)
@@ -614,6 +623,64 @@ private struct LanguageServerOverrideForm: View {
                     Label("Install", systemImage: "arrow.down.circle")
                 }
                 .help("Runs the install command in a terminal with your login environment")
+            }
+        }
+    }
+
+    private var uninstallButton: some View {
+        Button(role: .destructive) {
+            showUninstallConfirmation = true
+        } label: {
+            Label("Uninstall", systemImage: "trash")
+        }
+        .disabled(server.uninstallCommand == nil)
+        .help(server.uninstallCommand == nil
+            ? "No automatic uninstall for this server."
+            : "Removes the server and its packages")
+    }
+
+    /// Opens the per-package popover, labelled with what is actually wrong.
+    ///
+    /// "Install" while nothing is there, a count once some of it is — because
+    /// a button that says "Install" beside an installed server reads as a
+    /// mistake, and the reader stops trusting the row.
+    private func dependencyButton(_ plan: LSPServerDependencyPlan) -> some View {
+        let statuses = dependencies.statuses(
+            for: plan,
+            installedCommands: lsp.installedCommands,
+            commandsProbed: lsp.hasProbedInstalls
+        )
+        let outstanding = plan.packages.filter { (statuses[$0.id] ?? .unknown).needsInstall }
+
+        let title: String
+        let symbol: String
+        if outstanding.isEmpty {
+            title = "Dependencies"
+            symbol = "checklist"
+        } else if outstanding.count == plan.packages.count {
+            title = "Install"
+            symbol = "arrow.down.circle"
+        } else {
+            /// `verbatim`, because interpolating a number through
+            /// `LocalizedStringKey` formats it for the locale.
+            title = "Install \(outstanding.count) of \(plan.packages.count)"
+            symbol = "arrow.down.circle"
+        }
+
+        return Button {
+            showDependencies = true
+        } label: {
+            Label {
+                Text(verbatim: title)
+            } icon: {
+                Image(systemName: symbol)
+            }
+        }
+        .help("This server needs more than one package — choose which to install")
+        .popover(isPresented: $showDependencies, arrowEdge: .bottom) {
+            ServerDependencyPopover(server: server, plan: plan) { command in
+                showDependencies = false
+                run(.installing, command: command)
             }
         }
     }
@@ -639,6 +706,16 @@ private struct LanguageServerOverrideForm: View {
     /// The command the section shows and the copy button copies.
     private var activeCommand: String {
         guard showsUninstall, let uninstall = server.uninstallCommand else {
+            /// The whole plan, pinned, for a server that has one — otherwise
+            /// this row and the Copy button beside it would keep handing out
+            /// the unpinned one-package `installHint` while the button above
+            /// runs something else entirely.
+            if let plan = server.dependencyPlan,
+               let planned = server.installCommand(
+                   forDependencies: Set(plan.packages.map(\.id))
+               ) {
+                return planned
+            }
             /// Empty for a contributed server, which has no command this app
             /// may offer — see `installCommand`. The section around this is
             /// already hidden in that case; the fallback is here so a future
@@ -699,6 +776,19 @@ private struct LanguageServerOverrideForm: View {
             ? server.installCommand
             : server.uninstallCommand
         guard let command else { return }
+        run(operation, command: command)
+    }
+
+    /// The same run, for a command already resolved by the caller.
+    ///
+    /// Split out for the dependency popover, which composes its command from
+    /// the boxes that are ticked. **Every string that reaches here is still
+    /// built from compiled-in literals** — the popover's is assembled by
+    /// `LSPServerDefinition.installCommand(forDependencies:)`, which refuses
+    /// any definition that is not `.builtIn` and keeps only members of that
+    /// server's own plan.
+    private func run(_ operation: ServerInstallOperation, command: String) {
+        guard operation != .none else { return }
 
         self.operation = operation
         operationError = nil
@@ -728,10 +818,193 @@ private struct LanguageServerOverrideForm: View {
             self.operation = .none
             if result.succeeded {
                 LSPCenter.shared.noteAvailabilityChanged()
+                /// The binaries are re-probed by the line above; the packages
+                /// that ship no binary are only visible to this one.
+                LSPDependencyCenter.shared.refresh()
             } else {
                 operationError = result.message
             }
         }
+    }
+}
+
+/// The per-package install sheet: a checkbox per dependency, ticked for what
+/// this machine is missing, and one sentence each saying when it is needed.
+///
+/// **It explains the rule and does not pretend to answer a case.** Settings is
+/// a global screen with no workspace in context, so "your project needs this"
+/// is a sentence it is not entitled to say. The project-specific answer
+/// already exists in the editor's own server banner, which does know the
+/// workspace root — `plan.projectNote` is where this view hands the question
+/// over rather than duplicating it badly.
+private struct ServerDependencyPopover: View {
+    let server: LSPServerDefinition
+    let plan: LSPServerDependencyPlan
+    let onInstall: (String) -> Void
+
+    @ObservedObject private var lsp = LSPCenter.shared
+    @ObservedObject private var dependencies = LSPDependencyCenter.shared
+
+    @State private var selected: Set<String> = []
+
+    /// Seeded once, and only once both probes have answered.
+    ///
+    /// The popover can open before `npm root -g` returns, and re-seeding on
+    /// every publish would untick a box the reader just unticked. Seeding
+    /// before the answer arrives would tick every line, which is the same
+    /// wrong guess as showing "Install" for an installed server.
+    @State private var didSeed = false
+
+    private var statuses: [String: LSPDependencyStatus] {
+        dependencies.statuses(
+            for: plan,
+            installedCommands: lsp.installedCommands,
+            commandsProbed: lsp.hasProbedInstalls
+        )
+    }
+
+    /// Nil when nothing is ticked — which is also what disables Install, so
+    /// the button and the command shown under it can never disagree.
+    private var command: String? {
+        server.installCommand(forDependencies: selected)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(verbatim: "Install \(server.displayName)")
+                .font(.headline)
+
+            Text(
+                """
+                Ticked by default: what this machine is missing, or has at a \
+                version Phantom did not pin. Nothing here knows which project \
+                you mean — each line says when its package is needed.
+                """
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(plan.packages) { dependency in
+                    dependencyRow(dependency)
+                }
+            }
+
+            if let note = plan.projectNote {
+                Divider()
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(.tertiary)
+                    Text(verbatim: note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Divider()
+
+            Group {
+                if let command {
+                    Text(verbatim: command)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Nothing selected.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 8) {
+                Spacer()
+                Button {
+                    guard let command else { return }
+                    onInstall(command)
+                } label: {
+                    Text("Install")
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(command == nil)
+            }
+        }
+        .padding(16)
+        .frame(width: 440)
+        .onAppear(perform: seedIfNeeded)
+        .onChange(of: dependencies.hasProbed) { _ in seedIfNeeded() }
+        .onChange(of: lsp.hasProbedInstalls) { _ in seedIfNeeded() }
+    }
+
+    private func dependencyRow(_ dependency: LSPServerDependency) -> some View {
+        let status = statuses[dependency.id] ?? .unknown
+
+        return Toggle(isOn: binding(for: dependency.id)) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    /// `verbatim` for both: a package name contains `@` and
+                    /// `/`, and a purpose contains `<template>` — the
+                    /// interpolating initializer runs its argument through
+                    /// `LocalizedStringKey`, markdown and all.
+                    Text(verbatim: dependency.spec)
+                        .font(.system(size: 12, design: .monospaced))
+                    statusChip(status)
+                }
+                Text(verbatim: dependency.purpose)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func statusChip(_ status: LSPDependencyStatus) -> some View {
+        switch status {
+        case .unknown:
+            Text("Checking…")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        case .missing:
+            Text("Missing")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+        case .outdated(let installed):
+            /// Named, not just flagged: "this machine has 2.2.12" is what
+            /// tells a reader the tick below is about a skew rather than an
+            /// absence, and skew is the failure that reports itself as
+            /// nothing at all.
+            Text(verbatim: "Has \(installed)")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+        case .present:
+            Text("Installed")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func binding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { selected.contains(id) },
+            set: { isOn in
+                if isOn {
+                    selected.insert(id)
+                } else {
+                    selected.remove(id)
+                }
+            }
+        )
+    }
+
+    private func seedIfNeeded() {
+        guard !didSeed, dependencies.hasProbed, lsp.hasProbedInstalls else { return }
+        didSeed = true
+        selected = LSPDependencyCatalog.defaultSelection(for: plan, statuses: statuses)
     }
 }
 
