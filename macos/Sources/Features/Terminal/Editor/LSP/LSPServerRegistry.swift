@@ -199,11 +199,20 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
     var uninstallCommand: String? {
         guard case .builtIn = origin else { return nil }
         switch command {
-        case "typescript-language-server": return "npm rm -g typescript-language-server typescript"
+        /// Only itself. It used to take `typescript` with it, which reads
+        /// as tidy and removes another row's package: the native server on
+        /// this same screen *is* `typescript`, so uninstalling the wrapper
+        /// turned "TypeScript (native)" into "not installed" with nothing
+        /// said. Each row removes what it is.
+        case "typescript-language-server": return "npm rm -g typescript-language-server"
         /// The native server *is* the TypeScript package — removing it is
         /// removing TypeScript, not an editor tool that wraps it.
         case "tsc": return "npm rm -g typescript"
-        case "vue-language-server": return "npm rm -g @vue/language-server"
+        /// Both halves. Settings installs them pinned together because a
+        /// mismatched pair fails without either reporting it, so removing
+        /// one would leave the other orphaned and out of step with the next
+        /// install.
+        case "vue-language-server": return "npm rm -g @vue/language-server @vue/typescript-plugin"
         case "pyright-langserver": return "npm rm -g pyright"
         case "vscode-css-language-server", "vscode-html-language-server",
              "vscode-json-language-server":

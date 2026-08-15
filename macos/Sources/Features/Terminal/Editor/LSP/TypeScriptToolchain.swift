@@ -63,12 +63,38 @@ enum TypeScriptToolchain: Equatable, Sendable {
     /// Absolute, because `@vue/typescript-plugin`'s `location` is read
     /// through `URI.file(...)` and a relative path resolves against whatever
     /// the server's working directory happens to be.
+    /// The project's copy wins, and a global install is the fallback.
+    ///
+    /// The fallback is what makes installing the plugin from Settings mean
+    /// anything: that install is global, and without this the app would look
+    /// only inside the project and load nothing. The asymmetry it removes was
+    /// real — the tsdk beside it has had a global fallback all along, so the
+    /// same Settings row could supply one half of a pair and not the other.
+    ///
+    /// Local first because a project pinning its own plugin has a reason to,
+    /// and because a global copy at a different version than the project's
+    /// Vue tooling is the mismatch the pinning exists to prevent.
+    ///
+    /// Safe to shell out here: this runs while resolving a server's launch
+    /// options, once per server, not on the typing path.
     static func vuePluginLocation(
         root: String,
+        searchPath: String = "",
         fileManager: FileManager = .default
     ) -> String? {
-        let location = (root as NSString).appendingPathComponent(vuePluginPath)
-        return fileManager.fileExists(atPath: location) ? location : nil
+        let local = (root as NSString).appendingPathComponent(vuePluginPath)
+        if fileManager.fileExists(atPath: local) { return local }
+
+        guard !searchPath.isEmpty,
+              let npm = LSPProcess.locate("npm", searchPath: searchPath),
+              let output = ShellCommand.run(npm, ["root", "-g"], timeout: 5)
+        else { return nil }
+
+        let root = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !root.isEmpty else { return nil }
+
+        let global = (root as NSString).appendingPathComponent("@vue/typescript-plugin")
+        return fileManager.fileExists(atPath: global) ? global : nil
     }
 
     /// The version string beside a project's TypeScript, for a message.

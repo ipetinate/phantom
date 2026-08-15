@@ -125,6 +125,7 @@ enum LSPInitializationOptions {
     /// The plugin options for a workspace, or the reason there are none.
     static func vueTypeScriptPlugin(
         root: String,
+        searchPath: String = "",
         fileManager: FileManager = .default
     ) -> LSPOutcome<LSPValue> {
         guard case .tsserver(let tsserverPath) = TypeScriptToolchain.resolve(
@@ -138,6 +139,7 @@ enum LSPInitializationOptions {
 
         guard let location = TypeScriptToolchain.vuePluginLocation(
             root: root,
+            searchPath: searchPath,
             fileManager: fileManager
         ) else {
             return .failure("""
