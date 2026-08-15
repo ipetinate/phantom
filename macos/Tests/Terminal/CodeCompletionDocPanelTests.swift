@@ -78,10 +78,9 @@ struct CodeCompletionDocPanelTests {
     /// produces one superseded answer per row — it is the *common* case, not an
     /// error. Every one of them must leave the card exactly as it was; blanking
     /// on them makes the card strobe under the keys being used to read it.
-    @Test func aSupersededAnswerLeavesTheCardExactlyAsItWas() {
+    @Test func aSupersededAnswerLeavesAnAnsweredCardExactlyAsItWas() {
         let states: [CodeCompletionDocPanel.State] = [
             .hidden,
-            .loading,
             .documentation(markdown("Does a thing.")),
             .absent,
             .unsupported,
@@ -91,6 +90,29 @@ struct CodeCompletionDocPanelTests {
         for state in states {
             #expect(CodeCompletionDocPanel.state(after: .superseded, current: state) == state)
         }
+    }
+
+    /// The one state a superseded answer does *not* preserve, and the reason
+    /// the rule above says "answered" rather than "any".
+    ///
+    /// Preserving what is on screen is right while there is something on
+    /// screen. While the card is still waiting there is nothing to preserve —
+    /// and a superseded answer **is** an answer, so no further one is coming
+    /// for it. Leaving `loading` up promises a card that will never arrive.
+    ///
+    /// Observed, not theorised: the first resolve of a fresh selection came
+    /// back superseded and the card read "Loading…" indefinitely.
+    ///
+    /// Worth knowing why superseded turns up on a *first* request at all —
+    /// `typescript-language-server`'s resolve cache is a **single slot** keyed
+    /// by an integer, and any later `textDocument/completion` invalidates the
+    /// previous list's ids without erroring, answering about the wrong symbol
+    /// instead. Measured: resolving a `ref` from an earlier list after a newer
+    /// one came back describing `AnalyserNode`. Refusing that is a correctness
+    /// requirement, so an empty card here is the *right* failure — the
+    /// alternative is confidently wrong prose.
+    @Test func aSupersededAnswerStopsACardThatWasStillWaiting() {
+        #expect(CodeCompletionDocPanel.state(after: .superseded, current: .loading) == .unanswered)
     }
 
     /// Permanent, and it overrides whatever was on screen: the server has said

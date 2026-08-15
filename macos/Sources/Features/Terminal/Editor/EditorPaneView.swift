@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 
 /// The editor as it sits in the terminal's pane: tab bar on top, text
@@ -21,6 +22,20 @@ struct EditorPaneView: View {
     @AppStorage(EditorSettings.closesBracketsKey) private var closesBrackets = true
     @AppStorage(EditorSettings.closesQuotesKey) private var closesQuotes = true
     @AppStorage(EditorSettings.closesTagsKey) private var closesTags = true
+
+    @AppStorage(CompletionSettingsStore.enabledKey) private var completionEnabled = true
+    @AppStorage(CompletionSettingsStore.bufferWordsKey) private var completesFromBuffer = true
+    @AppStorage(CompletionSettingsStore.delayKey)
+    private var completionDelayRaw = CompletionDelay.default.rawValue
+
+    /// Observed, not read, and load-bearing anyway — do not delete it as
+    /// dead. `@AppStorage` has no dictionary, so the per-language table is
+    /// one JSON blob, and observing that blob is what republishes this view
+    /// when a language's switch moves in Settings. Without it the new answer
+    /// would sit in `UserDefaults` until some unrelated update happened to
+    /// rebuild the configuration, which is the `showsMinimap` bug wearing a
+    /// different key.
+    @AppStorage(CompletionSettingsStore.byLanguageKey) private var completionByLanguage = Data()
 
     @ObservedObject var search: WorkspaceSearchCenter
     @ObservedObject private var lsp: LSPCenter = .shared
@@ -135,7 +150,27 @@ struct EditorPaneView: View {
     }
 
     private var configuration: CodeEditorConfiguration {
-        CodeEditorConfiguration(
+        /// The LSP language id, never `document.language`. `CodeLanguage` is
+        /// a lexer grouping — `.javascript` is ts, tsx, js, jsx, mts and cts
+        /// at once — so keying completion on it would make "no completion in
+        /// `.tsx`" mean "no completion in every `.js` file in the project",
+        /// which is the collapse `CompletionSettingsStore`'s keying decision
+        /// exists to prevent. Resolved through `LanguageResolver` rather than
+        /// the registry, because a language an extension contributed has a
+        /// switch in Settings too.
+        ///
+        /// The store folds the master switch and the per-language answer
+        /// together. Doing it here instead would put that rule in two places.
+        let completion = CompletionSettingsStore.settings(
+            forLanguage: center.selectedDocument.flatMap {
+                LanguageResolver.shared.languageID(forPath: $0.url.path)
+            },
+            isEnabled: completionEnabled,
+            delay: .named(completionDelayRaw),
+            usesBufferWords: completesFromBuffer
+        )
+
+        return CodeEditorConfiguration(
             font: EditorSettings.font(size: fontSize, family: palette.interfaceFontFamily),
             showsLineNumbers: showsLineNumbers,
             wrapsLines: wrapsLines,
@@ -146,7 +181,10 @@ struct EditorPaneView: View {
             showsMinimap: showsMinimap,
             closesBrackets: closesBrackets,
             closesQuotes: closesQuotes,
-            closesTags: closesTags
+            closesTags: closesTags,
+            completionEnabled: completion.isEnabled,
+            completesFromBuffer: completion.usesBufferWords,
+            completionFetchDelay: completion.delay.duration
         )
     }
 }
@@ -405,12 +443,30 @@ private struct DocumentView: View {
     /// nobody documented.
     private func documentation(for item: CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome {
         guard let completion = completionBridge.completion(for: item.resolveToken) else {
+            Self.completionLog.debug(
+                "resolve skipped: no stored item for token \(item.resolveToken ?? -1, privacy: .public)"
+            )
             return .superseded
         }
 
         let outcome = await lsp.resolve(completion, path: document.url.path)
+        Self.completionLog.debug(
+            """
+            resolve \(item.label, privacy: .public) \
+            itemEpoch=\(completion.epoch, privacy: .public) \
+            -> \(String(describing: outcome), privacy: .public)
+            """
+        )
         return CompletionBridge.outcome(of: outcome)
     }
+
+    /// Temporary, for tracking down a documentation card that stuck on
+    /// "Loading…". Reachable with
+    /// `log stream --predicate 'subsystem == "com.ipetinate.phantom"'`.
+    static let completionLog = Logger(
+        subsystem: "com.ipetinate.phantom",
+        category: "completion"
+    )
 
     /// Whether this row is worth an info glyph.
     ///

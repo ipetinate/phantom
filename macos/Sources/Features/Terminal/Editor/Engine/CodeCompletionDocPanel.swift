@@ -259,7 +259,13 @@ final class CodeCompletionDocPanel: NSPanel {
             guard let documentation, !documentation.isEmpty else { return .absent }
             return .documentation(documentation)
         case .superseded:
-            return current
+            /// Keeping what is on screen is right while there is something on
+            /// screen, and wrong while the card is still waiting: a superseded
+            /// answer is an answer, so nothing further is coming for it, and
+            /// leaving `loading` up promises a card that will never arrive.
+            /// Observed exactly that — the first resolve of a fresh selection
+            /// came back superseded and the card said "Loading…" indefinitely.
+            return current == .loading ? .unanswered : current
         case .unsupported:
             return .unsupported
         case .unanswered:

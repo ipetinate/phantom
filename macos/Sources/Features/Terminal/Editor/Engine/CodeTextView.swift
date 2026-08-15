@@ -770,6 +770,9 @@ struct CodeTextView: NSViewRepresentable {
                 code.closesQuotes = configuration.closesQuotes
                 code.closesTags = configuration.closesTags
                 code.tagDialect = dialect
+                code.completionEnabled = configuration.completionEnabled
+                code.completesFromBuffer = configuration.completesFromBuffer
+                code.completionFetchDelay = configuration.completionFetchDelay
             }
 
             // Everything below rewrites attributes or re-lays out the document,
@@ -1224,6 +1227,12 @@ final class CodeNSTextView: NSTextView {
     var closesQuotes = true
     var closesTags = true
 
+    /// Whether the list may open at all, and whether buffer words join the
+    /// server's answer. Mirrored from the configuration — see
+    /// `CodeEditorConfiguration` for why they are two switches and not one.
+    var completionEnabled = true
+    var completesFromBuffer = true
+
     /// Which markup this file is, which the language cannot answer.
     ///
     /// `.ts` and `.tsx` are one `CodeLanguage`, and that is right for lexing
@@ -1627,7 +1636,7 @@ final class CodeNSTextView: NSTextView {
     /// addition hover does not need: the buffer moves under a completion, so
     /// a generation counter guards it as well as the offset.
     private func requestCompletions(explicitly: Bool, immediate: Bool = false) {
-        guard let completionProvider else { return }
+        guard completionEnabled, let completionProvider else { return }
 
         completionGeneration += 1
         let generation = completionGeneration
@@ -1659,7 +1668,10 @@ final class CodeNSTextView: NSTextView {
         let prefix = Self.identifierRange(in: content, endingAt: caret)
 
         let query = content.substring(with: prefix)
-        let ranked = CodeCompletionFilter.rank(items, query: query)
+        let ranked = CodeCompletionFilter.rank(
+            items + bufferWords(matching: query, excluding: prefix, in: content),
+            query: query
+        )
         guard !ranked.isEmpty else {
             dismissCompletions()
             return
@@ -1684,6 +1696,163 @@ final class CodeNSTextView: NSTextView {
             anchor: anchor,
             over: self
         )
+    }
+
+    /// Identifiers scraped out of the buffer, offered alongside whatever the
+    /// server said.
+    ///
+    /// Merged on **every** request rather than only when the server answered
+    /// nothing, because the ranking was built for exactly this and has never
+    /// been given it: `CodeCompletionFilter` already handicaps a non-server row
+    /// against a server one, and already drops a scraped word that a server row
+    /// covers. Falling back only on an empty answer would make the feature
+    /// arrive precisely when the editor knows least — a server that is still
+    /// starting, or one that answered for a different position — and vanish
+    /// once it knows more.
+    ///
+    /// What this buys is the language nobody installed a server for. Before it,
+    /// those files offered nothing at all.
+    ///
+    /// **Keywords are not here, and that is a cut rather than an oversight.**
+    /// A built-in language has no keyword *list* — `LanguageSyntax.builtIn`
+    /// carries an empty one and the highlighter matches keywords by pattern —
+    /// so offering them would mean writing fourteen lists beside a table that
+    /// already encodes the same words, and watching the two drift. In a file
+    /// that has used a keyword even once it is already in the buffer and comes
+    /// back through here anyway. A *contributed* language does carry a list,
+    /// and this is where it would attach.
+    private func bufferWords(
+        matching query: String,
+        excluding prefix: NSRange,
+        in content: NSString
+    ) -> [CodeCompletionItem] {
+        guard completesFromBuffer, !query.isEmpty else { return [] }
+
+        return CodeWordIndex.words(
+            in: content,
+            excluding: prefix,
+            matching: query,
+            limit: Self.bufferWordLimit
+        )
+        .map { CodeCompletionItem(kind: .text, label: $0, source: .buffer) }
+    }
+
+    /// Enough to be worth having, few enough that they cannot bury a server's
+    /// answer before the ranking has had a chance to sort them.
+    private static let bufferWordLimit = 50
+
+    /// The tab stops of an insertion the reader is still filling in.
+    ///
+    /// Ranges are absolute buffer offsets rather than offsets into the
+    /// snippet, because the buffer is what everything else here speaks and a
+    /// second coordinate space would have to be converted at every use.
+    private struct SnippetSession {
+        var fields: [NSRange]
+        var active: Int
+        var finalCaret: Int
+    }
+
+    private var snippetSession: SnippetSession?
+
+    /// Inserts a snippet body and leaves the caret on its first stop.
+    ///
+    /// A body with no stops is not a session: there is nothing to Tab through,
+    /// and holding one open would claim Tab from a reader who has finished.
+    private func beginSnippet(_ snippet: CodeSnippet, replacing range: NSRange) {
+        guard shouldChangeText(in: range, replacementString: snippet.text) else { return }
+        textStorage?.replaceCharacters(in: range, with: snippet.text)
+        didChangeText()
+
+        let origin = range.location
+        let inserted = (snippet.text as NSString).length
+        let final = origin + (snippet.finalCaret ?? inserted)
+
+        guard !snippet.fields.isEmpty else {
+            setSelectedRange(NSRange(location: final, length: 0))
+            return
+        }
+
+        snippetSession = SnippetSession(
+            fields: snippet.fields.map {
+                NSRange(location: origin + $0.range.location, length: $0.range.length)
+            },
+            active: 0,
+            finalCaret: final
+        )
+        selectSnippetField()
+    }
+
+    /// Tab and Shift-Tab. Walking off either end finishes rather than wraps —
+    /// wrapping would make the last Tab of a snippet silently reopen it.
+    private func moveSnippetField(by step: Int) {
+        guard let session = snippetSession else { return }
+        let next = session.active + step
+
+        guard session.fields.indices.contains(next) else {
+            let final = session.finalCaret
+            endSnippet()
+            setSelectedRange(NSRange(location: min(final, (string as NSString).length), length: 0))
+            return
+        }
+
+        snippetSession?.active = next
+        selectSnippetField()
+    }
+
+    private func selectSnippetField() {
+        guard let session = snippetSession else { return }
+        let field = session.fields[session.active]
+        let length = (string as NSString).length
+        guard field.location <= length, field.location + field.length <= length else {
+            endSnippet()
+            return
+        }
+        setSelectedRange(field)
+    }
+
+    private func endSnippet() {
+        snippetSession = nil
+    }
+
+    /// The edit about to happen, remembered so the snippet stops can be moved
+    /// by the amount it actually changed.
+    ///
+    /// Captured on the way in because `didChangeText` is told *that* the text
+    /// changed and not what changed — and the delta is the one number the
+    /// field arithmetic needs.
+    private var pendingEdit: (range: NSRange, delta: Int)?
+
+    override func shouldChangeText(in range: NSRange, replacementString: String?) -> Bool {
+        if snippetSession != nil {
+            let inserted = (replacementString as NSString?)?.length ?? 0
+            pendingEdit = (range, inserted - range.length)
+        }
+        return super.shouldChangeText(in: range, replacementString: replacementString)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+
+        guard let session = snippetSession, let edit = pendingEdit else { return }
+        pendingEdit = nil
+
+        /// `nil` means the edit went somewhere the session does not model, and
+        /// the contract there is to **end** rather than to guess. A session
+        /// that survives an edit it did not understand starts moving the wrong
+        /// ranges, and the way that shows up is a later Tab selecting a piece
+        /// of the reader's own code.
+        guard let moved = CodeSnippet.adjust(
+            fields: session.fields,
+            active: session.active,
+            editedRange: edit.range,
+            delta: edit.delta
+        ) else {
+            endSnippet()
+            return
+        }
+
+        snippetSession?.fields = moved
+        snippetSession?.finalCaret = session.finalCaret + edit.delta
     }
 
     /// The word the caret sits at the end of.
@@ -1812,11 +1981,48 @@ final class CodeNSTextView: NSTextView {
         guard let session = completionSession else { return }
         let range = session.prefix
         dismissCompletions()
+        endSnippet()
 
-        guard shouldChangeText(in: range, replacementString: item.insertText) else { return }
-        textStorage?.replaceCharacters(in: range, with: item.insertText)
-        didChangeText()
-        setSelectedRange(NSRange(location: range.location + (item.insertText as NSString).length, length: 0))
+        /// Everything lands inside one undo group, so a single ⌘Z takes back
+        /// the completion *and* the import it dragged in. Two steps would
+        /// leave the reader with an import for a symbol they just removed —
+        /// and they would have to notice that to fix it.
+        undoManager?.beginUndoGrouping()
+        defer { undoManager?.endUndoGrouping() }
+
+        /// The additional edits go in **first, back to front**. Every range
+        /// the server sent is measured against the document as it was, so
+        /// applying them in ascending order invalidates every position after
+        /// the first one. Descending means each edit lands before anything
+        /// that could have moved it — which is also why a server is free to
+        /// send them in any order at all.
+        ///
+        /// The main insertion comes last for the same reason: an import at the
+        /// top of the file would shift the caret's own range out from under it.
+        var caretRange = range
+        for edit in item.additionalEdits.sorted(by: { $0.range.location > $1.range.location }) {
+            guard edit.range.location <= (string as NSString).length else { continue }
+            guard shouldChangeText(in: edit.range, replacementString: edit.newText) else { continue }
+            textStorage?.replaceCharacters(in: edit.range, with: edit.newText)
+            didChangeText()
+
+            if edit.range.location <= caretRange.location {
+                caretRange.location += (edit.newText as NSString).length - edit.range.length
+            }
+        }
+
+        guard item.isSnippet else {
+            guard shouldChangeText(in: caretRange, replacementString: item.insertText) else { return }
+            textStorage?.replaceCharacters(in: caretRange, with: item.insertText)
+            didChangeText()
+            setSelectedRange(NSRange(
+                location: caretRange.location + (item.insertText as NSString).length,
+                length: 0
+            ))
+            return
+        }
+
+        beginSnippet(CodeSnippet.parse(item.insertText), replacing: caretRange)
     }
 
     /// Closes the list and invalidates anything still in flight for it.
@@ -1845,36 +2051,83 @@ final class CodeNSTextView: NSTextView {
     /// through untouched, so Return still reaches the find bar and Tab still
     /// indents. Spelled as a static over a `Bool` so the entire keyboard
     /// contract is testable without a window, an event or a panel.
+    /// What a key does when the list, or a snippet's tab stops, own it.
+    ///
+    /// An enum rather than the nested optional this used to be. Two readings
+    /// of `nil` were already one too many, and the snippet stops add two more
+    /// answers to the same question.
+    enum Claim: Equatable {
+        case move(CodeCompletionPanel.Movement)
+        case accept
+        case dismiss
+
+        /// Tab and Shift-Tab, once an insertion has left placeholders behind.
+        case nextField
+        case previousField
+    }
+
+    /// Which keys are claimed, and — the part that matters — which are not.
+    ///
+    /// **Nothing is claimed unless a list is open or a snippet is in progress.**
+    /// That single rule is the whole conflict-avoidance strategy: with neither
+    /// in play every selector falls through untouched, so Return still reaches
+    /// the find bar and Tab still indents. It is spelled as a static over two
+    /// `Bool`s so the entire keyboard contract can be asserted without a
+    /// window, an event or a panel.
+    ///
+    /// The list wins Tab when both are live, because the reader is looking at
+    /// a list they just opened and the stop they were on will still be there
+    /// afterwards.
     static func completionCommand(
         for selector: Selector,
-        isListOpen: Bool
-    ) -> CodeCompletionPanel.Movement?? {
-        guard isListOpen else { return nil }
+        isListOpen: Bool,
+        hasSnippetSession: Bool
+    ) -> Claim? {
+        if isListOpen {
+            switch selector {
+            case #selector(NSResponder.moveDown(_:)): return .move(.down)
+            case #selector(NSResponder.moveUp(_:)): return .move(.up)
+            case #selector(NSResponder.scrollPageDown(_:)): return .move(.pageDown)
+            case #selector(NSResponder.scrollPageUp(_:)): return .move(.pageUp)
+            case #selector(NSResponder.insertNewline(_:)),
+                 #selector(NSResponder.insertTab(_:)):
+                return .accept
+            case #selector(NSResponder.cancelOperation(_:)):
+                return .dismiss
+            default: return nil
+            }
+        }
+
+        guard hasSnippetSession else { return nil }
         switch selector {
-        case #selector(NSResponder.moveDown(_:)): return .some(.down)
-        case #selector(NSResponder.moveUp(_:)): return .some(.up)
-        case #selector(NSResponder.scrollPageDown(_:)): return .some(.pageDown)
-        case #selector(NSResponder.scrollPageUp(_:)): return .some(.pageUp)
-        case #selector(NSResponder.insertNewline(_:)),
-             #selector(NSResponder.insertTab(_:)),
-             #selector(NSResponder.cancelOperation(_:)):
-            return .some(nil)
+        case #selector(NSResponder.insertTab(_:)): return .nextField
+        case #selector(NSResponder.insertBacktab(_:)): return .previousField
+        case #selector(NSResponder.cancelOperation(_:)): return .dismiss
         default: return nil
         }
     }
 
     override func doCommand(by selector: Selector) {
-        guard let claimed = Self.completionCommand(for: selector, isListOpen: isCompletionListOpen) else {
+        guard let claim = Self.completionCommand(
+            for: selector,
+            isListOpen: isCompletionListOpen,
+            hasSnippetSession: snippetSession != nil
+        ) else {
             super.doCommand(by: selector)
             return
         }
 
-        if let movement = claimed {
+        switch claim {
+        case .move(let movement):
             completionPanel?.moveSelection(movement)
-        } else if selector == #selector(NSResponder.cancelOperation(_:)) {
-            dismissCompletions()
-        } else {
+        case .accept:
             completionPanel?.acceptSelection()
+        case .dismiss:
+            if isCompletionListOpen { dismissCompletions() } else { endSnippet() }
+        case .nextField:
+            moveSnippetField(by: 1)
+        case .previousField:
+            moveSnippetField(by: -1)
         }
     }
 
