@@ -103,6 +103,46 @@ struct CurrentLineHighlightTests {
         configuration.highlightsCurrentLine = false
         #expect(!configuration.highlightsCurrentLine)
     }
+
+    /// The band is the caret's line and nothing else of its own: whatever
+    /// vertical the caret was measured at is the vertical it gets.
+    ///
+    /// This says nothing about *when* that measurement is taken, which is the
+    /// half that broke — a band that trailed the caret by a line more on each
+    /// Enter had geometry as correct as this and a stale rect to apply it to.
+    /// Only the running app can show that one.
+    @Test func theBandTakesTheCaretsLine() {
+        let frame = CodeTextView.Coordinator.bandFrame(
+            caret: NSRect(x: 42, y: 120, width: 0, height: 15),
+            documentWidth: 300,
+            clipWidth: 800
+        )
+        #expect(frame.minY == CGFloat(120))
+        #expect(frame.height == CGFloat(15))
+    }
+
+    /// A file of short lines makes the document narrower than the viewport,
+    /// and a band that stopped at the document would stop in mid-air.
+    @Test func theBandSpansTheViewportWhenTheDocumentIsNarrower() {
+        let frame = CodeTextView.Coordinator.bandFrame(
+            caret: NSRect(x: 42, y: 120, width: 0, height: 15),
+            documentWidth: 300,
+            clipWidth: 800
+        )
+        #expect(frame.minX == CGFloat(0))
+        #expect(frame.width == CGFloat(800))
+    }
+
+    /// And a long line scrolled sideways makes it the other way around, where
+    /// stopping at the viewport would leave the band behind as you scroll.
+    @Test func theBandSpansTheDocumentWhenItIsWider() {
+        let frame = CodeTextView.Coordinator.bandFrame(
+            caret: NSRect(x: 42, y: 120, width: 0, height: 15),
+            documentWidth: 2_000,
+            clipWidth: 800
+        )
+        #expect(frame.width == CGFloat(2_000))
+    }
 }
 
 /// The environment badge's colour scale.

@@ -826,6 +826,10 @@ struct CodeTextView: NSViewRepresentable {
         /// the insertion point" can disagree, and the insertion point is the
         /// thing the reader sees. Where the caret is drawn is, by definition,
         /// where the band belongs.
+        ///
+        /// That rect is only the truth once the caret's line has been laid
+        /// out — see `layOutAroundCaret`, which is why the caret is measured
+        /// and not guessed at.
         func updateCurrentLineBand() {
             guard let band = currentLineBand, let textView else { return }
             let selection = textView.selectedRange()
@@ -838,6 +842,8 @@ struct CodeTextView: NSViewRepresentable {
                 return
             }
 
+            Self.layOutAroundCaret(in: textView, caret: selection.location)
+
             // Screen → window → clip view, the same trip `reveal` makes.
             let onScreen = textView.firstRect(forCharacterRange: selection, actualRange: nil)
             guard onScreen.height > 0 else {
@@ -847,13 +853,77 @@ struct CodeTextView: NSViewRepresentable {
             let inClip = clipView.convert(window.convertFromScreen(onScreen), from: nil)
 
             band.layer?.backgroundColor = color.cgColor
-            band.frame = NSRect(
-                x: 0,
-                y: inClip.minY,
-                width: max(textView.bounds.width, clipView.bounds.width),
-                height: inClip.height
+            band.frame = Self.bandFrame(
+                caret: inClip,
+                documentWidth: textView.bounds.width,
+                clipWidth: clipView.bounds.width
             )
             band.isHidden = false
+        }
+
+        /// Lays out the caret's surroundings before anyone asks where the
+        /// caret is.
+        ///
+        /// TextKit 2 answers a geometry question inside an *invalidated* range
+        /// with an estimate — a position interpolated across the range —
+        /// rather than by laying the range out. The estimate barely moves
+        /// while the caret does, so the band fell a line further behind on
+        /// every Enter: not one stale measurement but a guess that never
+        /// catches up. Editing alone does not cause this. Re-colouring does:
+        /// `textDidChange` rewrites the attributes around the edit — over a
+        /// range that reaches thousands of characters *above* it, see
+        /// `CodeTextStorage.invalidationRange` — and the band is measured
+        /// directly afterwards.
+        ///
+        /// **Bounded, and no wider than it has to be.** Two narrower ranges
+        /// were tried on screen and rejected by what they drew. The caret's
+        /// own line alone leaves the bug exactly as it was — the band moves
+        /// 12px on the first Enter and then stops, which is the original
+        /// symptom — because the estimate is anchored *above* the caret and
+        /// laying out one line inside an invalid region does not make that
+        /// anchor real. Ensuring from the start of the document instead does
+        /// fix it, and costs 2.5 ms per keystroke at 5 000 lines and 10 ms at
+        /// 20 000 — measured, linear in the file, on a path that runs twice
+        /// per keystroke. So the range is the one that made the layout
+        /// invalid in the first place: the same window `highlight` was handed,
+        /// clipped to end at the caret. Its width is a constant, so the cost
+        /// is flat in the size of the file, and it reaches the last fragment
+        /// the re-colouring left alone — which is the anchor the caret's
+        /// position is measured from. Anything wider needs a measurement
+        /// before it goes in, and anything narrower needs the screenshots.
+        private static func layOutAroundCaret(in textView: NSTextView, caret: Int) {
+            guard let layout = textView.textLayoutManager,
+                  let content = layout.textContentManager
+            else { return }
+            let text = textView.string as NSString
+            let line = text.paragraphRange(
+                for: NSRange(location: min(caret, text.length), length: 0)
+            )
+            let invalidated = CodeTextStorage.invalidationRange(for: line, in: text)
+            let start = content.documentRange.location
+            guard let from = content.location(start, offsetBy: invalidated.location),
+                  let to = content.location(start, offsetBy: line.location + line.length),
+                  let range = NSTextRange(location: from, end: to)
+            else { return }
+            layout.ensureLayout(for: range)
+        }
+
+        /// The band's frame in the clip view, given where the caret is in it.
+        ///
+        /// Full width, and the wider of the two on purpose: the document is
+        /// only as wide as its longest line, so a band that stopped there
+        /// would stop mid-viewport on a file of short lines.
+        static func bandFrame(
+            caret: NSRect,
+            documentWidth: CGFloat,
+            clipWidth: CGFloat
+        ) -> NSRect {
+            NSRect(
+                x: 0,
+                y: caret.minY,
+                width: max(documentWidth, clipWidth),
+                height: caret.height
+            )
         }
 
         /// The one-based line the insertion point is on.
