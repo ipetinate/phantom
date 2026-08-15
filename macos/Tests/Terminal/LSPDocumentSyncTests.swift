@@ -342,6 +342,91 @@ struct LSPCompletionCapabilityTests {
     }
 }
 
+/// Turning what several servers said about one file into the one list the
+/// editor draws.
+///
+/// The storage behind this was split per server because `publishDiagnostics`
+/// replaces a server's whole list for a file: with two servers on one document
+/// a single dictionary means each erases the other, last to speak wins, and
+/// the underlines flicker between two answers that are both correct. These
+/// assert the merge that makes the split usable — the ordering lives in
+/// `republishDiagnostics(for:)`, which needs the keys; this needs nothing,
+/// which is why it is the half that is tested.
+struct LSPDiagnosticMergeTests {
+    private func diagnostic(
+        line: Int,
+        character: Int = 0,
+        message: String,
+        severity: Int = 1
+    ) -> LSPDiagnostic {
+        LSPDiagnostic([
+            "range": [
+                "start": ["line": .integer(line), "character": .integer(character)],
+                "end": ["line": .integer(line), "character": .integer(character + 1)],
+            ],
+            "message": .string(message),
+            "severity": .integer(severity),
+        ])!
+    }
+
+    /// The inert case, and the one that has to stay true while only one
+    /// server exists: one list in, the same list out, in the same order.
+    @Test func oneServersListIsUnchanged() {
+        let list = [
+            diagnostic(line: 3, message: "cannot find name 'foo'"),
+            diagnostic(line: 9, message: "unused variable"),
+        ]
+        #expect(LSPCenter.merged([list]) == list)
+        #expect(LSPCenter.merged([]).isEmpty)
+        #expect(LSPCenter.merged([[], []]).isEmpty)
+    }
+
+    /// Concatenation in the order given, primary first — so the order a
+    /// reader sees is a property of the file and not of which server happened
+    /// to answer first.
+    @Test func listsAreConcatenatedInTheOrderGiven() {
+        let template = diagnostic(line: 2, message: "unknown component <Foo>")
+        let script = diagnostic(line: 20, message: "cannot find name 'bar'")
+
+        #expect(LSPCenter.merged([[template], [script]]) == [template, script])
+        #expect(LSPCenter.merged([[script], [template]]) == [script, template])
+    }
+
+    /// Two servers reading the same `<script>` block genuinely do report the
+    /// same error. Underlining it twice is how a tooltip ends up saying
+    /// everything in duplicate.
+    @Test func theSameProblemReportedTwiceIsDrawnOnce() {
+        let fromVue = diagnostic(line: 20, character: 4, message: "cannot find name 'bar'")
+        let fromTypeScript = diagnostic(line: 20, character: 4, message: "cannot find name 'bar'")
+
+        let merged = LSPCenter.merged([[fromVue], [fromTypeScript]])
+        #expect(merged.count == 1)
+        #expect(merged.first == fromVue)
+    }
+
+    /// Same message, different place — two real problems, not one duplicate.
+    @Test func theSameMessageAtADifferentPlaceIsTwoProblems() {
+        let first = diagnostic(line: 20, character: 4, message: "cannot find name 'bar'")
+        let second = diagnostic(line: 31, character: 4, message: "cannot find name 'bar'")
+
+        #expect(LSPCenter.merged([[first], [second]]).count == 2)
+    }
+
+    /// First occurrence wins, whole. The temptation this exists to refuse is
+    /// a "smarter" merge that keeps one server's range and another's message:
+    /// each maps positions inside a single-file component through its own copy
+    /// of the language tooling, and those copies can disagree about where the
+    /// `<script>` block starts.
+    @Test func aDuplicateIsDroppedWholeRatherThanCombined() {
+        let primary = diagnostic(line: 20, character: 4, message: "cannot find name 'bar'", severity: 1)
+        let secondary = diagnostic(line: 20, character: 4, message: "cannot find name 'bar'", severity: 2)
+
+        let merged = LSPCenter.merged([[primary], [secondary]])
+        #expect(merged.count == 1)
+        #expect(merged.first?.severity == .error, "the second server's severity replaced the first's")
+    }
+}
+
 /// What the client tells a server it can do.
 ///
 /// Assembled in `LSPCenter` rather than in `LSPProcess`, so these assert the

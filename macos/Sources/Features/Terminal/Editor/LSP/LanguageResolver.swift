@@ -83,6 +83,21 @@ final class LanguageResolver: ObservableObject {
         return LSPServerRegistry.server(forPath: path)
     }
 
+    /// Every server that should be started for a file, in the order they are
+    /// to be consulted — primary first.
+    ///
+    /// Plural because one language id is not one server. Since Volar 2 a
+    /// `.vue` file is served by the Vue server for its template and by
+    /// `typescript-language-server` — loading `@vue/typescript-plugin` — for
+    /// its `<script>`; one server per language id is the Volar 1.x model and
+    /// has been wrong since. Nothing about that has landed yet: today this
+    /// returns at most one element and behaviour is unchanged. The shape is
+    /// what lets the second server arrive without every call site in
+    /// `LSPCenter` learning about it separately.
+    func serverDefinitions(forPath path: String) -> [LSPServerDefinition] {
+        serverDefinition(forPath: path).map { [$0] } ?? []
+    }
+
     func serverDefinition(forLanguage languageID: String) -> LSPServerDefinition? {
         if let contributed = catalog.contribution(forLanguageID: languageID),
            let definition = contributed.serverDefinition {

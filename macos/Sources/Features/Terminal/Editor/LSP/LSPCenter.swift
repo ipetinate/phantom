@@ -28,6 +28,16 @@ final class LSPCenter: ObservableObject {
     /// Problems per file path, which is what the editor draws.
     @Published private(set) var diagnostics: [String: [LSPDiagnostic]] = [:]
 
+    /// The same problems, kept apart by the server that reported them.
+    ///
+    /// The published dictionary above is a *view*, and it cannot also be the
+    /// storage. `publishDiagnostics` replaces a server's entire list for a
+    /// file, so with two servers on one document a wholesale write means each
+    /// erases the other: last to speak wins, and the underlines flicker
+    /// between two truths that are both correct. Split here, merged there —
+    /// see `republishDiagnostics(for:)`.
+    private var diagnosticsByServer: [String: [Key: [LSPDiagnostic]]] = [:]
+
     /// What each server is doing right now, keyed by (language, workspace
     /// root). See `LSPServerStatus` for why this replaced a plain
     /// "installed or not" flag.
@@ -38,9 +48,38 @@ final class LSPCenter: ObservableObject {
     /// reads it directly anyway — `status(forPath:)` below is the surface.
     @Published private var status: [Key: LSPServerStatus] = [:]
 
+    /// One running server: the language it serves, the workspace it serves it
+    /// in, **and the command it runs**.
+    ///
+    /// The command is not decoration. Two servers can serve the same language
+    /// in the same workspace, and `.vue` is exactly that case — the document
+    /// has to be announced as `vue` to the Vue server *and* to
+    /// `typescript-language-server`, because it is the TypeScript plugin's own
+    /// `modeIds` that registers the second one for `vue`. Keyed by language
+    /// and root alone those two collapse into one entry, and the second server
+    /// silently takes the first one's place.
+    ///
+    /// It also deletes a lookup rather than adding one: every place that held
+    /// a key and wanted to know which binary it meant used to ask the registry
+    /// again by language id, which cannot answer once there are two.
     private struct Key: Hashable, Sendable {
         let languageID: String
         let root: String
+
+        /// After any user override — this is what `LSPProcess` will launch.
+        let command: String
+    }
+
+    /// The key one definition runs under for one file.
+    ///
+    /// The single place a `Key` is built, so the three fields cannot drift
+    /// apart between call sites.
+    private static func key(for definition: LSPServerDefinition, path: String) -> Key {
+        Key(
+            languageID: definition.languageID,
+            root: workspaceRoot(for: path),
+            command: definition.command
+        )
     }
 
     private var servers: [Key: LSPProcess] = [:]
@@ -78,13 +117,18 @@ final class LSPCenter: ObservableObject {
 
     private var openDocuments: Set<String> = []
 
-    /// Which server each open document has been announced to.
+    /// Which servers each open document has been announced to.
     ///
     /// `didOpen` twice for the same document is a protocol violation, and a
     /// server that starts *after* a file was opened has never heard of it —
     /// both are true at once, so "is it open" is not a property of the
     /// document but of the pair.
-    private var announced: [String: Key] = [:]
+    ///
+    /// A set rather than one key, because a document served by two servers is
+    /// announced to them independently: the second may start minutes after the
+    /// first, or fail to start at all, and neither outcome may cost the other
+    /// its introduction.
+    private var announced: [String: Set<Key>] = [:]
 
     /// Which server binaries are on the login `PATH`, resolved off the main
     /// actor and republished whenever that could have changed.
@@ -256,9 +300,11 @@ final class LSPCenter: ObservableObject {
     }
 
     func recheckMissingServers() {
+        // Read off the key rather than resolved again by language id, which
+        // cannot answer once one language has two servers.
         let notInstalledCommands = Set(status.compactMap { key, value -> String? in
             guard case .notInstalled = value else { return nil }
-            return Self.resolvedServer(forLanguage: key.languageID).map(Self.effectiveDefinition)?.command
+            return key.command
         })
         guard !notInstalledCommands.isEmpty else { return }
 
@@ -287,8 +333,7 @@ final class LSPCenter: ObservableObject {
                 guard let self else { return }
                 for key in Array(self.status.keys) {
                     guard case .notInstalled = self.status[key],
-                          let base = Self.resolvedServer(forLanguage: key.languageID),
-                          found.contains(Self.effectiveDefinition(base).command)
+                          found.contains(key.command)
                     else { continue }
                     self.status.removeValue(forKey: key)
                 }
@@ -317,8 +362,19 @@ final class LSPCenter: ObservableObject {
     /// The reverse order is inert — a gate with no resolver behind it can only
     /// refuse launches that never arrive — which is why *that* half is the one
     /// that is safe to land alone.
+    /// Every server for a file, override applied, primary first.
+    ///
+    /// The override is applied *here* rather than at each call site, because
+    /// the command it changes is part of the `Key` now: a caller that resolved
+    /// and forgot to apply it would key its server under a command nothing
+    /// else uses, and the entry would look like a second server that never
+    /// answers.
+    private static func resolvedServers(forPath path: String) -> [LSPServerDefinition] {
+        LanguageResolver.shared.serverDefinitions(forPath: path).map(effectiveDefinition)
+    }
+
     private static func resolvedServer(forPath path: String) -> LSPServerDefinition? {
-        LanguageResolver.shared.serverDefinition(forPath: path)
+        resolvedServers(forPath: path).first
     }
 
     /// The same resolution keyed by language id, for the paths that start
@@ -345,31 +401,42 @@ final class LSPCenter: ObservableObject {
 
     // MARK: Documents
 
+    /// Introduces a document to every server that serves it.
+    ///
+    /// The version is *not* reset for a document already open. A second server
+    /// joining a document the first has been editing for a while must be told
+    /// the version that document is actually on: told `1`, it would then see
+    /// the next change arrive as `2` while the first server sees it as `8`,
+    /// and only one of those two servers is reading a document whose numbering
+    /// means anything.
     func didOpen(path: String, text: String) {
-        guard let base = Self.resolvedServer(forPath: path) else { return }
-        let definition = Self.effectiveDefinition(base)
-        let root = Self.workspaceRoot(for: path)
-        let key = Key(languageID: definition.languageID, root: root)
+        let definitions = Self.resolvedServers(forPath: path)
+        guard !definitions.isEmpty else { return }
 
-        // Already announced to *this* server: a second `didOpen` for the same
-        // pair is a protocol violation. Announced to a different one — or to
-        // none — means this is the introduction.
-        guard announced[path] != key else { return }
-
-        versions[path] = 1
+        if !openDocuments.contains(path) { versions[path] = 1 }
         openDocuments.insert(path)
+        let version = versions[path] ?? 1
 
-        Task { [weak self] in
-            guard let server = await self?.server(for: key, definition: definition) else { return }
-            await MainActor.run { self?.announced[path] = key }
-            try? server.notify("textDocument/didOpen", params: [
-                "textDocument": [
-                    "uri": .string(Self.uri(path)),
-                    "languageId": .string(definition.languageID),
-                    "version": .integer(1),
-                    "text": .string(text),
-                ],
-            ])
+        for definition in definitions {
+            let key = Self.key(for: definition, path: path)
+
+            // Already announced to *this* server: a second `didOpen` for the
+            // same pair is a protocol violation. Not announced to it — even
+            // when its sibling has been — means this is the introduction.
+            guard announced[path]?.contains(key) != true else { continue }
+
+            Task { [weak self] in
+                guard let server = await self?.server(for: key, definition: definition) else { return }
+                await MainActor.run { _ = self?.announced[path, default: []].insert(key) }
+                try? server.notify("textDocument/didOpen", params: [
+                    "textDocument": [
+                        "uri": .string(Self.uri(path)),
+                        "languageId": .string(definition.languageID),
+                        "version": .integer(version),
+                        "text": .string(text),
+                    ],
+                ])
+            }
         }
     }
 
@@ -393,11 +460,9 @@ final class LSPCenter: ObservableObject {
     /// were real. Cancelling from this side instead means the caller is told
     /// `.cancelled` and keeps what it is showing.
     func didChange(path: String, text: String) {
-        guard let definition = Self.resolvedServer(forPath: path),
+        guard !Self.resolvedServers(forPath: path).isEmpty,
               openDocuments.contains(path)
         else { return }
-
-        let key = Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path))
 
         cancelCompletion(path: path)
 
@@ -406,7 +471,7 @@ final class LSPCenter: ObservableObject {
         changeTasks[path] = Task { [weak self] in
             try? await Task.sleep(for: Self.changeDebounce)
             guard !Task.isCancelled else { return }
-            await MainActor.run { self?.flushChange(path: path, key: key) }
+            await MainActor.run { self?.flushChange(path: path) }
         }
     }
 
@@ -427,10 +492,16 @@ final class LSPCenter: ObservableObject {
     /// bookkeeping about a message that does not exist, and it costs the one
     /// property that makes a desync debuggable at all: that the number is
     /// how many changes the server has been told about.
-    private func flushChange(path: String, key: Key) {
-        let server = servers[key]
-        guard let text = pendingChanges.take(path, ifServerExists: server != nil),
-              let server
+    /// One version bump, one text, every server that has the document.
+    ///
+    /// The version is shared deliberately: it numbers the *document*, not the
+    /// conversation with any one server, and both servers are being told the
+    /// same edits in the same order. Numbering them separately would be two
+    /// counters that have to be kept equal, which is a counter waiting to
+    /// disagree.
+    private func flushChange(path: String) {
+        let live = keys(forPath: path).compactMap { servers[$0] }
+        guard let text = pendingChanges.take(path, ifServerExists: !live.isEmpty)
         else { return }
 
         changeTasks.removeValue(forKey: path)?.cancel()
@@ -438,10 +509,12 @@ final class LSPCenter: ObservableObject {
         let version = (versions[path] ?? 1) + 1
         versions[path] = version
 
-        try? server.notify("textDocument/didChange", params: [
-            "textDocument": ["uri": .string(Self.uri(path)), "version": .integer(version)],
-            "contentChanges": [["text": .string(text)]],
-        ])
+        for server in live {
+            try? server.notify("textDocument/didChange", params: [
+                "textDocument": ["uri": .string(Self.uri(path)), "version": .integer(version)],
+                "contentChanges": [["text": .string(text)]],
+            ])
+        }
     }
 
     /// Sends the pending change for one document *now*, and stops the
@@ -454,9 +527,8 @@ final class LSPCenter: ObservableObject {
     /// an answer about it, and what comes back is an empty list rather than
     /// an error.
     private func flushNow(path: String) {
-        guard let key = key(forPath: path) else { return }
         changeTasks.removeValue(forKey: path)?.cancel()
-        flushChange(path: path, key: key)
+        flushChange(path: path)
     }
 
     /// Abandons the completion request in flight for a document, if any.
@@ -482,20 +554,25 @@ final class LSPCenter: ObservableObject {
     }
 
     func didSave(path: String, text: String) {
-        guard let definition = Self.resolvedServer(forPath: path) else { return }
-        let key = Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path))
-        // Before the save notification, so the server is not told a file was
+        let keys = keys(forPath: path)
+        guard !keys.isEmpty else { return }
+
+        // Before the save notification, so no server is told a file was
         // saved while still holding the text from before the last edits.
-        flushPending(for: key)
-        try? servers[key]?.notify("textDocument/didSave", params: [
-            "textDocument": ["uri": .string(Self.uri(path))],
-            "text": .string(text),
-        ])
+        flushChange(path: path)
+
+        for key in keys {
+            try? servers[key]?.notify("textDocument/didSave", params: [
+                "textDocument": ["uri": .string(Self.uri(path))],
+                "text": .string(text),
+            ])
+        }
     }
 
     func didClose(path: String) {
-        guard let definition = Self.resolvedServer(forPath: path) else { return }
-        let key = Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path))
+        let keys = keys(forPath: path)
+        guard !keys.isEmpty else { return }
+
         openDocuments.remove(path)
         announced.removeValue(forKey: path)
         changeTasks.removeValue(forKey: path)?.cancel()
@@ -504,9 +581,13 @@ final class LSPCenter: ObservableObject {
         completionEpochs.removeValue(forKey: path)
         versions.removeValue(forKey: path)
         diagnostics.removeValue(forKey: path)
-        try? servers[key]?.notify("textDocument/didClose", params: [
-            "textDocument": ["uri": .string(Self.uri(path))],
-        ])
+        diagnosticsByServer.removeValue(forKey: path)
+
+        for key in keys {
+            try? servers[key]?.notify("textDocument/didClose", params: [
+                "textDocument": ["uri": .string(Self.uri(path))],
+            ])
+        }
     }
 
     // MARK: Server status
@@ -523,11 +604,16 @@ final class LSPCenter: ObservableObject {
     /// A server can be active in more than one workspace, so the count is
     /// included instead of pretending there is one global process.
     func status(for server: LSPServerDefinition) -> LSPServerStatusSnapshot {
+        /// Both sides compared *after* any override. The version this
+        /// replaced took the key's language id back to the registry, applied
+        /// the override to what came back, and compared it against the
+        /// caller's raw command — so a server the user had pointed at a
+        /// different binary matched nothing, and its row read "not running"
+        /// while it was running. Reading the command off the key removes the
+        /// lookup and the mismatch at once.
+        let effective = Self.effectiveDefinition(server).command
         let states = status.compactMap { key, value -> LSPServerStatus? in
-            guard let definition = Self.resolvedServer(forLanguage: key.languageID),
-                  Self.effectiveDefinition(definition).command == server.command
-            else { return nil }
-            return value
+            key.command == effective ? value : nil
         }
 
         let active = states.filter { if case .running = $0 { return true }; return false }.count
@@ -1075,9 +1161,24 @@ final class LSPCenter: ObservableObject {
         return servers[key]
     }
 
+    private func keys(forPath path: String) -> [Key] {
+        Self.resolvedServers(forPath: path).map { Self.key(for: $0, path: path) }
+    }
+
+    /// The primary server's key.
+    ///
+    /// Status, the log, the capability questions and every `perform`-based
+    /// feature — hover, definition, references — still answer for the primary
+    /// alone. **That is a deferral, not a decision.** It is safe to defer
+    /// because in the case that motivates a second server those three come
+    /// back empty today anyway: the Vue server serves template and style, and
+    /// says nothing about a `<script>` block. So consulting only the primary
+    /// keeps exactly what works and loses nothing that does — which is what
+    /// makes the second server additive. The rule when it lands is "first
+    /// non-empty answer, primary first"; until then this is why there is only
+    /// one.
     private func key(forPath path: String) -> Key? {
-        guard let definition = Self.resolvedServer(forPath: path) else { return nil }
-        return Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path))
+        keys(forPath: path).first
     }
 
     /// The server for a file, waiting for it if it is still starting.
@@ -1095,8 +1196,7 @@ final class LSPCenter: ObservableObject {
     /// the characters typed while it was starting were gone rather than
     /// merely late. Every path that hands back a server flushes first.
     private func runningServer(forPath path: String) async -> LSPProcess? {
-        guard let definition = Self.resolvedServer(forPath: path) else { return nil }
-        let key = Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path))
+        guard let key = key(forPath: path) else { return nil }
 
         if servers[key] == nil {
             /// Bounded: a server that never comes up must not leave a click
@@ -1121,11 +1221,8 @@ final class LSPCenter: ObservableObject {
 
     /// Sends any debounced change for the documents this server owns.
     private func flushPending(for key: Key) {
-        for path in pendingChanges.paths {
-            guard let definition = Self.resolvedServer(forPath: path),
-                  Key(languageID: definition.languageID, root: Self.workspaceRoot(for: path)) == key
-            else { continue }
-            flushChange(path: path, key: key)
+        for path in pendingChanges.paths where keys(forPath: path).contains(key) {
+            flushChange(path: path)
         }
     }
 
@@ -1227,6 +1324,15 @@ final class LSPCenter: ObservableObject {
     /// registry has never heard of, keys its override on the command its
     /// manifest asked for instead of falling through to the overridden one.
     ///
+    /// ⚠️ That lookup asks for **one** definition by language id, and it is
+    /// the piece of this file that a second server for the same language
+    /// invalidates: it would answer with the primary's default command, and
+    /// the secondary would read the primary's override. The key cannot supply
+    /// it either — `Key.command` is the command *after* the override, and the
+    /// store is keyed by the one before. Resolving this needs the base
+    /// definition carried down to here, and it has to be done in the same
+    /// change that gives a language its second server.
+    ///
     /// A manifest's own `initializationOptions` are deliberately **not**
     /// consulted here, even though `LanguageResolver` can supply them. The
     /// approval prompt names a command and a resolved path; it does not show
@@ -1301,7 +1407,8 @@ final class LSPCenter: ObservableObject {
             let reported = (notification.params?["diagnostics"]?.arrayValue ?? [])
                 .compactMap(LSPDiagnostic.init)
             let path = URL(string: uri)?.path ?? uri
-            diagnostics[path] = reported
+            diagnosticsByServer[path, default: [:]][key] = reported
+            republishDiagnostics(for: path)
 
         /// Where a server says the thing that answers "why are there no
         /// completions": `typescript-language-server` reports "tsserver
@@ -1320,6 +1427,56 @@ final class LSPCenter: ObservableObject {
         default:
             return
         }
+    }
+
+    /// Rebuilds the one list the editor draws out of what each server said.
+    ///
+    /// Ordered by `keys(forPath:)`, primary first, so the order a reader sees
+    /// is a property of the file rather than of which server happened to
+    /// answer first. Keys no longer in that list are still drained — a server
+    /// that has stopped serving this file may have diagnostics recorded under
+    /// it, and dropping them silently is an error that never goes away —
+    /// and they are sorted, because iterating a dictionary is not an order.
+    ///
+    /// The ordering lives here because it needs the keys; the merging itself
+    /// is `merged(_:)`, which needs nothing and is therefore tested.
+    private func republishDiagnostics(for path: String) {
+        guard let byServer = diagnosticsByServer[path] else {
+            diagnostics.removeValue(forKey: path)
+            return
+        }
+
+        let ordered = keys(forPath: path)
+        let orphaned = byServer.keys
+            .filter { !ordered.contains($0) }
+            .sorted { ($0.languageID, $0.root, $0.command) < ($1.languageID, $1.root, $1.command) }
+
+        diagnostics[path] = Self.merged((ordered + orphaned).map { byServer[$0] ?? [] })
+    }
+
+    /// One list out of several, in the order given.
+    ///
+    /// Deduped on `LSPDiagnostic.id`, which is line, character and message.
+    /// Two servers reading the same `<script>` block genuinely do report the
+    /// same error, and underlining it twice is how a tooltip ends up saying
+    /// everything in duplicate.
+    ///
+    /// **Concatenation, never a merge that mixes one server's parts with
+    /// another's.** Each server maps positions inside a single-file component
+    /// through its own copy of the language tooling, and those copies can
+    /// disagree about where a `<script>` block starts; taking a range from one
+    /// side to use with text from the other would land an edit in the wrong
+    /// place. Whole items, in order, first occurrence wins — that is the whole
+    /// rule, and it is the one somebody will be tempted to make cleverer.
+    nonisolated static func merged(_ lists: [[LSPDiagnostic]]) -> [LSPDiagnostic] {
+        var seen: Set<String> = []
+        var merged: [LSPDiagnostic] = []
+        for list in lists {
+            for diagnostic in list where seen.insert(diagnostic.id).inserted {
+                merged.append(diagnostic)
+            }
+        }
+        return merged
     }
 
     /// `window/logMessage` and `window/showMessage` as lines for the log
