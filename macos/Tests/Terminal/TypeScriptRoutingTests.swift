@@ -182,6 +182,47 @@ struct TypeScriptRoutingTests {
         }
     }
 
+    /// The guard that survives a definition this file never wrote.
+    ///
+    /// The routing table protects the rows *we* author. It cannot protect a
+    /// user override that repoints another language's command at `tsc`, nor a
+    /// contributed manifest declaring `command: "tsc"` with
+    /// `args: ["--lsp", "--stdio"]` — neither definition is written here, so
+    /// neither could carry a field saying what it accepts. Both end up with a
+    /// command and a path, which is what this asks about.
+    @Test func theBinaryIsRefusedTheFileWhoeverPointedAtIt() {
+        for path in ["/p/App.vue", "/p/a.svelte", "/p/main.css", "/p/Makefile", "/p/x.ex"] {
+            #expect(
+                !LSPServerRegistry.accepts(
+                    command: LSPServerRegistry.nativeTypeScriptCommand,
+                    path: path
+                ),
+                "\(path) would have been handed to the native server, which panics on it"
+            )
+        }
+
+        for path in ["/p/a.ts", "/p/a.TSX", "/p/a.js", "/p/tsconfig.json"] {
+            #expect(
+                LSPServerRegistry.accepts(
+                    command: LSPServerRegistry.nativeTypeScriptCommand,
+                    path: path
+                ),
+                "\(path) is in the measured allowlist and was refused"
+            )
+        }
+    }
+
+    /// Every other binary is unaffected. The rule is about one command that
+    /// dies on unknown input, not a general permission system — a server that
+    /// declines a document politely needs no protection from us.
+    @Test func noOtherBinaryIsConstrained() {
+        for command in ["typescript-language-server", "vue-language-server", "gopls", "elixir-ls"] {
+            for path in ["/p/App.vue", "/p/main.css", "/p/a.ts", "/p/Makefile"] {
+                #expect(LSPServerRegistry.accepts(command: command, path: path), "\(command) \(path)")
+            }
+        }
+    }
+
     /// The other half of the same guard, read off the registry rather than a
     /// list of paths: every language the native entry claims must be one whose
     /// extensions are all in the measured-safe set.

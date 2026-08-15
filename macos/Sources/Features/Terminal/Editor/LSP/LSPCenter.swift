@@ -370,18 +370,32 @@ final class LSPCenter: ObservableObject {
     /// else uses, and the entry would look like a second server that never
     /// answers.
     private static func resolvedServers(forPath path: String) -> [LSPServerDefinition] {
-        resolvedBaseServers(forPath: path).map(effectiveDefinition)
+        resolvedPairs(forPath: path).map(\.effective)
     }
 
-    /// The same list *before* any override.
+    /// Every server for a file, each paired with the definition it came from
+    /// before any override — and filtered to the ones that may be handed this
+    /// file at all.
     ///
-    /// Needed because an override is stored under the command it replaces, so
-    /// reading one back requires knowing what that was. `Key.command` cannot
-    /// answer — it is the command after the override — and asking the
-    /// registry by language id cannot either, now that one language can have
-    /// two servers: it would hand the secondary the primary's override.
-    private static func resolvedBaseServers(forPath path: String) -> [LSPServerDefinition] {
+    /// The base is kept because an override is stored under the command it
+    /// replaces, so reading one back requires knowing what that was.
+    /// `Key.command` cannot answer — it is the command *after* the override —
+    /// and asking the registry by language id cannot either, now that one
+    /// language can have two servers: it would hand the secondary the
+    /// primary's override.
+    ///
+    /// **The filter is here and nowhere else, and it is applied to the
+    /// effective command rather than the base.** That ordering is the whole
+    /// point: a user override that repoints some language at `tsc` produces a
+    /// definition this file never wrote, and checking the base would wave it
+    /// through. See `LSPServerRegistry.accepts(command:path:)` for what is
+    /// being refused and why a field on the definition could not do it.
+    private static func resolvedPairs(
+        forPath path: String
+    ) -> [(base: LSPServerDefinition, effective: LSPServerDefinition)] {
         LanguageResolver.shared.serverDefinitions(forPath: path)
+            .map { (base: $0, effective: effectiveDefinition($0)) }
+            .filter { LSPServerRegistry.accepts(command: $0.effective.command, path: path) }
     }
 
     private static func resolvedServer(forPath path: String) -> LSPServerDefinition? {
@@ -421,15 +435,14 @@ final class LSPCenter: ObservableObject {
     /// and only one of those two servers is reading a document whose numbering
     /// means anything.
     func didOpen(path: String, text: String) {
-        let bases = Self.resolvedBaseServers(forPath: path)
-        guard !bases.isEmpty else { return }
+        let pairs = Self.resolvedPairs(forPath: path)
+        guard !pairs.isEmpty else { return }
 
         if !openDocuments.contains(path) { versions[path] = 1 }
         openDocuments.insert(path)
         let version = versions[path] ?? 1
 
-        for base in bases {
-            let definition = Self.effectiveDefinition(base)
+        for (base, definition) in pairs {
             let key = Self.key(for: definition, path: path)
 
             // Already announced to *this* server: a second `didOpen` for the
