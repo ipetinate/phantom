@@ -172,6 +172,11 @@ final class LSPProcess: @unchecked Sendable {
     /// entire feature reports "not installed" on a machine where all of it
     /// is installed.
     ///
+    /// `JAVA_HOME` gets the same treatment for the opposite reason: it is
+    /// inherited, and for a server that cannot run on the JDK it names, it
+    /// is inherited fatally. See `LSPJavaRuntime`, which also keeps the
+    /// inherited JDK reachable by the build tool the server shells out to.
+    ///
     /// - Parameter workingDirectory: Left unset, `Process` inherits this
     ///   app's own cwd — `/`, for a GUI app launched through Launch
     ///   Services — not the project the server is about to be asked to
@@ -181,8 +186,8 @@ final class LSPProcess: @unchecked Sendable {
     func start(workingDirectory: String) async throws {
         try claimStart()
 
-        let environment = await Task.detached(priority: .userInitiated) { [environmentProvider] in
-            environmentProvider()
+        let environment = await Task.detached(priority: .userInitiated) { [environmentProvider, definition] in
+            LSPJavaRuntime.adjustedEnvironment(environmentProvider(), for: definition)
         }.value
 
         do {

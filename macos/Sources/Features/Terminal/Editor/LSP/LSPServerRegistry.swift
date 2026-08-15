@@ -98,6 +98,19 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
     /// cannot say where it came from — is what makes the gate skippable.
     var origin: LSPServerOrigin = .builtIn
 
+    /// The newest Java feature version this server is known to run on, for
+    /// servers that run on a JVM at all.
+    ///
+    /// A ceiling, not a requirement: it exists because a server can bundle a
+    /// compiler older than the JDK the developer builds with, and inheriting
+    /// `JAVA_HOME` then kills it at launch. `LSPJavaRuntime` reads this to
+    /// decide whether to hand the server a different JVM than the one the
+    /// environment named.
+    ///
+    /// Nil — the default, and the answer for every server here that isn't
+    /// Java — means the environment is passed through as-is.
+    var maximumJavaFeatureVersion: Int?
+
     var id: String { languageID }
 
     /// Which section of the Settings list this server belongs to. Keyed off
@@ -300,7 +313,13 @@ enum LSPServerRegistry {
             displayName: "Kotlin Language Server",
             command: "kotlin-language-server",
             arguments: [],
-            installHint: "brew install kotlin-language-server"
+            installHint: "brew install kotlin-language-server",
+            // 1.3.13 bundles kotlin-compiler 2.1.0, whose IntelliJ core
+            // throws `IllegalArgumentException: 25.0.3` reading the version
+            // of a JDK 25 and exits before answering `initialize`. 21 is
+            // what Homebrew's own launcher falls back to, and the newest
+            // this was seen to work on; a newer server can raise it.
+            maximumJavaFeatureVersion: 21
         ),
         LSPServerDefinition(
             languageID: "python",
