@@ -325,6 +325,13 @@ private struct DocumentView: View {
             } accessory: {
                 presentationControl
             }
+            /// Only the preview split configures the link here. The diff
+            /// configures its own, and both switch it off on the way out —
+            /// the model is shared, and an absolute mapping left switched on
+            /// beside a rendered document would drag it to an offset that
+            /// means nothing in it.
+            .onAppear { if presentationOptions.splitPartner == .preview { linkPreviewSplit() } }
+            .onDisappear { splitModel.scrollSync.isEnabled = false }
         }
     }
 
@@ -392,8 +399,41 @@ private struct DocumentView: View {
             text: document.currentText,
             fileURL: document.url,
             theme: theme,
-            configuration: configuration
+            configuration: configuration,
+            scrollSync: splitModel.scrollSync,
+            scrollSyncSide: .second,
+            anchors: previewAnchors
         )
+    }
+
+    /// Where the preview drew each block, so a scroll on one side can be
+    /// answered in the other's coordinates.
+    ///
+    /// Held here rather than inside the preview because the strategy needs
+    /// it too, and the strategy is configured by whoever owns the split.
+    @StateObject private var previewAnchors = MarkdownPreviewAnchors()
+
+    /// Puts the source pane on the link.
+    ///
+    /// The source is a `CodeTextView`, which builds its own `NSScrollView`,
+    /// so it registers directly instead of going through the SwiftUI probe.
+    /// That is what the link's own documentation asks for, and it avoids the
+    /// failure the diff already taught us: a probe applied outside the
+    /// scroll view it was meant to find looks straight past it and links
+    /// nothing, silently.
+    private func linkSourcePane(_ scrollView: NSScrollView) {
+        splitModel.scrollSync.attach(scrollView, as: .first)
+    }
+
+    /// Raw markdown beside its rendered form.
+    ///
+    /// Vertical only: the two panes hold unrelated line lengths, so keeping
+    /// their horizontal offsets together would drag the preview sideways
+    /// for a long line of source that renders wrapped.
+    private func linkPreviewSplit() {
+        splitModel.scrollSync.strategy = .markdownPreview(previewAnchors, previewSide: .second)
+        splitModel.scrollSync.axes = .vertical
+        splitModel.scrollSync.isEnabled = true
     }
 
     /// The editable text, which every document has and every presentation
@@ -432,6 +472,7 @@ private struct DocumentView: View {
             },
             onFindReferences: { offset in findReferences(from: offset) },
             onFormat: { format() },
+            onScrollViewReady: { linkSourcePane($0) },
             onSave: onSave,
             onSaveAll: onSaveAll,
             onCloseTab: onCloseTab,

@@ -222,7 +222,78 @@ struct MarkdownPreviewTests {
         #expect(heading.widest > paragraph.widest / 2)
     }
 
-    // MARK: - The handle the host holds
+    // MARK: - The file's name decides the dialect
+
+    /// The one line that makes an `.mdx` file render as MDX, held down.
+    ///
+    /// It fails silently when wrong: without the flavor, `import Callout
+    /// from './c'` is drawn as an ordinary paragraph and the reader is
+    /// given no sign that anything was treated differently. Nothing throws
+    /// and the page still looks like a page.
+    @Test func anMdxFileIsParsedAsMdx() {
+        let source = "import Callout from './c'\n\n# Title\n\n<Callout>hi</Callout>"
+
+        let mdx = MarkdownPreviewView.document(
+            text: source,
+            fileURL: URL(fileURLWithPath: "/docs/page.mdx")
+        )
+        #expect(mdx.flavor == .mdx)
+        #expect(mdx.blocks.first?.kind == .script("import Callout from './c'"))
+    }
+
+    /// The same text in a `.md` file is prose, because in Markdown it is.
+    @Test func aMarkdownFileIsNotParsedAsMdx() {
+        let source = "import Callout from './c'\n\n# Title"
+
+        let markdown = MarkdownPreviewView.document(
+            text: source,
+            fileURL: URL(fileURLWithPath: "/docs/README.md")
+        )
+        #expect(markdown.flavor == .markdown)
+        #expect(markdown.blocks.first?.kind == .paragraph(text: "import Callout from './c'"))
+    }
+
+    /// An unsaved buffer has no name to read, and plain markdown is the
+    /// answer that cannot be wrong in a surprising way.
+    @Test func aBufferWithNoFileIsPlainMarkdown() {
+        #expect(MarkdownPreviewView.document(text: "# T", fileURL: nil).flavor == .markdown)
+    }
+
+    /// End to end through the layout, because the caption is the promise:
+    /// an MDX file must *say* that its module and its component were shown
+    /// rather than run.
+    @Test func anMdxDocumentDrawsItsHonestCaptions() {
+        let source = """
+        ---
+        title: x
+        ---
+
+        import Callout from './c'
+
+        # Getting started
+
+        <Callout type="warn">
+          Careful.
+        </Callout>
+
+        <!-- invisible -->
+        """
+
+        let document = MarkdownPreviewView.document(
+            text: source,
+            fileURL: URL(fileURLWithPath: "/docs/page.mdx")
+        )
+        let rendered = MarkdownRenderer(style: .fallback).render(document).text.string
+
+        #expect(rendered.contains("front matter"))
+        #expect(rendered.contains("module — not evaluated"))
+        #expect(rendered.contains("component — shown as source, not rendered"))
+        #expect(rendered.contains("import Callout from './c'"))
+        #expect(rendered.contains("<Callout type=\"warn\">"))
+        #expect(!rendered.contains("invisible"), "an HTML comment must not be drawn")
+    }
+
+    // MARK: - The snapshot the host holds
 
     @Test func anchorsWithNoPreviewAnswerNothing() {
         let anchors = MarkdownPreviewAnchors()
@@ -231,30 +302,146 @@ struct MarkdownPreviewTests {
         #expect(anchors.sourceLine(forRenderedY: 0) == nil)
     }
 
-    @Test func anchorsAnswerOnceAPreviewIsAttached() {
+    @Test func aLaidOutPreviewProducesAnAnchorPerBlock() {
+        let (window, coordinator) = laidOut(document)
+        _ = window
+
+        let snapshot = coordinator.scrollAnchors()
+        #expect(snapshot.count == coordinator.output?.anchors.count)
+        #expect(snapshot.first?.sourceLine == 0)
+
+        /// Ascending in both fields, which is what the lookups below rely on
+        /// to be a scan rather than a search.
+        for (above, below) in zip(snapshot, snapshot.dropFirst()) {
+            #expect(below.sourceLine > above.sourceLine)
+            #expect(below.renderedY >= above.renderedY)
+        }
+    }
+
+    @Test func anchorsAnswerBothDirectionsOnceFilled() {
         let (window, coordinator) = laidOut(document)
         _ = window
 
         let anchors = MarkdownPreviewAnchors()
-        anchors.serve(coordinator)
-
+        anchors.update(to: coordinator.scrollAnchors(), sourceLineCount: 11)
         #expect(anchors.isReady)
-        #expect(anchors.renderedY(forSourceLine: 0) == coordinator.renderedY(forSourceLine: 0))
-        #expect(anchors.sourceLine(forRenderedY: 0) == 0)
+
+        /// Line 5 is inside the fence, whose block starts at line 4 — so it
+        /// answers with where the *block* was drawn, and the reverse lands
+        /// back on the block's first line.
+        guard let y = anchors.renderedY(forSourceLine: 5) else {
+            #expect(Bool(false), "no position for the fence")
+            return
+        }
+        #expect(anchors.sourceLine(forRenderedY: y) == 4)
+        #expect(anchors.renderedY(forSourceLine: 0) == anchors.anchors.first?.renderedY)
     }
 
-    /// A preview that goes away must not leave the host holding a handle
+    /// A preview that goes away must not leave the host holding a snapshot
     /// that still claims to know where things are.
     @Test func anchorsGoQuietWhenThePreviewIsTornDown() {
         let (window, coordinator) = laidOut(document)
         _ = window
 
         let anchors = MarkdownPreviewAnchors()
-        anchors.serve(coordinator)
+        anchors.update(to: coordinator.scrollAnchors(), sourceLineCount: 11)
         #expect(anchors.isReady)
 
         anchors.clear()
         #expect(!anchors.isReady)
         #expect(anchors.renderedY(forSourceLine: 0) == nil)
+    }
+
+    // MARK: - The scroll strategy, which is why any of this was recorded
+
+    /// Pure arithmetic over the snapshot, so the two directions can be
+    /// checked without a scroll view, a window or a run loop.
+    /// Viewports are kept well under both content lengths on purpose: a
+    /// follower shorter than its own viewport has no travel, so
+    /// `followerOffset` clamps every answer to zero and the test passes or
+    /// fails for a reason that has nothing to do with the mapping.
+    private func geometry(
+        leaderOffset: CGFloat,
+        leaderContent: CGFloat,
+        followerContent: CGFloat,
+        viewport: CGFloat = 100
+    ) -> ScrollSyncGeometry {
+        ScrollSyncGeometry(
+            leaderOffset: leaderOffset,
+            leaderContentLength: leaderContent,
+            leaderViewportLength: viewport,
+            followerContentLength: followerContent,
+            followerViewportLength: viewport
+        )
+    }
+
+    private func filledAnchors() -> MarkdownPreviewAnchors {
+        let anchors = MarkdownPreviewAnchors()
+        anchors.update(
+            to: [
+                MarkdownScrollAnchor(sourceLine: 0, renderedY: 0),
+                MarkdownScrollAnchor(sourceLine: 10, renderedY: 500),
+                MarkdownScrollAnchor(sourceLine: 20, renderedY: 600),
+            ],
+            sourceLineCount: 30
+        )
+        return anchors
+    }
+
+    /// Source leading: a raw offset becomes a line, and the line becomes the
+    /// place the preview drew it. The heights are deliberately unrelated —
+    /// 300pt of source against 1000pt of preview — because that is the case
+    /// proportion gets wrong.
+    @Test func theSourceLeadingLandsThePreviewOnTheRightBlock() {
+        let strategy = ScrollSyncStrategy.markdownPreview(filledAnchors(), previewSide: .second)
+
+        /// 300pt over 30 lines is 10pt a line, so 100pt in is line 10, whose
+        /// block was drawn at 500.
+        let offset = strategy.followerOffset(
+            for: geometry(leaderOffset: 100, leaderContent: 300, followerContent: 1000),
+            from: .first
+        )
+        #expect(offset == 500)
+    }
+
+    /// The preview leading composes the other way, and must not reuse the
+    /// map above — that is the whole reason the strategy is told the side.
+    @Test func thePreviewLeadingLandsTheSourceOnTheRightLine() {
+        let strategy = ScrollSyncStrategy.markdownPreview(filledAnchors(), previewSide: .second)
+
+        /// 520pt into the preview is inside the block that began at line 10;
+        /// 10 lines at 10pt each is 100pt down the source.
+        let offset = strategy.followerOffset(
+            for: geometry(leaderOffset: 520, leaderContent: 1000, followerContent: 300),
+            from: .second
+        )
+        #expect(offset == 100)
+    }
+
+    /// A strategy that ignored the side would give the same answer for both
+    /// directions at the same offset. This is the regression that catches a
+    /// symmetric mapping sneaking back in.
+    @Test func theTwoDirectionsAreNotTheSameFunction() {
+        let strategy = ScrollSyncStrategy.markdownPreview(filledAnchors(), previewSide: .second)
+        let shape = geometry(leaderOffset: 520, leaderContent: 1000, followerContent: 300)
+
+        #expect(
+            strategy.followerOffset(for: shape, from: .first)
+                != strategy.followerOffset(for: shape, from: .second)
+        )
+    }
+
+    /// Before the first layout there is nothing to map, and a scroll then
+    /// must still move sensibly rather than jumping to the top.
+    @Test func anEmptySnapshotFallsBackToProportion() {
+        let strategy = ScrollSyncStrategy.markdownPreview(MarkdownPreviewAnchors(), previewSide: .second)
+
+        /// 400 into 800pt of travel is half way, so half way down the
+        /// follower's own 1300.
+        let offset = strategy.followerOffset(
+            for: geometry(leaderOffset: 400, leaderContent: 900, followerContent: 1400),
+            from: .first
+        )
+        #expect(abs(offset - 650) < 1)
     }
 }
