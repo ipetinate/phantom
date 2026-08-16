@@ -85,6 +85,10 @@ struct SidebarView: View {
     /// terminal's place while anything is open.
     var onOpenInEditor: (URL) -> Void = { _ in }
 
+    /// See `GitRepoView.onOpenDiff`. Not forwarded to the file explorer,
+    /// which has no changes to show.
+    var onOpenDiff: ((URL) -> Void)?
+
     /// List animations are suspended while the sidebar first populates.
     private var listAnimation: Animation? {
         tabManager.animationsEnabled ? .snappy(duration: 0.22) : nil
@@ -183,7 +187,8 @@ struct SidebarView: View {
                 GitPanelView(
                     tabManager: tabManager,
                     onSpawnTerminal: onSpawnTerminalBesideSelection,
-                    onOpenInEditor: onOpenInEditor
+                    onOpenInEditor: onOpenInEditor,
+                    onOpenDiff: onOpenDiff
                 )
             }
         }

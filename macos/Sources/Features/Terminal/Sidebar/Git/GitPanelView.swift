@@ -25,6 +25,9 @@ struct GitPanelView: View {
     /// Opens the file in this window's editor pane.
     var onOpenInEditor: (URL) -> Void = { _ in }
 
+    /// See `GitRepoView.onOpenDiff`.
+    var onOpenDiff: ((URL) -> Void)?
+
     @ObservedObject private var center: GitCenter = .shared
     @ObservedObject private var palette: ThemePalette = .shared
     @ObservedObject private var refresh: GitPanelRefresh = .shared
@@ -111,7 +114,8 @@ struct GitPanelView: View {
             style: style,
             selectedTab: selectedTab,
             onSpawnTerminal: onSpawnTerminal,
-            onOpenInEditor: onOpenInEditor
+            onOpenInEditor: onOpenInEditor,
+            onOpenDiff: onOpenDiff
         )
     }
 

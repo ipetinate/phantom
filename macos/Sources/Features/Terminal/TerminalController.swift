@@ -1393,6 +1393,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             },
             onOpenInEditor: { [weak self] url in
                 self?.openInEditor(url)
+            },
+            onOpenDiff: { [weak self] url in
+                self?.openInEditor(url, showing: .diff)
             }
         ).interfaceFont())
         sidebarHosting.translatesAutoresizingMaskIntoConstraints = false
@@ -1848,7 +1851,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         )
     }
 
-    private func openInEditor(_ url: URL, line: Int? = nil, column: Int? = nil) {
+    private func openInEditor(
+        _ url: URL,
+        line: Int? = nil,
+        column: Int? = nil,
+        showing: EditorPresentation? = nil
+    ) {
         // A line from a compiler or a stack trace is one-based; the editor's
         // reveal is zero-based, like the protocol it came from.
         let reveal = line.map { line in
@@ -1859,7 +1867,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             return LSPRange(start: position, end: position)
         }
 
-        guard !editorCenter.open(url, reveal: reveal) else { return }
+        guard !editorCenter.open(url, reveal: reveal, showing: showing) else { return }
         openInEditorFailed(url)
     }
 
