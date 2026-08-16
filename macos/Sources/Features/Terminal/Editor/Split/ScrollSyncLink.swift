@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import os
 import SwiftUI
 
 /// Keeps two scroll views in step.
@@ -241,9 +242,139 @@ final class ScrollSyncProbeView: NSView {
         attachToEnclosingScrollView()
     }
 
-    func attachToEnclosingScrollView() {
-        guard let scrollView = enclosingScrollView, scrollView !== attached else { return }
-        attached = scrollView
-        onAttach?(scrollView)
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        attachToEnclosingScrollView()
     }
+
+    /// The retry that makes this work at all.
+    ///
+    /// `viewDidMoveToSuperview` fires when SwiftUI puts the probe into its
+    /// own one-view host, and at that instant the host is not in the tree
+    /// yet — so the search runs, finds nothing, and without another attempt
+    /// the pane is never linked. Measured, not guessed: a hosted
+    /// `ScrollView` laid out headlessly reported `enclosingScrollView` as
+    /// its scroll view and `attached` as false, because the only two chances
+    /// to look had both already gone by.
+    ///
+    /// Layout is the earliest moment the whole chain is assembled, and it
+    /// runs again whenever the pane is resized or its content replaced,
+    /// which is exactly when the answer could have changed.
+    override func layout() {
+        super.layout()
+        attachToEnclosingScrollView()
+        warnIfStillUnresolved()
+    }
+
+    func attachToEnclosingScrollView() {
+        /// Already linked: only the cheap exact check, so a scroll view that
+        /// was genuinely replaced is still noticed without walking a subtree
+        /// on every layout pass.
+        if attached != nil {
+            guard let exact = enclosingScrollView, exact !== attached else { return }
+            attached = exact
+            onAttach?(exact)
+            return
+        }
+
+        guard let found = resolveScrollView() else { return }
+        attached = found
+        onAttach?(found)
+    }
+
+    /// The pane's scroll view, by the exact route and then by the forgiving
+    /// one.
+    ///
+    /// `enclosingScrollView` is the answer when the probe sits inside the
+    /// scroll view, which is where the modifier's documentation asks for it.
+    /// But `.background` applied to a view whose *body* is a `ScrollView`
+    /// lands the probe **beside** that scroll view rather than within it —
+    /// looking up from there passes straight over it. That is what every
+    /// caller writes, so rather than let it fail silently the search climbs
+    /// and looks down.
+    ///
+    /// Which way down is decided by where `.background` puts things, and
+    /// that is not a guess — it was read off a hosted hierarchy. SwiftUI
+    /// inserts the probe's host as the sibling **immediately before** the
+    /// container holding the view it backs, because a background is drawn
+    /// behind its content and so comes first among the subviews:
+    ///
+    /// ```
+    /// AppKitPlatformViewHost<…ScrollSyncProbe>   ← this probe
+    /// PlatformContainer                          ← its pane
+    ///   HostingScrollView
+    /// AppKitPlatformViewHost<…ScrollSyncProbe>   ← the other pane's probe
+    /// PlatformContainer
+    ///   HostingScrollView
+    /// ```
+    ///
+    /// Taking the next sibling is what keeps two panes side by side apart.
+    /// A plain "look for a scroll view nearby" search sees both of them from
+    /// either probe and cannot tell which is which — that arrangement is
+    /// exactly the diff, so getting it wrong would mean the two columns sync
+    /// against themselves.
+    ///
+    /// The climb stops at the first level where a next sibling exists at
+    /// all, and answers from that sibling alone — even when the answer is
+    /// "nothing". Climbing past it is what broke the case the diff hits
+    /// whenever a file has no changes on one side: that pane is a line of
+    /// text with no scroll view, and a search that kept going found the
+    /// *neighbouring* pane's and linked the two columns to one scroll view.
+    /// Attaching nothing is right there, and the warning below says so.
+    private func resolveScrollView() -> NSScrollView? {
+        if let exact = enclosingScrollView { return exact }
+
+        var branch: NSView = self
+        var climbed = 0
+
+        while let parent = branch.superview, climbed < Self.maximumClimb {
+            if let index = parent.subviews.firstIndex(of: branch),
+               index + 1 < parent.subviews.count {
+                let candidates = Self.scrollViews(inOrUnder: parent.subviews[index + 1])
+                return candidates.count == 1 ? candidates[0] : nil
+            }
+
+            branch = parent
+            climbed += 1
+        }
+
+        return nil
+    }
+
+    /// How far up to look before giving up. Enough for SwiftUI's own
+    /// wrappers — a representable host inside a container inside the pane —
+    /// and short enough never to reach the window's other scroll views.
+    private static let maximumClimb = 4
+
+    /// Scroll views in a subtree, not descending into one once found: an
+    /// inner scroll view of a pane is part of that pane, not a rival
+    /// candidate.
+    private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        view.subviews.flatMap { scrollViews(inOrUnder: $0) }
+    }
+
+    private static func scrollViews(inOrUnder view: NSView) -> [NSScrollView] {
+        if let scrollView = view as? NSScrollView { return [scrollView] }
+        return scrollViews(in: view)
+    }
+
+    /// Says so, once, when a probe is on screen and still linked to nothing.
+    ///
+    /// The failure this guards against is silent by nature: an unlinked pane
+    /// looks exactly like a pane whose sync is switched off, and the whole
+    /// feature is simply absent with nothing in the log to explain it.
+    private func warnIfStillUnresolved() {
+        guard window != nil, attached == nil, !hasWarned else { return }
+        hasWarned = true
+        Self.logger.warning(
+            "scroll sync probe found no scroll view; apply .synchronizedScroll to the content inside the ScrollView"
+        )
+    }
+
+    private var hasWarned = false
+
+    private static let logger = Logger(
+        subsystem: "com.mitchellh.ghostty",
+        category: "scroll-sync"
+    )
 }
