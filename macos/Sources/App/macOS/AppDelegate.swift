@@ -254,6 +254,10 @@ class AppDelegate: NSObject,
         // too (see `PhantomSessionStore`).
         PhantomSessionStore.shared.restoreIfNeeded()
 
+        // Whatever restore did or failed to do, the app must not end up
+        // running with no window. See `ensureAWindowSurvivedRestore`.
+        ensureAWindowSurvivedRestore()
+
         // Start our update checker.
         updateController.startUpdater()
 
@@ -406,10 +410,40 @@ class AppDelegate: NSObject,
             // is possible to have other windows in a few scenarios:
             //   - if we're opening a URL since `application(_:openFile:)` is called before this.
             //   - if we're restoring from persisted state
-            if TerminalController.all.isEmpty && derivedConfig.initialWindow {
-                undoManager.disableUndoRegistration()
-                _ = TerminalController.newWindow(ghostty)
-                undoManager.enableUndoRegistration()
+            openInitialWindowIfNothingIsOnScreen()
+        }
+    }
+
+    /// Opens the first window unless something is already on screen.
+    ///
+    /// The test is *visibility*, not `TerminalController.all.isEmpty`, which
+    /// is what this used to ask. `NSApplication.windows` counts windows that
+    /// exist and are not visible, so a restored controller whose window never
+    /// made it on screen answered "there are windows already" and talked this
+    /// out of opening one — leaving the app running with nothing to look at,
+    /// which is the state a reader can only escape through the Dock menu.
+    private func openInitialWindowIfNothingIsOnScreen() {
+        guard derivedConfig.initialWindow, !TerminalController.hasVisibleWindow else { return }
+
+        undoManager.disableUndoRegistration()
+        _ = TerminalController.newWindow(ghostty)
+        undoManager.enableUndoRegistration()
+    }
+
+    /// The same question, asked again once restore has had its turn.
+    ///
+    /// Restore presents its windows from `DispatchQueue.main.async` blocks,
+    /// so at the moment `applicationDidBecomeActive` runs they may exist and
+    /// not yet be visible — and that check runs exactly once, guarded by
+    /// `applicationHasBecomeActive`. If any of those blocks does not present
+    /// its window, nothing looks again. This is the look again.
+    ///
+    /// Two hops rather than one: the first lands after the blocks restore
+    /// already queued, the second after anything those blocks queued in turn.
+    private func ensureAWindowSurvivedRestore() {
+        DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async {
+                self?.openInitialWindowIfNothingIsOnScreen()
             }
         }
     }

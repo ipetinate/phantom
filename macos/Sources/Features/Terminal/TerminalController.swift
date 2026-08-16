@@ -301,6 +301,18 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
     }
 
+    /// Whether any terminal window is actually on screen.
+    ///
+    /// Emphatically not `!all.isEmpty`. `NSApplication.windows` includes
+    /// windows that exist and are not visible, so a controller whose window
+    /// was created and never ordered front counts towards `all` while
+    /// showing the reader nothing. Anything asking "does this app have a
+    /// window" to decide whether to *open* one has to ask about visibility,
+    /// or it answers yes to an empty screen and declines to fix it.
+    static var hasVisibleWindow: Bool {
+        all.contains { $0.window?.isVisible == true }
+    }
+
     // Keep track of the last point that our window was launched at so that new
     // windows "cascade" over each other and don't just launch directly on top
     // of each other.
