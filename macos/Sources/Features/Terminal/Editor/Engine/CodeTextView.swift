@@ -97,6 +97,20 @@ struct CodeTextView: NSViewRepresentable {
     var onFindReferences: ((Int) -> Void)?
     var onFormat: (() -> Void)?
 
+    /// Hands out the scroll view once it exists, for a host that needs to
+    /// register it somewhere — keeping two panes' scrolling in step, say.
+    ///
+    /// A callback rather than the engine reaching for whatever it would be
+    /// registered with. The rule here is that the engine takes what it needs
+    /// as values; this is that rule read the other way round — it gives up
+    /// what it owns and stays ignorant of what happens next.
+    ///
+    /// It also beats the alternative available to the host, which is
+    /// searching the view hierarchy for a scroll view it cannot name. That
+    /// search finds the wrong one silently when panes are nested, which is
+    /// exactly the arrangement this exists to serve.
+    var onScrollViewReady: ((NSScrollView) -> Void)?
+
     /// Keyboard commands the host owns. Passed in rather than assumed, so
     /// the engine never decides what saving means.
     var onSave: () -> Void = {}
@@ -153,6 +167,8 @@ struct CodeTextView: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
         scrollView.documentView = textView
+
+        onScrollViewReady?(scrollView)
 
         // Gutter and text sit side by side in a container, rather than the
         // gutter being a ruler inside the scroll view. Separate areas can't

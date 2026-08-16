@@ -47,6 +47,20 @@ final class EditorDocument: ObservableObject, Identifiable {
     /// asking for the same place twice still moves the view.
     @Published var reveal: (id: String, range: LSPRange)?
 
+    /// How this document is currently being shown — source, preview, diff,
+    /// or a split of two of them.
+    ///
+    /// Here rather than in the view because the view does not survive being
+    /// looked away from: `EditorPaneView` tags the document view with
+    /// `.id(document.id)`, so switching tabs destroys and rebuilds it. A
+    /// reader who put a README into preview, glanced at another file and
+    /// came back would find themselves in source again, having asked for
+    /// nothing of the sort.
+    ///
+    /// Not persisted across launches, deliberately: it is a reading posture
+    /// for the current sitting, not a property of the file.
+    @Published var presentation: EditorPresentation = .source
+
     var id: String { url.path }
 
     var language: CodeLanguage {

@@ -62,12 +62,23 @@ final class EditorCenter: ObservableObject {
     /// The range travels with the document rather than being applied here:
     /// a file opened for the first time has no text view yet, so the jump
     /// has to be something the view picks up when it appears.
+    ///
+    /// - Parameter showing: how to draw it on arrival. Nil means the
+    ///   document decides, which is its source. Opening from the Git panel
+    ///   passes `.diff`, because a file reached by clicking it in a list of
+    ///   changes was chosen *for* its changes — landing on the source there
+    ///   answers a question nobody asked and costs a second click.
+    ///
+    ///   Applied to a document that is already open too: clicking the same
+    ///   file in the Git panel again is a request to see the changes, not a
+    ///   request to focus a tab that happens to exist.
     @discardableResult
-    func open(_ url: URL, reveal: LSPRange? = nil) -> Bool {
+    func open(_ url: URL, reveal: LSPRange? = nil, showing: EditorPresentation? = nil) -> Bool {
         let path = url.path
 
         if let existing = documents[path] {
             if let reveal { existing.reveal = (id: UUID().uuidString, range: reveal) }
+            if let showing { existing.presentation = showing }
             tabs.select(path)
             lastSelectedFile = path
             return true
@@ -79,6 +90,16 @@ final class EditorCenter: ObservableObject {
             return false
 
         case .success(let document):
+            /// Before it is stored, so the first body evaluation already
+            /// draws the right thing. Setting it afterwards would show the
+            /// source for one frame and then swap.
+            ///
+            /// This is the common path, not the exception: a file clicked in
+            /// the Git panel is usually not open yet. Applying `showing`
+            /// only to the already-open case above left the feature working
+            /// exactly when it was not needed.
+            if let showing { document.presentation = showing }
+
             documents[path] = document
             document.startWatching()
             // The tab's dirty dot follows the document, and the document is

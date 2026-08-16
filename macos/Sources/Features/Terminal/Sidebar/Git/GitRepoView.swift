@@ -34,6 +34,18 @@ struct GitRepoView: View {
     /// Opens the file in this window's editor pane.
     var onOpenInEditor: (URL) -> Void = { _ in }
 
+    /// Opening from *here* rather than from the file explorer.
+    ///
+    /// A file reached by clicking it in a list of changes was chosen for
+    /// its changes, so it lands on the diff. Its own callback rather than a
+    /// flag on the shared one, so the file explorer keeps opening files the
+    /// way it always has.
+    ///
+    /// Optional, and falls back to the ordinary open: a host that has not
+    /// wired it should show the file rather than do nothing, which is what
+    /// a defaulted empty closure would have done.
+    var onOpenDiff: ((URL) -> Void)?
+
     @ObservedObject private var center: GitCenter = .shared
     @ObservedObject private var palette: ThemePalette = .shared
 
@@ -501,7 +513,7 @@ struct GitRepoView: View {
             in: selectedTab?.window,
             currentTerminal: surface(for: selectedTab),
             spawnTerminal: onSpawnTerminal,
-            openInEditor: onOpenInEditor
+            openInEditor: onOpenDiff ?? onOpenInEditor
         )
     }
 

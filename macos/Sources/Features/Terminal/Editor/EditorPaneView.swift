@@ -249,6 +249,237 @@ private struct DocumentView: View {
     /// describes.
     @State private var completionBridge = CompletionBridge()
 
+    /// Read to decide whether this file can be shown as a diff. Observed, so
+    /// committing while a diff is open takes the diff away rather than
+    /// leaving a stale one on screen.
+    @ObservedObject private var git: GitCenter = .shared
+
+    /// How a split is cut. A preference rather than a property of the file,
+    /// so it is shared by every split and outlives the launch — someone who
+    /// reads diffs stacked wants the next one stacked too.
+    @AppStorage("EditorSplitDirection") private var splitDirectionRaw = SplitViewDirection.horizontal.storageKey
+
+    /// The arrangement of whatever split this document is showing.
+    ///
+    /// Owned here rather than by the document because it is where the
+    /// divider sits, which is a property of the window this file is being
+    /// read in. Its direction is kept in step with the stored preference in
+    /// both directions — see `body`.
+    @StateObject private var splitModel = SplitPaneModel()
+
+    /// What this document can be shown as, from the file's name and whether
+    /// git has anything to compare it against.
+    private var presentationOptions: EditorPresentationOptions {
+        .resolve(fileName: document.url.lastPathComponent, hasChanges: documentHasChanges)
+    }
+
+    private var documentHasChanges: Bool { gitContext != nil }
+
+    /// Everything a diff of this document needs, or nil when git has
+    /// nothing to compare it against.
+    private var gitContext: (root: String, change: GitFileChange, side: GitDiffSide)? {
+        let path = document.url.path
+        guard let root = EditorChangeLookup.owningRoot(forPath: path, amongRoots: Array(git.statuses.keys)),
+              let status = git.status(forRoot: root),
+              let relative = EditorChangeLookup.relativePath(forPath: path, root: root),
+              let found = EditorChangeLookup.change(relativePath: relative, in: status)
+        else { return nil }
+
+        return (root, found.change, found.side)
+    }
+
+    /// The document, drawn the way it is currently being read.
+    ///
+    /// Routed through `nearest`, so a presentation that stopped being
+    /// available — the diff of a file whose changes were just committed —
+    /// draws the source rather than an empty pane.
+    @ViewBuilder
+    private var presentedContent: some View {
+        switch presentationOptions.nearest(to: document.presentation) {
+        case .source:
+            sourcePane
+
+        case .diff:
+            diffPane
+
+        case .preview:
+            previewPane
+
+        case .split:
+            /// The control goes in as the container's **accessory** rather
+            /// than over the top of it. Both want the same corner, and
+            /// drawn independently the container's direction toggle lands
+            /// on top of this control's split button — two split glyphs
+            /// overlapping, which is exactly what the accessory parameter
+            /// exists to prevent.
+            SplitPaneContainer(model: splitModel) {
+                sourcePane
+            } second: {
+                /// Whichever alternative this file offers. A document never
+                /// offers both, so there is no third case to choose in.
+                if presentationOptions.splitPartner == .diff {
+                    diffPane
+                } else {
+                    previewPane
+                }
+            } accessory: {
+                presentationControl
+            }
+            /// Only the preview split configures the link here. The diff
+            /// configures its own, and both switch it off on the way out —
+            /// the model is shared, and an absolute mapping left switched on
+            /// beside a rendered document would drag it to an offset that
+            /// means nothing in it.
+            .onAppear { if presentationOptions.splitPartner == .preview { linkPreviewSplit() } }
+            .onDisappear { splitModel.scrollSync.isEnabled = false }
+        }
+    }
+
+    /// Whether the control is this view's to draw, rather than something
+    /// else's to place.
+    private var drawsControlOverContent: Bool {
+        switch presentationOptions.nearest(to: document.presentation) {
+        case .split, .diff: false
+        case .source, .preview: true
+        }
+    }
+
+    /// How far in from the right edge the control has to sit to clear the
+    /// minimap.
+    ///
+    /// Only the source pane has a minimap, and only when it is the whole
+    /// pane. In a split the source is on the left, so its minimap runs down
+    /// the middle of the window and the corner belongs to the other pane;
+    /// the preview and the diff have no minimap at all. Insetting
+    /// unconditionally would leave the control floating in from the edge on
+    /// every one of those.
+    private var controlInsetFromMinimap: CGFloat {
+        let showsSource = presentationOptions.nearest(to: document.presentation) == .source
+        return showsSource && configuration.showsMinimap ? CodeTextView.minimapColumnWidth : 0
+    }
+
+    private var presentationControl: some View {
+        EditorPresentationControl(
+            options: presentationOptions,
+            presentation: Binding(
+                /// Through `nearest` on the way out, so a diff that stops
+                /// existing — the change was just committed — reads as
+                /// source instead of pointing at a presentation this file
+                /// no longer has.
+                get: { presentationOptions.nearest(to: document.presentation) },
+                set: { document.presentation = $0 }
+            )
+        )
+    }
+
+    @ViewBuilder
+    private var diffPane: some View {
+        if let context = gitContext {
+            GitDiffView(
+                path: document.url.path,
+                root: context.root,
+                change: context.change,
+                side: context.side,
+                theme: theme,
+                font: configuration.font,
+                model: splitModel,
+                reloadKey: "\(context.change.index)\(context.change.worktree)\(document.isDirty)",
+                accessory: { presentationControl }
+            )
+        } else {
+            /// Reachable for an instant: the control was drawn from a status
+            /// that has since been replaced by one with no entry for this
+            /// file. The next body evaluation moves off `.diff` entirely.
+            Color(nsColor: theme.background)
+        }
+    }
+
+    private var previewPane: some View {
+        MarkdownPreviewView(
+            text: document.currentText,
+            fileURL: document.url,
+            theme: theme,
+            configuration: configuration,
+            scrollSync: splitModel.scrollSync,
+            scrollSyncSide: .second,
+            anchors: previewAnchors
+        )
+    }
+
+    /// Where the preview drew each block, so a scroll on one side can be
+    /// answered in the other's coordinates.
+    ///
+    /// Held here rather than inside the preview because the strategy needs
+    /// it too, and the strategy is configured by whoever owns the split.
+    @StateObject private var previewAnchors = MarkdownPreviewAnchors()
+
+    /// Puts the source pane on the link.
+    ///
+    /// The source is a `CodeTextView`, which builds its own `NSScrollView`,
+    /// so it registers directly instead of going through the SwiftUI probe.
+    /// That is what the link's own documentation asks for, and it avoids the
+    /// failure the diff already taught us: a probe applied outside the
+    /// scroll view it was meant to find looks straight past it and links
+    /// nothing, silently.
+    private func linkSourcePane(_ scrollView: NSScrollView) {
+        splitModel.scrollSync.attach(scrollView, as: .first)
+    }
+
+    /// Raw markdown beside its rendered form.
+    ///
+    /// Vertical only: the two panes hold unrelated line lengths, so keeping
+    /// their horizontal offsets together would drag the preview sideways
+    /// for a long line of source that renders wrapped.
+    private func linkPreviewSplit() {
+        splitModel.scrollSync.strategy = .markdownPreview(previewAnchors, previewSide: .second)
+        splitModel.scrollSync.axes = .vertical
+        splitModel.scrollSync.isEnabled = true
+    }
+
+    /// The editable text, which every document has and every presentation
+    /// either is or sits beside.
+    private var sourcePane: some View {
+        CodeTextView(
+            text: document.currentText,
+            textRevision: document.revision,
+            /// Through the resolver, not `CodeLanguage.resolve` — a
+            /// language an extension contributed carries its own
+            /// keywords and comment markers, and asking the filename
+            /// directly is what made such a file get a language server
+            /// and no syntax colouring.
+            syntax: LanguageResolver.shared.syntax(forFileName: document.url.lastPathComponent),
+            /// From the file's name, not its language: `.ts` and `.tsx`
+            /// are the same `CodeLanguage`, and a tag closed in `.ts` is
+            /// always wrong because a `<` there can only be a generic.
+            tagDialect: CodeTagDialect.resolve(fileName: document.url.lastPathComponent),
+            theme: theme,
+            configuration: configuration,
+            onEdit: { edited in
+                document.edited(edited)
+                lsp.didChange(path: document.url.path, text: edited)
+            },
+            underlines: underlines,
+            hoverProvider: { offset in await hoverInfo(at: offset) },
+            completionProvider: { offset in await completions(at: offset) },
+            completionDocProvider: { item in await documentation(for: item) },
+            completionOffersDocumentation: { item in offersDocumentation(item) },
+            completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
+            reveal: revealRange,
+            onJumpToDefinition: { offset in jump(from: offset) },
+            onRename: { offset in
+                newName = EditorPaneView.identifier(at: offset, in: document.currentText)
+                renamingAt = offset
+            },
+            onFindReferences: { offset in findReferences(from: offset) },
+            onFormat: { format() },
+            onScrollViewReady: { linkSourcePane($0) },
+            onSave: onSave,
+            onSaveAll: onSaveAll,
+            onCloseTab: onCloseTab,
+            onSearchWorkspace: onSearchWorkspace
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if document.hasConflict {
@@ -259,58 +490,54 @@ private struct DocumentView: View {
                 serverStatusBanner(server: server, status: status)
             }
 
-            CodeTextView(
-                text: document.currentText,
-                textRevision: document.revision,
-                /// Through the resolver, not `CodeLanguage.resolve` — a
-                /// language an extension contributed carries its own
-                /// keywords and comment markers, and asking the filename
-                /// directly is what made such a file get a language server
-                /// and no syntax colouring.
-                syntax: LanguageResolver.shared.syntax(forFileName: document.url.lastPathComponent),
-                /// From the file's name, not its language: `.ts` and `.tsx`
-                /// are the same `CodeLanguage`, and a tag closed in `.ts` is
-                /// always wrong because a `<` there can only be a generic.
-                tagDialect: CodeTagDialect.resolve(fileName: document.url.lastPathComponent),
-                theme: theme,
-                configuration: configuration,
-                onEdit: { edited in
-                    document.edited(edited)
-                    lsp.didChange(path: document.url.path, text: edited)
-                },
-                underlines: underlines,
-                hoverProvider: { offset in await hoverInfo(at: offset) },
-                completionProvider: { offset in await completions(at: offset) },
-                completionDocProvider: { item in await documentation(for: item) },
-                completionOffersDocumentation: { item in offersDocumentation(item) },
-                completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
-                reveal: revealRange,
-                onJumpToDefinition: { offset in jump(from: offset) },
-                onRename: { offset in
-                    newName = EditorPaneView.identifier(at: offset, in: document.currentText)
-                    renamingAt = offset
-                },
-                onFindReferences: { offset in findReferences(from: offset) },
-                onFormat: { format() },
-                onSave: onSave,
-                onSaveAll: onSaveAll,
-                onCloseTab: onCloseTab,
-                onSearchWorkspace: onSearchWorkspace
-            )
-            .onAppear {
-                lsp.didOpen(path: document.url.path, text: document.currentText)
-                refreshUnderlines()
+            ZStack(alignment: .topTrailing) {
+                presentedContent
+
+                /// Only where nothing else is already drawing it. A split
+                /// takes this control as its accessory, and so does the
+                /// diff — which is a split of its own. Drawing it here too
+                /// would put a second copy in the same corner, on top of
+                /// the first.
+                if drawsControlOverContent {
+                    presentationControl
+                        .padding(.trailing, controlInsetFromMinimap)
+                }
             }
-            .onDisappear { lsp.didClose(path: document.url.path) }
-            .onChange(of: lsp.diagnostics[document.url.path] ?? []) { _ in
-                refreshUnderlines()
+        }
+        /// The document is open for as long as the tab exists, which is not
+        /// the same as for as long as the text view is on screen. These used
+        /// to hang off `CodeTextView`, and once a document can be shown as a
+        /// preview instead, that would announce `didClose` to the language
+        /// server every time somebody looked at their README.
+        .onAppear {
+            lsp.didOpen(path: document.url.path, text: document.currentText)
+            refreshUnderlines()
+
+            /// The model is fresh per tab; the preference is not. Read it
+            /// back so a reader who chose stacked splits gets stacked
+            /// splits in the next file too.
+            splitModel.direction = SplitViewDirection.fromStorage(splitDirectionRaw)
+
+            /// Ask about this file's repository, rather than waiting to be
+            /// told. `owningRoot` can only choose among roots git has
+            /// already been asked about, so without this whether a file
+            /// offers a diff would depend on whether the reader had
+            /// happened to open the sidebar first. `requestStatus` is
+            /// already debounced per root and a no-op when it is loaded.
+            if let root = EditorChangeLookup.repositoryRoot(forPath: document.url.path) {
+                git.requestStatus(root: root)
             }
-            // A server that started after this file was opened has never
-            // heard of it, so the introduction has to be made again. The
-            // document owns its text; the centre only says when.
-            .onChange(of: lsp.availabilityGeneration) { _ in
-                lsp.didOpen(path: document.url.path, text: document.currentText)
-            }
+        }
+        .onChange(of: splitModel.direction) { splitDirectionRaw = $0.storageKey }
+        .onDisappear { lsp.didClose(path: document.url.path) }
+        .onChange(of: lsp.diagnostics[document.url.path] ?? []) { _ in
+            refreshUnderlines()
+        }
+        // A server that started after this file was opened has never
+        // heard of it, so the introduction has to be made again. The
+        // document owns its text; the centre only says when.
+        .onChange(of: lsp.availabilityGeneration) { _ in
+            lsp.didOpen(path: document.url.path, text: document.currentText)
         }
         .sheet(isPresented: Binding(
             get: { renamingAt != nil },

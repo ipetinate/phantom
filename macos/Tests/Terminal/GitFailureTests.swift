@@ -196,4 +196,49 @@ struct GitFailureTests {
 
         #expect(failure.raw == output)
     }
+
+    // MARK: Transcripts with CRLF endings
+
+    /// A remote or a hook that terminates its lines with CRLF used to empty
+    /// this list in silence.
+    ///
+    /// Swift counts `"\r\n"` as one `Character`, so a `Character`-based
+    /// split found no line breaks, nothing matched the indent test, and the
+    /// list came back empty. The title still classified — the classifier
+    /// only does `contains` over the whole blob — so the panel looked like
+    /// it was working while hiding the only actionable part of the message:
+    /// *which* files are in the way.
+    @Test func aCRLFTranscriptStillNamesTheFilesInTheWay() {
+        let failure = GitFailure(operation: "Pull", output:
+            "error: Your local changes to the following files would be overwritten by merge:\r\n"
+            + "\tmacos/Sources/App.swift\r\n"
+            + "\tREADME.md\r\n"
+            + "Please commit your changes or stash them before you merge.\r\n")
+
+        #expect(failure.title == "Local changes are in the way")
+        #expect(failure.files == ["macos/Sources/App.swift", "README.md"])
+    }
+
+    /// The same split feeds the fallback summary. Unsplit, the whole
+    /// transcript is one "line" that starts with `error:` — so the summary
+    /// became the entire wall of text this type exists to replace.
+    @Test func aCRLFTranscriptSummarizesToOneLineNotTheWholeTranscript() {
+        let failure = GitFailure(operation: "Rebase", output:
+            "error: it broke in a way nobody predicted\r\n"
+            + "hint: try turning it off and on again\r\n"
+            + "hint: and then read the manual\r\n")
+
+        #expect(failure.title == "Rebase failed")
+        #expect(failure.summary == "it broke in a way nobody predicted")
+    }
+
+    /// No `\r` survives into a path — it is half of the terminator here,
+    /// not part of the filename.
+    @Test func noCarriageReturnSurvivesIntoAFilename() {
+        let failure = GitFailure(operation: "Pull", output:
+            "error: Your local changes to the following files would be overwritten by merge:\r\n\tone.txt\r\n")
+
+        #expect(failure.files == ["one.txt"])
+        #expect(failure.files.allSatisfy { !$0.contains("\r") })
+    }
 }

@@ -118,6 +118,20 @@ pub fn init(
             // silently fails to match (no error, it just doesn't exclude
             // anything).
             "-skip-testing:GhosttyTests/TerminalViewContainerTests/configChangeUpdatesGlass()",
+            // Serially, because that is how these tests are written and the
+            // only way they have ever been verified. Several of them are
+            // wall-clock (a hover that must survive a 400ms dismissal), and
+            // several spawn real subprocesses — `git` in a scratch
+            // repository, a shell for a streaming read. Run concurrently
+            // across hosts, those contend for the machine and whole suites
+            // come back "failed" in 0.000 seconds, which is a host that died
+            // rather than a test that ran: the victims differ every time and
+            // no assertion is ever recorded.
+            //
+            // The same mismatch is what the exclusion above is patching in a
+            // narrower way. Slower, and honest about what it is measuring.
+            "-parallel-testing-enabled",
+            "NO",
         });
         if (xc_arch) |arch| step.addArgs(&.{ "-arch", arch });
 
