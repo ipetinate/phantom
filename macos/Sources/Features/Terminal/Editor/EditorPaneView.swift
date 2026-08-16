@@ -306,6 +306,12 @@ private struct DocumentView: View {
             previewPane
 
         case .split:
+            /// The control goes in as the container's **accessory** rather
+            /// than over the top of it. Both want the same corner, and
+            /// drawn independently the container's direction toggle lands
+            /// on top of this control's split button — two split glyphs
+            /// overlapping, which is exactly what the accessory parameter
+            /// exists to prevent.
             SplitPaneContainer(model: splitModel) {
                 sourcePane
             } second: {
@@ -316,8 +322,47 @@ private struct DocumentView: View {
                 } else {
                     previewPane
                 }
+            } accessory: {
+                presentationControl
             }
         }
+    }
+
+    /// Whether the control is this view's to draw, rather than something
+    /// else's to place.
+    private var drawsControlOverContent: Bool {
+        switch presentationOptions.nearest(to: document.presentation) {
+        case .split, .diff: false
+        case .source, .preview: true
+        }
+    }
+
+    /// How far in from the right edge the control has to sit to clear the
+    /// minimap.
+    ///
+    /// Only the source pane has a minimap, and only when it is the whole
+    /// pane. In a split the source is on the left, so its minimap runs down
+    /// the middle of the window and the corner belongs to the other pane;
+    /// the preview and the diff have no minimap at all. Insetting
+    /// unconditionally would leave the control floating in from the edge on
+    /// every one of those.
+    private var controlInsetFromMinimap: CGFloat {
+        let showsSource = presentationOptions.nearest(to: document.presentation) == .source
+        return showsSource && configuration.showsMinimap ? CodeTextView.minimapColumnWidth : 0
+    }
+
+    private var presentationControl: some View {
+        EditorPresentationControl(
+            options: presentationOptions,
+            presentation: Binding(
+                /// Through `nearest` on the way out, so a diff that stops
+                /// existing — the change was just committed — reads as
+                /// source instead of pointing at a presentation this file
+                /// no longer has.
+                get: { presentationOptions.nearest(to: document.presentation) },
+                set: { document.presentation = $0 }
+            )
+        )
     }
 
     @ViewBuilder
@@ -331,7 +376,8 @@ private struct DocumentView: View {
                 theme: theme,
                 font: configuration.font,
                 model: splitModel,
-                reloadKey: "\(context.change.index)\(context.change.worktree)\(document.isDirty)"
+                reloadKey: "\(context.change.index)\(context.change.worktree)\(document.isDirty)",
+                accessory: { presentationControl }
             )
         } else {
             /// Reachable for an instant: the control was drawn from a status
@@ -406,17 +452,15 @@ private struct DocumentView: View {
             ZStack(alignment: .topTrailing) {
                 presentedContent
 
-                EditorPresentationControl(
-                    options: presentationOptions,
-                    presentation: Binding(
-                        /// Through `nearest` on the way out, so a diff that
-                        /// stops existing — the change was just committed —
-                        /// reads as source instead of pointing at a
-                        /// presentation this file no longer has.
-                        get: { presentationOptions.nearest(to: document.presentation) },
-                        set: { document.presentation = $0 }
-                    ),
-                )
+                /// Only where nothing else is already drawing it. A split
+                /// takes this control as its accessory, and so does the
+                /// diff — which is a split of its own. Drawing it here too
+                /// would put a second copy in the same corner, on top of
+                /// the first.
+                if drawsControlOverContent {
+                    presentationControl
+                        .padding(.trailing, controlInsetFromMinimap)
+                }
             }
         }
         /// The document is open for as long as the tab exists, which is not

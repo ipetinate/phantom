@@ -15,6 +15,16 @@ struct GitDiffPane: View {
     let palette: GitDiffPalette
     let font: NSFont
 
+    /// The link this pane's scrolling joins, and which end of it this is.
+    ///
+    /// Taken as parameters and applied *inside* the scroll view rather than
+    /// left to the caller, because the probe finds its scroll view by
+    /// looking outwards: applied to a `GitDiffPane` from the outside it
+    /// looks straight past the one in here and finds nothing, and the two
+    /// panes drift apart with no error to say why.
+    let scrollSync: ScrollSyncLink
+    let syncSide: ScrollSyncSide
+
     /// Uniform, and deliberately not measured per row.
     ///
     /// Diff rows are single lines of monospaced text with no wrapping, so
@@ -27,17 +37,49 @@ struct GitDiffPane: View {
     /// anyone reads and stops the gutter twitching as it scrolls.
     private var gutterWidth: CGFloat { ceil(font.maximumAdvancement.width * 5) + 12 }
 
-    var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(rows) { row in
-                    rowView(row)
-                        .frame(height: rowHeight)
-                }
-            }
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+    /// How wide the widest line makes this pane.
+    ///
+    /// Computed rather than measured, which a monospaced font makes exact:
+    /// every glyph is one advance wide, so the longest line in characters
+    /// is the longest line in points. Measuring instead would mean laying
+    /// out every row of a twelve-thousand-line diff to find out how wide
+    /// the scroll view should be — and `LazyVStack` cannot answer it
+    /// either, because the whole point of it is that it has not looked at
+    /// the rows below the fold.
+    private var contentWidth: CGFloat {
+        let longest = rows.reduce(0) { widest, row in
+            let line = side == .left ? row.left : row.right
+            return max(widest, line?.displayText.count ?? 0)
         }
-        .background(Color(nsColor: theme.background))
+        return gutterWidth + 8 + CGFloat(longest) * font.maximumAdvancement.width + 24
+    }
+
+    var body: some View {
+        GeometryReader { viewport in
+            ScrollView([.vertical, .horizontal]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows) { row in
+                        rowView(row)
+                            .frame(height: rowHeight)
+                    }
+                }
+                /// Both dimensions are floored at the viewport's, for two
+                /// different reasons. The width so a row's tint runs the
+                /// full width of the pane rather than stopping where its
+                /// text happens to end, which is what makes a short added
+                /// line read as a band instead of a ragged smear. The
+                /// height because a scroll view with both axes centres
+                /// content smaller than itself, and a diff of nine lines
+                /// would otherwise float in the middle of the pane.
+                .frame(
+                    width: max(contentWidth, viewport.size.width),
+                    alignment: .leading
+                )
+                .frame(minHeight: viewport.size.height, alignment: .top)
+                .synchronizedScroll(scrollSync, as: syncSide)
+            }
+            .background(Color(nsColor: theme.background))
+        }
     }
 
     @ViewBuilder

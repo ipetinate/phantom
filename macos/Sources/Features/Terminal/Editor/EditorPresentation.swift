@@ -82,23 +82,27 @@ struct EditorPresentationOptions: Equatable, Sendable {
         if isMarkdown { available.append(.preview) }
         if hasChanges { available.append(.diff) }
 
-        /// A split needs something to sit beside the source. With neither a
-        /// preview nor a diff there is no second pane to offer, and a split
-        /// button that opens a blank half is worse than no button.
-        if isMarkdown || hasChanges { available.append(.split) }
+        /// A split needs something to sit beside the source, and only a
+        /// preview qualifies.
+        ///
+        /// **A diff is already a split** — two columns of one file, with
+        /// its own divider and its own direction toggle. Offering "source
+        /// beside the diff" would nest one split inside another: three
+        /// panes, two dividers and two toggles in one corner, to answer a
+        /// question the diff's own left column already answers, since that
+        /// column *is* the source as it stands in the revision being
+        /// compared against.
+        if isMarkdown { available.append(.split) }
 
         return EditorPresentationOptions(available: available)
     }
 
     /// What the second pane of a split holds.
     ///
-    /// A diff wins over a preview when a Markdown file has both, because at
-    /// that moment the reader has changes in front of them: the question
-    /// "what did I change" is more urgent than "how does this read", and the
-    /// preview is one click away either way.
+    /// Only ever the preview, for the reason `resolve` gives: a diff brings
+    /// its own two panes, so it is a presentation of its own rather than
+    /// half of one.
     var splitPartner: EditorPresentation? {
-        if supports(.diff) { return .diff }
-        if supports(.preview) { return .preview }
-        return nil
+        supports(.preview) ? .preview : nil
     }
 }

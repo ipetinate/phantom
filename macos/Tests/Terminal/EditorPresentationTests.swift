@@ -40,10 +40,14 @@ struct EditorPresentationTests {
         #expect(options("Notes.Markdown").supports(.preview))
     }
 
-    @Test func aChangedFileOffersADiff() {
+    /// A diff is offered, a split is **not**: the diff is already two panes
+    /// of one file, and nesting it inside another split would put three
+    /// panes and two direction toggles on screen to answer a question the
+    /// diff's own left column already answers.
+    @Test func aChangedFileOffersADiffButNotASplit() {
         let changed = options("GitCenter.swift", changed: true)
         #expect(changed.supports(.diff))
-        #expect(changed.supports(.split))
+        #expect(!changed.supports(.split))
         #expect(!changed.supports(.preview))
     }
 
@@ -69,11 +73,14 @@ struct EditorPresentationTests {
         #expect(options("README.md").splitPartner == .preview)
     }
 
-    /// With both on offer the diff wins: at that moment the reader has
-    /// changes in front of them, and "what did I change" is the more urgent
-    /// question than "how does this read".
-    @Test func aDiffOutranksAPreviewWhenMarkdownHasChanges() {
-        #expect(options("README.md", changed: true).splitPartner == .diff)
+    /// Changed Markdown offers all four, and its split is still source
+    /// beside preview. The diff stays a presentation of its own rather than
+    /// becoming half of one, because it already has two panes.
+    @Test func changedMarkdownStillSplitsAgainstItsPreview() {
+        let both = options("README.md", changed: true)
+        #expect(both.supports(.diff))
+        #expect(both.supports(.preview))
+        #expect(both.splitPartner == .preview)
     }
 
     // MARK: Falling back

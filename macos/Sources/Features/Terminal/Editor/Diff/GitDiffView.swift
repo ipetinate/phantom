@@ -6,7 +6,7 @@ import SwiftUI
 /// The load runs off the main actor and its five possible answers are all
 /// drawn, because "no hunks" is not one outcome — a blank pane is how a
 /// viewer tells a reader nothing and lets them decide it is broken.
-struct GitDiffView: View {
+struct GitDiffView<Accessory: View>: View {
     let path: String
     let root: String
     let change: GitFileChange
@@ -31,6 +31,11 @@ struct GitDiffView: View {
     /// means anyway.
     let reloadKey: String
 
+    /// The host's own controls, handed to the split so they sit beside its
+    /// direction toggle instead of on top of it. Both want the same corner,
+    /// and the corner is the container's.
+    @ViewBuilder let accessory: () -> Accessory
+
     var body: some View {
         content
             .task(id: reloadKey) { await load() }
@@ -45,6 +50,7 @@ struct GitDiffView: View {
             /// glitch; a flash of empty background reads as "about to draw"
             /// where a flashing spinner reads as "something is wrong".
             Color(nsColor: theme.background)
+                .overlay(alignment: .topTrailing) { accessory() }
 
         case .diff(let document):
             if document.rows.isEmpty {
@@ -76,19 +82,44 @@ struct GitDiffView: View {
                 side: .left,
                 theme: theme,
                 palette: palette,
-                font: font
+                font: font,
+                scrollSync: model.scrollSync,
+                syncSide: .first
             )
-            .synchronizedScroll(model.scrollSync, as: .first)
         } second: {
             GitDiffPane(
                 rows: document.rows,
                 side: .right,
                 theme: theme,
                 palette: palette,
-                font: font
+                font: font,
+                scrollSync: model.scrollSync,
+                syncSide: .second
             )
-            .synchronizedScroll(model.scrollSync, as: .second)
+        } accessory: {
+            accessory()
         }
+        .onAppear { linkPanes() }
+        /// Turned off on the way out because the model — and so the link —
+        /// is shared with whatever else this document shows in a split. A
+        /// raw markdown pane beside its rendered form has no row *n* to
+        /// match, and leaving an absolute mapping switched on there would
+        /// drag the preview to an offset that means nothing in it.
+        .onDisappear { model.scrollSync.isEnabled = false }
+    }
+
+    /// The two panes hold the same row list, padded with fillers opposite
+    /// each other's insertions and deletions, so row *n* is at the same y in
+    /// both and equal offsets *are* line-for-line alignment — which is what
+    /// `absolute` means and why no line counting is needed.
+    ///
+    /// Both axes, because the two sides hold the same long lines: scrolling
+    /// one sideways without the other puts different columns of the same
+    /// line beside each other, which is worse than not scrolling at all.
+    private func linkPanes() {
+        model.scrollSync.strategy = .absolute
+        model.scrollSync.axes = .both
+        model.scrollSync.isEnabled = true
     }
 
     /// What a diff with no rows actually means, which is never "nothing
@@ -100,6 +131,10 @@ struct GitDiffView: View {
         return "No line changes."
     }
 
+    /// - Note: carries the accessory too. Without the split there is no
+    ///   container to hand it to, and a reader who asked for a diff of a
+    ///   file with no line changes would be left looking at one sentence
+    ///   and no way back to the source.
     private func note(_ message: String) -> some View {
         VStack {
             Text(message)
@@ -110,6 +145,7 @@ struct GitDiffView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: theme.background))
+        .overlay(alignment: .topTrailing) { accessory() }
     }
 
     private func load() async {
