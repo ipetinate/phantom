@@ -69,9 +69,28 @@ struct EditorEngineBoundaryTests {
             .appendingPathComponent("Sources/Features/Terminal/Editor/Engine")
     }
 
+    /// Every Swift file under the engine, **at any depth**.
+    ///
+    /// It used to list the directory shallowly, which made the whole guard
+    /// opt-out by accident: a file in `Engine/Diff/` or `Engine/Markdown/`
+    /// was never read, so it could name anything it liked and stay green.
+    /// Nobody had subdirectories there yet, which is exactly why it went
+    /// unnoticed — the hole would have opened under the first person to add
+    /// one, and the check would have kept reporting success.
+    ///
+    /// An enumerator rather than a recursive listing, because it also skips
+    /// package directories, which is what stops a stray `.xcassets` from
+    /// being read as source.
     private func engineSources() throws -> [URL] {
-        try FileManager.default
-            .contentsOfDirectory(at: engineDirectory, includingPropertiesForKeys: nil)
+        let enumerator = FileManager.default.enumerator(
+            at: engineDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        )
+        guard let enumerator else { return [] }
+
+        return enumerator
+            .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" }
     }
 
