@@ -17,6 +17,9 @@ struct FilesSettingsView: View {
     @AppStorage(EditorSettings.tabWidthKey) private var tabWidth = EditorSettings.defaultTabWidth
     @AppStorage(EditorSettings.showsMinimapKey) private var showsMinimap = true
     @AppStorage(EditorSettings.colorsBracketPairsKey) private var colorsBracketPairs = true
+    @AppStorage(EditorSettings.closesBracketsKey) private var closesBrackets = true
+    @AppStorage(EditorSettings.closesQuotesKey) private var closesQuotes = true
+    @AppStorage(EditorSettings.closesTagsKey) private var closesTags = true
 
     @State private var isChoosingFont = false
 
@@ -73,6 +76,26 @@ struct FilesSettingsView: View {
                 Text("Display")
             } footer: {
                 Text("Files larger than \(sizeLimit) or containing binary data open in an external app instead — there is nothing readable to show, and loading them would stall the window.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Its own section rather than three more rows under Display,
+            // because these change what ends up *in the file* while
+            // everything above only changes how it is drawn. Somebody
+            // turning off the minimap is rearranging their window; somebody
+            // turning off tag closing is changing what their keyboard does.
+            Section {
+                Toggle("Close Brackets", isOn: $closesBrackets)
+                    .toggleStyle(.switch)
+                Toggle("Close Quotes", isOn: $closesQuotes)
+                    .toggleStyle(.switch)
+                Toggle("Close Tags", isOn: $closesTags)
+                    .toggleStyle(.switch)
+            } header: {
+                Text("Typing")
+            } footer: {
+                Text("Tags close in HTML, Vue and JSX. They deliberately do not in .ts, where a `<` is always a generic and closing it would always be wrong.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

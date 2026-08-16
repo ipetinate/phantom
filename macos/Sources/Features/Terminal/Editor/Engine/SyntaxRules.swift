@@ -15,8 +15,50 @@ struct SyntaxRules {
     var attribute: String?
 
     /// `\b(?:a|b|c)\b` from a word list.
+    ///
+    /// The list is spliced into a regex verbatim, which is safe for the
+    /// tables in this file and **not** safe for a list from anywhere else —
+    /// see `words(escaping:)`.
     static func words(_ list: [String]) -> String {
         "\\b(?:" + list.joined(separator: "|") + ")\\b"
+    }
+
+    /// `words(_:)` for a list this file did not write.
+    ///
+    /// `words(_:)` joins its arguments into an alternation, so a word
+    /// containing `|`, `(` or `.*` is not a word at all — it is regex
+    /// injected into the pattern the highlighter runs on every keystroke,
+    /// costing wrong colours at best and catastrophic backtracking at
+    /// worst. Escaping here is the second of two independent defences; the
+    /// first is the identifier charset a contributed keyword has to pass
+    /// before it reaches this type. Either alone is one refactor away from
+    /// being the only one.
+    static func words(escaping list: [String]) -> String {
+        words(list.map { NSRegularExpression.escapedPattern(for: $0) })
+    }
+
+    /// A comment pattern from a language's own markers.
+    ///
+    /// Only used for contributed languages: a built-in keeps the hand-written
+    /// pattern from the table below, which knows things a pair of markers
+    /// cannot say — that Markdown's "comment" is a block quote, that CSS
+    /// takes `//` even though the language does not.
+    static func comment(
+        line: String?,
+        block: LanguageSyntax.BlockComment?
+    ) -> String? {
+        var alternatives: [String] = []
+        if let line, !line.isEmpty {
+            alternatives.append(NSRegularExpression.escapedPattern(for: line) + #"[^\n]*"#)
+        }
+        if let block, !block.open.isEmpty, !block.close.isEmpty {
+            alternatives.append(
+                NSRegularExpression.escapedPattern(for: block.open)
+                    + #"[\s\S]*?"#
+                    + NSRegularExpression.escapedPattern(for: block.close)
+            )
+        }
+        return alternatives.isEmpty ? nil : alternatives.joined(separator: "|")
     }
 
     /// A double- or single-quoted run that ends at the closing quote and
@@ -100,6 +142,27 @@ struct SyntaxRules {
     /// otherwise take them away from the keyword slot.
     static let propertyBeforeColon =
         #"^[ \t]*(?!default\b|case\b)[A-Za-z_$][A-Za-z0-9_$]*\??(?=\s*:)"#
+
+    /// The rules for a language described as a value rather than named by
+    /// the enum below.
+    ///
+    /// Starts from the base — which is where strings, numbers and the
+    /// capitalized-type and call heuristics come from, and those are the
+    /// parts a list of keywords cannot describe — then replaces exactly the
+    /// two things a contribution gets to say: its keywords and its comment
+    /// markers. A built-in syntax passes straight through, because the
+    /// hand-written rules are strictly better than anything reconstructed
+    /// from `CodeLanguage`'s two comment properties.
+    static func rules(for syntax: LanguageSyntax) -> SyntaxRules {
+        var rules = self.rules(for: syntax.base)
+        guard !syntax.isBuiltIn else { return rules }
+
+        rules.keyword = syntax.keywords.isEmpty
+            ? nil
+            : words(escaping: syntax.keywords)
+        rules.comment = comment(line: syntax.lineComment, block: syntax.blockComment)
+        return rules
+    }
 
     static func rules(for language: CodeLanguage) -> SyntaxRules {
         switch language {

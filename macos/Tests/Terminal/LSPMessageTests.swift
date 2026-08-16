@@ -526,4 +526,58 @@ struct LSPMessageTests {
         #expect(value["a"]?["b"]?.arrayValue?.count == 3)
         #expect(value["missing"] == nil)
     }
+
+    // MARK: Capabilities against what is actually sent
+
+    /// The client announces `contextSupport: true`, so every completion
+    /// request has to carry a `context`.
+    ///
+    /// This is the one test whose job is to make a specific mistake
+    /// unrepeatable. Announcing the capability and then sending no context is
+    /// a lie neither side can detect: the server does not fail, it silently
+    /// answers a different question — `typescript-language-server` uses the
+    /// trigger character to decide whether it is completing a member access
+    /// at all. Asserted on the *encoded* params rather than on the struct,
+    /// because what matters is what leaves the pipe.
+    @Test func contextSupportImpliesAContextIsSent() throws {
+        let claimed = LSPCenter.clientCapabilities["textDocument"]?["completion"]?["contextSupport"]
+        try #require(claimed?.boolValue == true, "the capability block no longer claims contextSupport")
+
+        let contexts: [LSPCompletionContext] = [.invoked, .incomplete, .triggered(by: ".")]
+        for context in contexts {
+            let params = LSPCenter.requestParams(
+                path: "/tmp/a.ts",
+                position: LSPPosition(line: 3, character: 7),
+                extra: LSPCenter.completionExtra(for: context)
+            )
+            let request = LSPMessage.request(LSPRequest(
+                id: .number(1),
+                method: "textDocument/completion",
+                params: params
+            ))
+            let text = try #require(String(bytes: try request.encodedBody(), encoding: .utf8))
+
+            #expect(text.contains(#""context""#), "no context in \(text)")
+            #expect(text.contains(#""triggerKind":\#(context.kind.rawValue)"#))
+        }
+    }
+
+    /// And the character travels with it only when the kind says it should —
+    /// a `triggerCharacter` on an `Invoked` request describes a keystroke
+    /// that did not trigger anything.
+    @Test func onlyATriggerRequestNamesACharacter() throws {
+        let triggered = LSPCenter.requestParams(
+            path: "/tmp/a.ts",
+            position: LSPPosition(line: 0, character: 1),
+            extra: LSPCenter.completionExtra(for: .triggered(by: "."))
+        )
+        let invoked = LSPCenter.requestParams(
+            path: "/tmp/a.ts",
+            position: LSPPosition(line: 0, character: 1),
+            extra: LSPCenter.completionExtra(for: .invoked)
+        )
+
+        #expect(triggered["context"]?["triggerCharacter"]?.stringValue == ".")
+        #expect(invoked["context"]?["triggerCharacter"] == nil)
+    }
 }

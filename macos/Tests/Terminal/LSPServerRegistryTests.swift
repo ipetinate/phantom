@@ -153,7 +153,7 @@ struct LSPServerRegistryTests {
             switch definition.command {
             case "typescript-language-server", "vue-language-server",
                  "pyright-langserver", "bash-language-server",
-                 "intelephense", "ruby-lsp":
+                 "intelephense", "ruby-lsp", "tsc":
                 #expect(definition.category == .script, "\(definition.command)")
             case "sourcekit-lsp", "kotlin-language-server", "rust-analyzer",
                  "gopls", "zls", "jdtls", "clangd":

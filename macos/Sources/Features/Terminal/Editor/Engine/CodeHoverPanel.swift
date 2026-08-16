@@ -381,28 +381,20 @@ final class CodeHoverPanel: NSPanel {
     /// Above the hovered line when there is room, below it otherwise, and
     /// always wholly on screen.
     ///
-    /// Above by preference because the code you are reading continues
-    /// *downwards*: a card below the line covers what comes next, which is
-    /// usually the part being explained.
+    /// The rule itself lives in `PanelPlacement`, which the completion list
+    /// shares — with the opposite preference. It was private here and therefore
+    /// untested; moving it gave it a test and left this method with the only
+    /// part that is actually about this window.
     private func position(near anchor: NSRect, on screen: NSScreen?) {
         let size = frame.size
-        let gap: CGFloat = 6
         let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: size)
 
-        var origin = NSPoint(x: anchor.minX, y: anchor.maxY + gap)
-
-        // Below when it does not fit above, and back to above when it fits
-        // neither — the clamp underneath then keeps it on screen, and losing
-        // the bottom of a description is better than losing its first line.
-        if origin.y + size.height > visible.maxY {
-            let below = anchor.minY - gap - size.height
-            origin.y = below >= visible.minY ? below : origin.y
-        }
-
-        origin.x = min(max(origin.x, visible.minX + 8), max(visible.maxX - size.width - 8, visible.minX))
-        origin.y = min(max(origin.y, visible.minY + 8), max(visible.maxY - size.height - 8, visible.minY))
-
-        setFrameOrigin(origin)
+        setFrameOrigin(PanelPlacement.origin(
+            anchor: anchor,
+            size: size,
+            visible: visible,
+            prefers: .above
+        ))
     }
 
     /// A document view that grows downwards, so "scroll to zero" means the

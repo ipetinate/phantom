@@ -9,15 +9,41 @@ import SwiftUI
 /// same TypeScript process, and a user who points that at a different
 /// binary means all four, not one quarter of them.
 ///
+/// Languages contributed by an extension sit in the same category sections
+/// as the compiled-in ones, because to a reader looking for Elixir the
+/// question is "where is Elixir", not "which of Phantom's two tables is it
+/// in". What separates them is a badge — an extension's language can be
+/// shadowed, unapproved, or asking for a build this one is not — and the
+/// absence of an Install button, which is the one control here that turns a
+/// string into `$SHELL -lic` and must never be reachable from a file
+/// somebody dropped in a directory.
+///
+/// The editor's own completion preferences hang off the same screen rather
+/// than a pane of their own, since "what completes, and when" is the same
+/// question as "what server is running" seen from the other end.
+///
 /// Live per-file server status already lives in the editor's own banner,
 /// scoped to the workspace that's actually open — a language can be
 /// running in one window's root and crashed in another's, so a global
 /// status row here would just be misleading. This view is only the
 /// configuration half.
 struct LanguageServersSettingsView: View {
-    @State private var selection: LSPServerDefinition?
+    @State private var selection: LanguageServersSelection?
     @State private var searchText = ""
     @ObservedObject private var lsp = LSPCenter.shared
+    @ObservedObject private var languages = LanguageResolver.shared
+
+    /// Bumped whenever the detail pane writes something the sidebar shows.
+    ///
+    /// Two stores behind this screen write to `UserDefaults` and publish
+    /// nothing: `LanguageTrustStore`, correctly, since a security record has
+    /// no business driving a view's lifecycle, and the per-language
+    /// completion table, because `@AppStorage` has no dictionary. So the
+    /// detail pane tells the parent and both halves re-read. Without it the
+    /// sidebar keeps saying "Refused", or "2 languages off", until the
+    /// window is reopened — which is the same class of bug as a setting read
+    /// once when a view was built.
+    @State private var defaultsRevision = 0
 
     var body: some View {
         HStack(spacing: 0) {
@@ -30,18 +56,35 @@ struct LanguageServersSettingsView: View {
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        ForEach(sections) { section in
+                        if showsEditorSection {
                             Section {
-                                ForEach(section.servers) { server in
-                                    row(for: server)
-                                }
+                                completionRow
                             } header: {
-                                sectionHeader(section)
+                                sectionHeader(title: "Editor", systemImage: "text.cursor", count: 1)
                             }
                         }
 
-                        if filteredServers.isEmpty {
-                            Text("No language servers match “\(searchText)”.")
+                        ForEach(sections) { section in
+                            Section {
+                                ForEach(section.rows) { row in
+                                    languageRow(row)
+                                }
+                            } header: {
+                                sectionHeader(
+                                    title: section.category.title,
+                                    systemImage: section.category.systemImage,
+                                    count: section.rows.count
+                                )
+                            }
+                        }
+
+                        if sections.isEmpty, !showsEditorSection {
+                            /// `verbatim` because the query is whatever the
+                            /// reader typed, and the interpolating
+                            /// initializer would run it through
+                            /// `LocalizedStringKey` — so searching for
+                            /// `*ts*` would echo back in italics.
+                            Text(verbatim: "Nothing matches “\(searchText)”.")
                                 .foregroundStyle(.secondary)
                                 .font(.callout)
                                 .padding(.horizontal, 12)
@@ -56,13 +99,26 @@ struct LanguageServersSettingsView: View {
             Divider()
 
             Group {
-                if let selection {
-                    LanguageServerOverrideForm(server: selection)
-                        .id(selection.id)
-                } else {
-                    Text("Select a language server.")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                switch selection {
+                case .completion:
+                    CompletionSettingsForm(
+                        languages: languages.catalog,
+                        onChange: { defaultsRevision += 1 }
+                    )
+
+                case .row(let id):
+                    if let row = allRows.first(where: { $0.id == id }) {
+                        detail(for: row)
+                            .id(id)
+                    } else {
+                        /// The catalog reloaded and took the selected row with
+                        /// it — an extension removed from the directory while
+                        /// this screen was open.
+                        placeholder
+                    }
+
+                case nil:
+                    placeholder
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -72,64 +128,102 @@ struct LanguageServersSettingsView: View {
         // Opening this screen is the moment the answer matters, and it is
         // also the moment after which the user most often installs something
         // in the terminal next to it.
-        .task { lsp.refreshInstalledCommands() }
-    }
-
-    /// A server matches the query when any of the words a user would type
-    /// to find it — its name, binary, language id, or file extensions —
-    /// contains the query. Matching is case-insensitive.
-    private var filteredServers: [LSPServerDefinition] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return LSPServerRegistry.distinctServers }
-        let needle = query.lowercased()
-        return LSPServerRegistry.distinctServers.filter { server in
-            let haystack = [
-                server.displayName,
-                server.command,
-                server.languageID,
-                fileExtensions(sharing: server.command),
-            ].joined(separator: " ").lowercased()
-            return haystack.contains(needle)
+        .task {
+            lsp.refreshInstalledCommands()
+            /// One `npm root -g` for the whole screen, here rather than in a
+            /// popover's `body`. See `LSPDependencyCenter`.
+            LSPDependencyCenter.shared.refresh()
         }
     }
 
-    /// The distinct servers, grouped by category, with sections in the
-    /// category's declared order and empty sections dropped.
+    @ViewBuilder
+    private func detail(for row: LanguageRow) -> some View {
+        switch row {
+        case .server(let server):
+            LanguageServerOverrideForm(server: server)
+
+        case .contributed(let contributed):
+            ContributedLanguageForm(
+                contributed: contributed,
+                trustRevision: defaultsRevision,
+                onTrustChanged: { defaultsRevision += 1 }
+            )
+        }
+    }
+
+    private var placeholder: some View {
+        Text("Select a language.")
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: Rows
+
+    /// Everything the sidebar can select, in one flat list, so the detail
+    /// pane can resolve a selection by id rather than holding a copy of a
+    /// value the catalog may have replaced underneath it.
+    private var allRows: [LanguageRow] {
+        LSPServerRegistry.distinctServers.map(LanguageRow.server)
+            + languages.catalog.contributed.map(LanguageRow.contributed)
+    }
+
+    /// A row matches the query when any of the words a user would type to
+    /// find it — its name, binary, language id, or file extensions —
+    /// contains the query. A contributed row also matches on the extension
+    /// that supplied it, which is often the only name the reader knows.
+    /// Matching is case-insensitive.
+    private var filteredRows: [LanguageRow] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return allRows }
+        let needle = query.lowercased()
+        return allRows.filter { $0.haystack.lowercased().contains(needle) }
+    }
+
+    /// The rows, grouped by category, with sections in the category's
+    /// declared order and empty sections dropped.
     private var sections: [LanguageServerSection] {
-        var byCategory: [LSPServerCategory: [LSPServerDefinition]] = [:]
-        for server in filteredServers {
-            byCategory[server.category, default: []].append(server)
+        var byCategory: [LSPServerCategory: [LanguageRow]] = [:]
+        for row in filteredRows {
+            byCategory[row.category, default: []].append(row)
         }
         return LSPServerCategory.allCases.compactMap { category in
-            guard let servers = byCategory[category], !servers.isEmpty else { return nil }
-            return LanguageServerSection(category: category, servers: servers)
+            guard let rows = byCategory[category], !rows.isEmpty else { return nil }
+            return LanguageServerSection(category: category, rows: rows)
         }
     }
 
-    private func row(for server: LSPServerDefinition) -> some View {
+    /// The Editor section survives a search only when the search is about
+    /// it. It is one row and it is pinned to the top, so leaving it there
+    /// under every query would make it read as a result for all of them.
+    private var showsEditorSection: Bool {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return true }
+        return "completion editor suggestions autocomplete".contains(query)
+    }
+
+    private var completionRow: some View {
         Button {
-            selection = server
+            selection = .completion
         } label: {
             HStack(alignment: .center, spacing: 8) {
-                LanguageIconView(name: server.languageIconName)
+                Image(systemName: "list.bullet.rectangle")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 18, height: 18)
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(server.displayName)
-                            .lineLimit(1)
-                        Spacer(minLength: 4)
-                        LSPStatusIcon(status: lsp.status(for: server))
-                    }
-                    Text(fileExtensions(sharing: server.command))
+                    Text("Completion")
+                        .lineLimit(1)
+                    Text(completionSummary)
                         .font(.caption)
-                        .foregroundStyle(selection == server ? .white.opacity(0.8) : .secondary)
+                        .foregroundStyle(selection == .completion ? .white.opacity(0.8) : .secondary)
                         .lineLimit(1)
                 }
+                Spacer(minLength: 4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .contentShape(Rectangle())
-            .background(selection == server ? Color.accentColor : .clear)
+            .background(selection == .completion ? Color.accentColor : .clear)
             .clipShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
@@ -137,11 +231,73 @@ struct LanguageServersSettingsView: View {
         .padding(.vertical, 2)
     }
 
+    /// The subtitle under the Completion row, which has to be readable at a
+    /// glance — the count of switched-off languages matters more than which
+    /// they are, and "Off" has to be unmissable.
+    private var completionSummary: String {
+        guard CompletionSettingsStore.isEnabled else { return "Off" }
+        let disabled = CompletionSettingsStore.byLanguage.values.filter { !$0 }.count
+        guard disabled > 0 else { return "On" }
+        return disabled == 1 ? "On · 1 language off" : "On · \(disabled) languages off"
+    }
+
+    private func languageRow(_ row: LanguageRow) -> some View {
+        let isSelected = selection == .row(row.id)
+
+        return Button {
+            selection = .row(row.id)
+        } label: {
+            HStack(alignment: .center, spacing: 8) {
+                LanguageIconView(name: row.languageIconName)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        /// `verbatim` because a contributed row's name comes
+                        /// out of a third-party file, and the interpolating
+                        /// initializer treats its argument as a
+                        /// `LocalizedStringKey` — markdown and all.
+                        Text(verbatim: row.displayName)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        rowStatus(row)
+                    }
+                    Text(verbatim: row.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(isSelected ? .white.opacity(0.8) : .secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+            .background(isSelected ? Color.accentColor : .clear)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func rowStatus(_ row: LanguageRow) -> some View {
+        switch row {
+        case .server(let server):
+            LSPStatusIcon(status: lsp.status(for: server))
+
+        case .contributed(let contributed):
+            /// Recomputed rather than cached, and that is enough: the badge
+            /// reads `LanguageTrustStore` directly, and `defaultsRevision`
+            /// invalidating *this* view is what makes the read happen again
+            /// after the detail pane forgets a decision.
+            ContributedStatusIcon(status: ContributedStatus.of(contributed))
+        }
+    }
+
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("Search", text: $searchText, prompt: Text("Search language servers"))
+            TextField("Search", text: $searchText, prompt: Text("Search languages"))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
             if !searchText.isEmpty {
@@ -166,12 +322,12 @@ struct LanguageServersSettingsView: View {
         )
     }
 
-    private func sectionHeader(_ section: LanguageServerSection) -> some View {
+    private func sectionHeader(title: String, systemImage: String, count: Int) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: section.category.systemImage)
-            Text(section.category.title)
+            Image(systemName: systemImage)
+            Text(title)
             Spacer()
-            Text(verbatim: "\(section.servers.count)")
+            Text(verbatim: "\(count)")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
@@ -182,8 +338,100 @@ struct LanguageServersSettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .windowBackgroundColor))
     }
+}
 
-    private func fileExtensions(sharing command: String) -> String {
+/// What the sidebar has selected.
+///
+/// A case per kind rather than an `LSPServerDefinition?`, because the list
+/// now holds three things that are not each other: a preferences screen, a
+/// compiled-in server, and a language some file on disk contributed. The
+/// contributed one is held **by id and not by value** so that a catalog
+/// reload — an extension edited while this screen is open — leaves the
+/// selection pointing at the new value rather than at a stale copy.
+enum LanguageServersSelection: Hashable {
+    case completion
+    case row(String)
+}
+
+/// One selectable language, from either table.
+private enum LanguageRow: Identifiable {
+    case server(LSPServerDefinition)
+    case contributed(LanguageCatalog.Contributed)
+
+    /// Prefixed by kind, because a contributed language is free to name
+    /// itself after a binary and nothing stops the two ids colliding.
+    var id: String {
+        switch self {
+        case .server(let server): return "server:" + server.command
+        case .contributed(let contributed): return "ext:" + contributed.id
+        }
+    }
+
+    var category: LSPServerCategory {
+        switch self {
+        case .server(let server): return server.category
+        case .contributed(let contributed): return contributed.language.category
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .server(let server): return server.displayName
+        case .contributed(let contributed): return contributed.language.displayName
+        }
+    }
+
+    /// The line under the name: what files this covers, and — for a
+    /// contributed language — who supplied it, since that is the fact that
+    /// tells the two kinds of row apart.
+    var subtitle: String {
+        switch self {
+        case .server(let server):
+            return LanguageRow.fileExtensions(sharing: server.command)
+
+        case .contributed(let contributed):
+            let types = contributed.language.fileExtensions.map { "." + $0 }
+                + contributed.language.fileNames
+            let name = contributed.extensionName.isEmpty
+                ? contributed.listIdentity
+                : contributed.extensionName
+            guard !types.isEmpty else { return name }
+            return types.joined(separator: ", ") + " · " + name
+        }
+    }
+
+    var haystack: String {
+        switch self {
+        case .server(let server):
+            return [
+                server.displayName,
+                server.command,
+                server.languageID,
+                LanguageRow.fileExtensions(sharing: server.command),
+            ].joined(separator: " ")
+
+        case .contributed(let contributed):
+            return [
+                contributed.language.displayName,
+                contributed.language.languageID,
+                contributed.language.server?.command ?? "",
+                contributed.extensionName,
+                contributed.publisher,
+                contributed.language.fileExtensions.joined(separator: " "),
+                contributed.language.fileNames.joined(separator: " "),
+            ].joined(separator: " ")
+        }
+    }
+
+    var languageIconName: String? {
+        switch self {
+        case .server(let server): return server.languageIconName
+        case .contributed(let contributed):
+            return LSPServerDefinition.iconName(forLanguageID: contributed.language.languageID)
+        }
+    }
+
+    static func fileExtensions(sharing command: String) -> String {
         let extensionsByLanguage: [String: [String]] = [
             "typescript": ["ts"],
             "typescriptreact": ["tsx"],
@@ -203,20 +451,20 @@ struct LanguageServersSettingsView: View {
     }
 }
 
-/// A category heading plus its servers, in display order.
+/// A category heading plus its rows, in display order.
 private struct LanguageServerSection: Identifiable {
     let category: LSPServerCategory
-    let servers: [LSPServerDefinition]
+    let rows: [LanguageRow]
 
     var id: LSPServerCategory { category }
 }
 
 /// One server's editable override, backed by `LSPServerOverrideStore`.
 ///
-/// Split out from the list above so `.id(selection.id)` there forces a
-/// fresh `@State` per server — without it, switching the sidebar selection
-/// would keep editing the previous server's override in place, since
-/// SwiftUI would otherwise reuse the same view identity and its state.
+/// Split out from the list above so `.id(selection)` there forces a fresh
+/// `@State` per server — without it, switching the sidebar selection would
+/// keep editing the previous server's override in place, since SwiftUI
+/// would otherwise reuse the same view identity and its state.
 /// Whether the install/uninstall button is doing something, so its label
 /// can swap for progress.
 private enum ServerInstallOperation: Equatable {
@@ -228,16 +476,12 @@ private enum ServerInstallOperation: Equatable {
 private struct LanguageServerOverrideForm: View {
     let server: LSPServerDefinition
     @ObservedObject private var lsp = LSPCenter.shared
-    @State private var override: LSPServerOverride
+    @ObservedObject private var dependencies = LSPDependencyCenter.shared
     @State private var operation: ServerInstallOperation = .none
     @State private var operationError: String?
     @State private var operationOutput: [String] = []
     @State private var showUninstallConfirmation = false
-
-    init(server: LSPServerDefinition) {
-        self.server = server
-        _override = State(initialValue: LSPServerOverrideStore.override(for: server.command) ?? LSPServerOverride())
-    }
+    @State private var showDependencies = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -304,44 +548,10 @@ private struct LanguageServerOverrideForm: View {
                     }
                 }
 
-                Section {
-                    TextField("Command", text: $override.command, prompt: Text(server.command))
-                    TextField(
-                        "Arguments",
-                        text: $override.arguments,
-                        prompt: Text(server.arguments.joined(separator: " "))
-                    )
-                } header: {
-                    Text("Override")
-                } footer: {
-                    Text(
-                        """
-                        Blank uses the default above. Takes effect the next \
-                        time this server starts for a workspace — close and \
-                        reopen a file of this kind, or relaunch Phantom.
-                        """
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-
-                Section {
-                    TextEditor(text: $override.initializationOptionsJSON)
-                        .font(.system(size: 12, design: .monospaced))
-                        .frame(minHeight: 120)
-                } header: {
-                    Text("initializationOptions (JSON)")
-                } footer: {
-                    Text(
-                        """
-                        Sent to the server at startup. Left blank, Phantom's \
-                        own resolution is used where it has one — Vue's \
-                        TypeScript path today; every other server gets none.
-                        """
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
+                ServerOverrideFields(
+                    defaultCommand: server.command,
+                    defaultArguments: server.arguments
+                )
             }
             .formStyle(.grouped)
             .confirmationDialog(
@@ -358,9 +568,6 @@ private struct LanguageServerOverrideForm: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: override) { value in
-            LSPServerOverrideStore.set(value, for: server.command)
-        }
     }
 
     /// The install/uninstall button at the top of the screen. While an
@@ -397,16 +604,18 @@ private struct LanguageServerOverrideForm: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            } else if isInstalled {
-                Button(role: .destructive) {
-                    showUninstallConfirmation = true
-                } label: {
-                    Label("Uninstall", systemImage: "trash")
+            } else if let plan = server.dependencyPlan {
+                /// A server whose binary is present can still be unusable
+                /// because a package beside it is missing, and that is the
+                /// case this whole popover exists for: `vue-language-server`
+                /// on `PATH` used to mean "Uninstall" and nothing else, with
+                /// `@vue/typescript-plugin` unreachable from any screen.
+                HStack(spacing: 8) {
+                    dependencyButton(plan)
+                    if isInstalled { uninstallButton }
                 }
-                .disabled(server.uninstallCommand == nil)
-                .help(server.uninstallCommand == nil
-                    ? "No automatic uninstall for this server."
-                    : "Removes the server and its packages")
+            } else if isInstalled {
+                uninstallButton
             } else {
                 Button {
                     runOperation(.installing)
@@ -414,6 +623,64 @@ private struct LanguageServerOverrideForm: View {
                     Label("Install", systemImage: "arrow.down.circle")
                 }
                 .help("Runs the install command in a terminal with your login environment")
+            }
+        }
+    }
+
+    private var uninstallButton: some View {
+        Button(role: .destructive) {
+            showUninstallConfirmation = true
+        } label: {
+            Label("Uninstall", systemImage: "trash")
+        }
+        .disabled(server.uninstallCommand == nil)
+        .help(server.uninstallCommand == nil
+            ? "No automatic uninstall for this server."
+            : "Removes the server and its packages")
+    }
+
+    /// Opens the per-package popover, labelled with what is actually wrong.
+    ///
+    /// "Install" while nothing is there, a count once some of it is — because
+    /// a button that says "Install" beside an installed server reads as a
+    /// mistake, and the reader stops trusting the row.
+    private func dependencyButton(_ plan: LSPServerDependencyPlan) -> some View {
+        let statuses = dependencies.statuses(
+            for: plan,
+            installedCommands: lsp.installedCommands,
+            commandsProbed: lsp.hasProbedInstalls
+        )
+        let outstanding = plan.packages.filter { (statuses[$0.id] ?? .unknown).needsInstall }
+
+        let title: String
+        let symbol: String
+        if outstanding.isEmpty {
+            title = "Dependencies"
+            symbol = "checklist"
+        } else if outstanding.count == plan.packages.count {
+            title = "Install"
+            symbol = "arrow.down.circle"
+        } else {
+            /// `verbatim`, because interpolating a number through
+            /// `LocalizedStringKey` formats it for the locale.
+            title = "Install \(outstanding.count) of \(plan.packages.count)"
+            symbol = "arrow.down.circle"
+        }
+
+        return Button {
+            showDependencies = true
+        } label: {
+            Label {
+                Text(verbatim: title)
+            } icon: {
+                Image(systemName: symbol)
+            }
+        }
+        .help("This server needs more than one package — choose which to install")
+        .popover(isPresented: $showDependencies, arrowEdge: .bottom) {
+            ServerDependencyPopover(server: server, plan: plan) { command in
+                showDependencies = false
+                run(.installing, command: command)
             }
         }
     }
@@ -439,7 +706,21 @@ private struct LanguageServerOverrideForm: View {
     /// The command the section shows and the copy button copies.
     private var activeCommand: String {
         guard showsUninstall, let uninstall = server.uninstallCommand else {
-            return server.installCommand
+            /// The whole plan, pinned, for a server that has one — otherwise
+            /// this row and the Copy button beside it would keep handing out
+            /// the unpinned one-package `installHint` while the button above
+            /// runs something else entirely.
+            if let plan = server.dependencyPlan,
+               let planned = server.installCommand(
+                   forDependencies: Set(plan.packages.map(\.id))
+               ) {
+                return planned
+            }
+            /// Empty for a contributed server, which has no command this app
+            /// may offer — see `installCommand`. The section around this is
+            /// already hidden in that case; the fallback is here so a future
+            /// caller that forgets gets nothing rather than something.
+            return server.installCommand ?? ""
         }
         return uninstall
     }
@@ -484,12 +765,30 @@ private struct LanguageServerOverrideForm: View {
     /// `npm`, `brew`, `gem` — whichever the hint uses — are on `PATH`.
     /// Streams the output to the view as it arrives; the result lands back
     /// on the main actor.
+    ///
+    /// **Reachable only from a compiled-in definition.** The command comes
+    /// from `LSPServerRegistry`, which is source in this build; a
+    /// contributed language's form has no Install button at all, so nothing
+    /// a manifest wrote can arrive at this `-lic`.
     private func runOperation(_ operation: ServerInstallOperation) {
         guard operation != .none else { return }
         let command = operation == .installing
             ? server.installCommand
             : server.uninstallCommand
         guard let command else { return }
+        run(operation, command: command)
+    }
+
+    /// The same run, for a command already resolved by the caller.
+    ///
+    /// Split out for the dependency popover, which composes its command from
+    /// the boxes that are ticked. **Every string that reaches here is still
+    /// built from compiled-in literals** — the popover's is assembled by
+    /// `LSPServerDefinition.installCommand(forDependencies:)`, which refuses
+    /// any definition that is not `.builtIn` and keeps only members of that
+    /// server's own plan.
+    private func run(_ operation: ServerInstallOperation, command: String) {
+        guard operation != .none else { return }
 
         self.operation = operation
         operationError = nil
@@ -519,6 +818,9 @@ private struct LanguageServerOverrideForm: View {
             self.operation = .none
             if result.succeeded {
                 LSPCenter.shared.noteAvailabilityChanged()
+                /// The binaries are re-probed by the line above; the packages
+                /// that ship no binary are only visible to this one.
+                LSPDependencyCenter.shared.refresh()
             } else {
                 operationError = result.message
             }
@@ -526,10 +828,269 @@ private struct LanguageServerOverrideForm: View {
     }
 }
 
-private extension LSPServerDefinition {
+/// The per-package install sheet: a checkbox per dependency, ticked for what
+/// this machine is missing, and one sentence each saying when it is needed.
+///
+/// **It explains the rule and does not pretend to answer a case.** Settings is
+/// a global screen with no workspace in context, so "your project needs this"
+/// is a sentence it is not entitled to say. The project-specific answer
+/// already exists in the editor's own server banner, which does know the
+/// workspace root — `plan.projectNote` is where this view hands the question
+/// over rather than duplicating it badly.
+private struct ServerDependencyPopover: View {
+    let server: LSPServerDefinition
+    let plan: LSPServerDependencyPlan
+    let onInstall: (String) -> Void
+
+    @ObservedObject private var lsp = LSPCenter.shared
+    @ObservedObject private var dependencies = LSPDependencyCenter.shared
+
+    @State private var selected: Set<String> = []
+
+    /// Seeded once, and only once both probes have answered.
+    ///
+    /// The popover can open before `npm root -g` returns, and re-seeding on
+    /// every publish would untick a box the reader just unticked. Seeding
+    /// before the answer arrives would tick every line, which is the same
+    /// wrong guess as showing "Install" for an installed server.
+    @State private var didSeed = false
+
+    private var statuses: [String: LSPDependencyStatus] {
+        dependencies.statuses(
+            for: plan,
+            installedCommands: lsp.installedCommands,
+            commandsProbed: lsp.hasProbedInstalls
+        )
+    }
+
+    /// Nil when nothing is ticked — which is also what disables Install, so
+    /// the button and the command shown under it can never disagree.
+    private var command: String? {
+        server.installCommand(forDependencies: selected)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(verbatim: "Install \(server.displayName)")
+                .font(.headline)
+
+            Text(
+                """
+                Ticked by default: what this machine is missing, or has at a \
+                version Phantom did not pin. Nothing here knows which project \
+                you mean — each line says when its package is needed.
+                """
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(plan.packages) { dependency in
+                    dependencyRow(dependency)
+                }
+            }
+
+            if let note = plan.projectNote {
+                Divider()
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "folder")
+                        .foregroundStyle(.tertiary)
+                    Text(verbatim: note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Divider()
+
+            Group {
+                if let command {
+                    Text(verbatim: command)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Nothing selected.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 8) {
+                Spacer()
+                Button {
+                    guard let command else { return }
+                    onInstall(command)
+                } label: {
+                    Text("Install")
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(command == nil)
+            }
+        }
+        .padding(16)
+        .frame(width: 440)
+        .onAppear(perform: seedIfNeeded)
+        .onChange(of: dependencies.hasProbed) { _ in seedIfNeeded() }
+        .onChange(of: lsp.hasProbedInstalls) { _ in seedIfNeeded() }
+    }
+
+    private func dependencyRow(_ dependency: LSPServerDependency) -> some View {
+        let status = statuses[dependency.id] ?? .unknown
+
+        return Toggle(isOn: binding(for: dependency.id)) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    /// `verbatim` for both: a package name contains `@` and
+                    /// `/`, and a purpose contains `<template>` — the
+                    /// interpolating initializer runs its argument through
+                    /// `LocalizedStringKey`, markdown and all.
+                    Text(verbatim: dependency.spec)
+                        .font(.system(size: 12, design: .monospaced))
+                    statusChip(status)
+                }
+                Text(verbatim: dependency.purpose)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func statusChip(_ status: LSPDependencyStatus) -> some View {
+        switch status {
+        case .unknown:
+            Text("Checking…")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        case .missing:
+            Text("Missing")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+        case .outdated(let installed):
+            /// Named, not just flagged: "this machine has 2.2.12" is what
+            /// tells a reader the tick below is about a skew rather than an
+            /// absence, and skew is the failure that reports itself as
+            /// nothing at all.
+            Text(verbatim: "Has \(installed)")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+        case .present:
+            Text("Installed")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func binding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { selected.contains(id) },
+            set: { isOn in
+                if isOn {
+                    selected.insert(id)
+                } else {
+                    selected.remove(id)
+                }
+            }
+        )
+    }
+
+    private func seedIfNeeded() {
+        guard !didSeed, dependencies.hasProbed, lsp.hasProbedInstalls else { return }
+        didSeed = true
+        selected = LSPDependencyCatalog.defaultSelection(for: plan, statuses: statuses)
+    }
+}
+
+/// The two editable override sections, shared by the built-in server form
+/// and the contributed-language one.
+///
+/// Extracted rather than copied, because there is exactly one place a
+/// user's override is written and a second pair of these `TextField`s would
+/// be a second place for that write to drift. It is also the honest way to
+/// give a contributed language "the same override form" without giving it
+/// the Install button that happens to sit above it in the built-in one.
+struct ServerOverrideFields: View {
+    let defaultCommand: String
+    let defaultArguments: [String]
+
+    @State private var override: LSPServerOverride
+
+    init(defaultCommand: String, defaultArguments: [String]) {
+        self.defaultCommand = defaultCommand
+        self.defaultArguments = defaultArguments
+        _override = State(
+            initialValue: LSPServerOverrideStore.override(for: defaultCommand) ?? LSPServerOverride()
+        )
+    }
+
+    var body: some View {
+        Group {
+            Section {
+                TextField("Command", text: $override.command, prompt: Text(verbatim: defaultCommand))
+                TextField(
+                    "Arguments",
+                    text: $override.arguments,
+                    prompt: Text(verbatim: defaultArguments.joined(separator: " "))
+                )
+            } header: {
+                Text("Override")
+            } footer: {
+                Text(
+                    """
+                    Blank uses the default above. Takes effect the next \
+                    time this server starts for a workspace — close and \
+                    reopen a file of this kind, or relaunch Phantom.
+                    """
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Section {
+                TextEditor(text: $override.initializationOptionsJSON)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(minHeight: 120)
+            } header: {
+                Text("initializationOptions (JSON)")
+            } footer: {
+                Text(
+                    """
+                    Sent to the server at startup. Left blank, Phantom's \
+                    own resolution is used where it has one — Vue's \
+                    TypeScript path today; every other server gets none.
+                    """
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .onChange(of: override) { value in
+            LSPServerOverrideStore.set(value, for: defaultCommand)
+        }
+    }
+}
+
+extension LSPServerDefinition {
     /// The asset name of the language's logo, or nil when the app ships no
     /// logo for this server's language.
     var languageIconName: String? {
+        Self.iconName(forLanguageID: languageID)
+    }
+
+    /// Split off the instance property so a contributed language — which is
+    /// not an `LSPServerDefinition` and may have no server at all — can
+    /// borrow a logo when it happens to name a language this app ships one
+    /// for. An extension contributing `elixir` gets the generic glyph;
+    /// one contributing a second opinion about `ruby` gets the Ruby logo,
+    /// which is the right answer either way.
+    static func iconName(forLanguageID languageID: String) -> String? {
         let base: String
         switch languageID {
         case "typescript", "typescriptreact", "javascript", "javascriptreact":
@@ -561,7 +1122,7 @@ private extension LSPServerDefinition {
 
 /// A language's logo at a fixed size, so logos of any aspect ratio line up
 /// across the list.
-private struct LanguageIconView: View {
+struct LanguageIconView: View {
     let name: String?
     var size: CGFloat = 18
 
@@ -643,7 +1204,7 @@ private struct LSPStatusIcon: View {
     }
 }
 
-private struct CopyableValueRow: View {
+struct CopyableValueRow: View {
     let title: String
     let value: String
 

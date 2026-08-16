@@ -627,10 +627,19 @@ private struct SidebarGroupSection: View {
             SidebarGroupIcon(icon: group.icon)
                 .foregroundStyle(accent ?? Color.secondary)
 
+            /// The name outranks everything to its right.
+            ///
+            /// Without this the group's name is what a narrow sidebar drops
+            /// first: `Spacer` and the hover-only buttons are happy at their
+            /// ideal size, so SwiftUI takes the space out of the only view
+            /// willing to give it, and the row ends up as an icon with no
+            /// label at all. Truncating a long name is the correct way to
+            /// run out of room; a row you cannot identify is not.
             VStack(alignment: .leading, spacing: 1) {
                 Text(group.name)
                     .font(palette.font(size: 11, weight: .semibold))
                     .lineLimit(1)
+                    .truncationMode(.tail)
 
                 if let details = group.details, !details.isEmpty {
                     Text(details)
@@ -639,6 +648,7 @@ private struct SidebarGroupSection: View {
                         .lineLimit(2)
                 }
             }
+            .layoutPriority(1)
 
             if collapsed {
                 GroupStatusRollup(tabs: tabs, accent: accent)

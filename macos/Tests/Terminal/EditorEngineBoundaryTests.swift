@@ -18,8 +18,34 @@ struct EditorEngineBoundaryTests {
     /// `UserDefaults` is on the list for the same reason as the singletons:
     /// a component that reads preferences behind the host's back can't be
     /// configured by a different host.
+    ///
+    /// The language-extension entries are on it for a reason worth spelling
+    /// out, and `LanguageTrust` is written as a prefix so the store and the
+    /// alert are covered too: a language contributed by a file on disk
+    /// reaches the engine as a `LanguageSyntax` — validated, escaped, and
+    /// carrying no path — and the shortcut of reading the manifest or the
+    /// catalog directly from the highlighter would work, once, and take the
+    /// validation with it.
+    ///
+    /// `CompletionSettings` is a prefix for the same reason, and covers the
+    /// store as well as the value. The completion preferences are keyed by
+    /// **language id**, and the engine has no idea what language it is
+    /// showing — so the host has to collapse "completion is on, and on for
+    /// this language" into the single `Bool` that crosses as
+    /// `CodeEditorConfiguration.completionEnabled`. An engine that could
+    /// name the store would resolve the language itself, and the one place
+    /// that decision is made would become two.
     private static let forbidden = [
+        "CompletionSettings",
         "ThemePalette",
+        "LanguageCatalog",
+        "LanguageManifest",
+        "LanguageResolver",
+        "LanguageTrust",
+        "LSPServerRegistry",
+        "CompletionBridge",
+        "CompletionKindMapping",
+        "CompletionIconFont",
         "SidebarGroupStore",
         "SidebarTabModel",
         "SidebarTabManager",

@@ -88,6 +88,21 @@ enum EditorSettings {
     static let showsMinimapKey = "EditorShowsMinimap"
     static let colorsBracketPairsKey = "EditorColorsBracketPairs"
 
+    /// The three halves of auto-closing, kept apart because they are three
+    /// different opinions.
+    ///
+    /// Brackets are almost universally wanted; quotes annoy people who write
+    /// a lot of prose in comments, where an apostrophe is not an opener; tags
+    /// are the one with a heuristic behind it, and therefore the one most
+    /// likely to be switched off after a bad guess. One switch for all three
+    /// would mean losing the two that work in order to escape the one that
+    /// misfired. They live in `UserDefaults` rather than in the Ghostty
+    /// config, because an unrecognised key in `gui-settings` makes the core
+    /// raise a configuration error at the user.
+    static let closesBracketsKey = "EditorClosesBrackets"
+    static let closesQuotesKey = "EditorClosesQuotes"
+    static let closesTagsKey = "EditorClosesTags"
+
     static let defaultFontSize = 12.0
     static let defaultTabWidth = 4
 

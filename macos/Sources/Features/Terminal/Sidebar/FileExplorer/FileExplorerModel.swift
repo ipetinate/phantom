@@ -114,14 +114,27 @@ final class FileExplorerModel: ObservableObject {
     /// find what you meant, few enough that the list stays a list.
     private static let matchLimit = 300
 
-    @Published var showHiddenFiles: Bool = UserDefaults.standard.bool(forKey: showHiddenKey) {
+    @Published var showHiddenFiles: Bool = storedShowHidden {
         didSet {
             guard showHiddenFiles != oldValue else { return }
             UserDefaults.standard.set(showHiddenFiles, forKey: Self.showHiddenKey)
+            listingGeneration += 1
             children.removeAll()
+            loading.removeAll()
             reloadVisible()
         }
     }
+
+    /// Bumped whenever what a listing *means* changes — which is only the
+    /// toggle above.
+    ///
+    /// A scan runs off the main actor against the flag as it was when the
+    /// scan started, and `load(_:)` refuses to start a second one for a
+    /// directory already in flight. Flipping the toggle while any listing
+    /// was in the air therefore used to land the old answer on top of the
+    /// new one and leave the tree looking like the toggle did nothing.
+    /// Results stamped with a stale generation are dropped instead.
+    private var listingGeneration = 0
 
     @Published var rootMode: WorkspaceRootMode = .stored {
         didSet {
@@ -136,6 +149,24 @@ final class FileExplorerModel: ObservableObject {
     var onRootModeChanged: (() -> Void)?
 
     static let showHiddenKey = "FileExplorerShowHiddenFiles"
+
+    /// The toggle's starting value: whatever the reader last chose, or the
+    /// default when they never chose.
+    private static var storedShowHidden: Bool {
+        showHidden(stored: UserDefaults.standard.object(forKey: showHiddenKey))
+    }
+
+    /// Turns the stored preference into the toggle's value.
+    ///
+    /// Dotfiles are half of what a project gets opened to edit — `.github`,
+    /// `.env`, `.gitignore`, `.eslintrc` — so a tree aimed at developers
+    /// shows them until it is told not to. Reading `bool(forKey:)` is what
+    /// kept them hidden: it answers false for a key nobody has ever
+    /// written, so "never asked" and "turned off" arrived here as the same
+    /// answer. The stored *object* is the only thing that tells them apart.
+    nonisolated static func showHidden(stored: Any?) -> Bool {
+        stored as? Bool ?? true
+    }
 
     /// Directory path → its children. Absent means "not loaded yet".
     private var children: [String: [FileNode]] = [:]
@@ -464,11 +495,12 @@ final class FileExplorerModel: ObservableObject {
 
         let url = URL(fileURLWithPath: path, isDirectory: true)
         let includeHidden = showHiddenFiles
+        let generation = listingGeneration
 
         Task.detached(priority: .utility) {
             let scanned = Self.scan(directory: url, showHidden: includeHidden)
             await MainActor.run { [weak self] in
-                guard let self else { return }
+                guard let self, generation == self.listingGeneration else { return }
                 self.loading.remove(path)
                 self.children[path] = scanned
                 self.rebuildRows()
@@ -481,21 +513,30 @@ final class FileExplorerModel: ObservableObject {
     /// actor; returns an empty list for anything unreadable rather than
     /// surfacing an error, since a permission-denied folder is a normal
     /// thing to scroll past.
+    ///
+    /// Enumerated without `.skipsHiddenFiles` in either state: that option
+    /// folds two unrelated notions of hidden into one answer — the dot
+    /// prefix and the `.hidden` resource value — and they want different
+    /// ones here. See `isBookkeeping(name:isHidden:)`.
     nonisolated static func scan(directory: URL, showHidden: Bool) -> [FileNode] {
-        let keys: [URLResourceKey] = [.isDirectoryKey, .nameKey]
-        let options: FileManager.DirectoryEnumerationOptions = showHidden ? [] : [.skipsHiddenFiles]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey, .nameKey]
 
         let entries = (try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: keys,
-            options: options
+            options: []
         )) ?? []
 
-        let nodes = entries.map { url -> FileNode in
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+        let nodes = entries.compactMap { url -> FileNode? in
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isHiddenKey])
+            let name = url.lastPathComponent
+
+            guard !isBookkeeping(name: name, isHidden: values?.isHidden ?? false) else { return nil }
+            guard showHidden || !name.hasPrefix(".") else { return nil }
+
             return FileNode(
                 url: url,
-                name: url.lastPathComponent,
+                name: name,
                 isDirectory: values?.isDirectory ?? false
             )
         }
@@ -503,9 +544,42 @@ final class FileExplorerModel: ObservableObject {
         return sorted(nodes)
     }
 
+    /// Whether an entry is the filesystem's own bookkeeping rather than
+    /// something a person would ever open. Never listed, in either state.
+    ///
+    /// Two kinds. Names macOS writes and rewrites on its own — `.DS_Store`
+    /// above all, which changes whenever a Finder window is scrolled or
+    /// resized and would wake the directory watcher for nothing.
+    ///
+    /// And the second notion of hidden: the `.hidden` resource value, which
+    /// is what Finder sets on a file marked invisible and what macOS sets on
+    /// `/usr` and friends. A dot prefix is the only kind of hidden the
+    /// toggle speaks for, because inside a project the flag never lands on
+    /// anything a reader wants — the `Icon\r` a custom folder icon leaves
+    /// behind is the whole population.
+    nonisolated static func isBookkeeping(name: String, isHidden: Bool) -> Bool {
+        if bookkeepingNames.contains(name) { return true }
+        return isHidden && !name.hasPrefix(".")
+    }
+
+    /// Names macOS maintains for itself. The volume-root entries only ever
+    /// show up when the tree is rooted at a disk, but they are the same kind
+    /// of thing as `.DS_Store` and nobody edits them either.
+    nonisolated static let bookkeepingNames: Set<String> = [
+        ".DS_Store", ".localized", "Icon\r",
+        ".Spotlight-V100", ".Trashes", ".fseventsd",
+        ".TemporaryItems", ".DocumentRevisions-V100", ".apdisk",
+    ]
+
     /// Directories first, then case-insensitive by name — the ordering
     /// every file explorer uses, and the one that makes a project's shape
     /// readable at a glance.
+    ///
+    /// Dot-names need no rule of their own: the collation already sorts a
+    /// leading dot ahead of every letter, so `.github` heads the folders and
+    /// `.env` heads the files, each group alphabetical within itself. That
+    /// is where the other developer tools put them, and it beats the
+    /// alternative of scattering `.eslintrc` between `dist` and `foo`.
     nonisolated static func sorted(_ nodes: [FileNode]) -> [FileNode] {
         nodes.sorted { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
@@ -583,10 +657,20 @@ final class FileExplorerModel: ObservableObject {
     }
 
     /// Directories a filename search has no business walking into.
+    ///
+    /// The dot-named ones carry more weight than they used to. A search
+    /// scans with the same hidden-files answer the tree is showing, and that
+    /// answer is now yes by default — so every cache a toolchain hides
+    /// behind a dot went from unreachable to on the path, and one of them
+    /// holds enough files to spend the whole result cap before the search
+    /// reaches the source.
     nonisolated static let skippedDirectories: Set<String> = [
         ".git", "node_modules", ".build", "zig-out", ".zig-cache",
         "DerivedData", ".next", "dist", "build", "Pods", ".venv",
         "__pycache__", ".gradle", "target",
+        ".cache", ".turbo", ".parcel-cache", ".nx", ".yarn", ".pnpm-store",
+        ".svelte-kit", ".nuxt", ".angular", ".terraform",
+        ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
     ]
 
     private func rebuildRows() {

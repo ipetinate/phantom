@@ -34,6 +34,13 @@ struct LSPServerOverride: Codable, Equatable {
 /// above it that a user's own choices go through — the registry is the
 /// default, this is the override, and `LSPCenter.effectiveDefinition`
 /// merges them.
+///
+/// The other store of user decisions about servers, `LanguageTrustStore`,
+/// is keyed by **extension id** instead, and the difference is not an
+/// accident: "point this at a different binary" is a fact about a binary
+/// that four language ids share, while "I approved this publisher's code"
+/// is a fact about the extension that shipped it. Whoever is tempted to
+/// unify the two keys should read both comments first.
 enum LSPServerOverrideStore {
     static let defaultsKey = "LSPServerOverrides"
 

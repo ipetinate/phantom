@@ -121,17 +121,36 @@ struct UntrustedURL: Equatable {
 
         // Escaping happens after normalization so any unsafe scalar that
         // remains is visible as text and cannot create a second display line.
+        return Self.escapingUnsafeScalars(normalized)
+    }
+
+    /// Rewrites every scalar that could reorder, hide, or add a line to
+    /// displayed text as its own escape.
+    ///
+    /// Extracted from `displayString` so that strings which are not URLs can
+    /// be escaped by the same rule rather than by a second copy of it. The
+    /// rule is the security boundary for anything an untrusted source gets
+    /// to put in front of the user — a `U+202E` in a name, a newline in a
+    /// hint — and a confirmation dialog that escapes its target but not the
+    /// prose around it displays one thing while approving another.
+    static func escapingUnsafeScalars(_ raw: String) -> String {
         var result = String()
-        result.reserveCapacity(normalized.count)
-        for scalar in normalized.unicodeScalars {
-            if Self.isUnsafeCharacter(scalar) {
+        result.reserveCapacity(raw.count)
+        for scalar in raw.unicodeScalars {
+            if isUnsafeDisplayScalar(scalar) {
                 result += "\\u{\(String(scalar.value, radix: 16, uppercase: true))}"
             } else {
                 result.unicodeScalars.append(scalar)
             }
         }
-
         return result
+    }
+
+    /// Whether a scalar is one of those. Exposed under a name that says
+    /// *display*, because that is what the set is chosen for: these are the
+    /// scalars whose rendering does not match their bytes.
+    static func isUnsafeDisplayScalar(_ scalar: Unicode.Scalar) -> Bool {
+        isUnsafeCharacter(scalar)
     }
 }
 

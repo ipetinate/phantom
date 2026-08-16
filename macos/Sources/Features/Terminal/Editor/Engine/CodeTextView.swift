@@ -33,7 +33,18 @@ struct CodeTextView: NSViewRepresentable {
     /// `text` when this changes and at no other time.
     let textRevision: Int
 
-    let language: CodeLanguage
+    /// How this file is lexed, base language included.
+    ///
+    /// Not a bare `CodeLanguage`: a language an extension contributed has no
+    /// case of its own, and passing only the base is what left such a file
+    /// with a server but no colour.
+    let syntax: LanguageSyntax
+
+    /// Which markup this file is. Beside `language` rather than inside the
+    /// configuration, because it describes the file and not the editor — see
+    /// `CodeNSTextView.tagDialect`.
+    var tagDialect: CodeTagDialect = .none
+
     let theme: CodeTheme
     let configuration: CodeEditorConfiguration
 
@@ -54,8 +65,25 @@ struct CodeTextView: NSViewRepresentable {
     /// Asked what to say when the pointer rests on an offset.
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
 
-    /// Asked for the words to offer at an offset, for the completion list.
-    var completionProvider: ((Int) async -> [String])?
+    /// Asked what to offer at an offset, for the completion list.
+    var completionProvider: ((Int) async -> CodeCompletionAnswer)?
+
+    /// Asked to describe the highlighted row, for the documentation card.
+    ///
+    /// Separate from `completionProvider` because it is a second question
+    /// asked about one row rather than more of the first answer: servers
+    /// routinely withhold documentation from the list and only supply it when
+    /// asked about a specific item, which is a request per selection change
+    /// rather than per keystroke.
+    var completionDocProvider: ((CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome)?
+
+    /// Whether a row gets an info glyph. See `CodeNSTextView` for why this is
+    /// the host's question and not the item's.
+    var completionOffersDocumentation: ((CodeCompletionItem) -> Bool)?
+
+    /// The icon column's glyph font, as a value — the engine may not reach
+    /// into the bundle to find it.
+    var completionIconFont: NSFont?
 
     /// A range to select and scroll into view once. Carries an identity so
     /// the same range asked for twice still moves the view — jumping to a
@@ -79,7 +107,7 @@ struct CodeTextView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             storage: CodeTextStorage(
-                language: language,
+                syntax: syntax,
                 theme: theme,
                 configuration: configuration
             ),
@@ -211,6 +239,9 @@ struct CodeTextView: NSViewRepresentable {
         textView.onJumpToDefinition = onJumpToDefinition
         textView.hoverProvider = hoverProvider
         textView.completionProvider = completionProvider
+        textView.completionDocProvider = completionDocProvider
+        textView.completionOffersDocumentation = completionOffersDocumentation
+        textView.completionIconFont = completionIconFont
 
         context.coordinator.textView = textView
         context.coordinator.gutter = gutter
@@ -226,7 +257,11 @@ struct CodeTextView: NSViewRepresentable {
         )
 
         context.coordinator.applyIfNewRevision(text: text, revision: textRevision)
-        context.coordinator.applyAppearance(theme: theme, configuration: configuration)
+        context.coordinator.applyAppearance(
+            theme: theme,
+            configuration: configuration,
+            dialect: tagDialect
+        )
 
         return container
     }
@@ -249,11 +284,18 @@ struct CodeTextView: NSViewRepresentable {
             code.onJumpToDefinition = onJumpToDefinition
             code.hoverProvider = hoverProvider
             code.completionProvider = completionProvider
+            code.completionDocProvider = completionDocProvider
+            code.completionOffersDocumentation = completionOffersDocumentation
+            code.completionIconFont = completionIconFont
         }
         context.coordinator.applyUnderlines(underlines)
 
-        context.coordinator.storage.setLanguage(language)
-        context.coordinator.applyAppearance(theme: theme, configuration: configuration)
+        context.coordinator.storage.setSyntax(syntax)
+        context.coordinator.applyAppearance(
+            theme: theme,
+            configuration: configuration,
+            dialect: tagDialect
+        )
         scrollView.hasHorizontalScroller = !configuration.wrapsLines
 
         // Applied when the *host* replaced the text, never because the two
@@ -455,7 +497,7 @@ struct CodeTextView: NSViewRepresentable {
             let text = textStorage.string as NSString
             // The tokens the highlighter already produced, so a brace inside
             // a string or a comment doesn't open a level that never closes.
-            let skipped = SyntaxHighlighter(language: storage.language)
+            let skipped = SyntaxHighlighter(syntax: storage.syntax)
                 .tokens(in: textStorage.string, range: region)
                 .filter { $0.kind == .string || $0.kind == .comment }
                 .map(\.range)
@@ -506,6 +548,7 @@ struct CodeTextView: NSViewRepresentable {
         /// on demand. Debounced: a flick of the wheel is one destination,
         /// not forty.
         @objc func scrolled() {
+            snapOutOfTheLeftMargin()
             guard highlightsOnDemand else { return }
             highlightTask?.cancel()
             highlightTask = Task { [weak self] in
@@ -513,6 +556,47 @@ struct CodeTextView: NSViewRepresentable {
                 guard !Task.isCancelled else { return }
                 self?.highlightVisibleRegion()
             }
+        }
+
+        /// Puts the text back against the left edge when something has left it
+        /// scrolled into its own margin.
+        ///
+        /// Entering native fullscreen does exactly that: the clip view comes
+        /// back with `bounds.origin.x == 9` — the text container inset plus the
+        /// container's line fragment padding — while the text view's frame, the
+        /// container, the insets and the viewport all read identically to the
+        /// windowed layout. Measured, not inferred; that one number was the
+        /// whole difference. The first character of every line is then drawn
+        /// left of what the clip shows, and it survives leaving fullscreen,
+        /// because nothing lays the view out again until the tab is switched —
+        /// which is why switching tabs appeared to "fix" it.
+        ///
+        /// Snapping is a correction rather than a preference: there is no text
+        /// to the left of the first glyph, so any offset inside the margin
+        /// hides a column and reveals nothing. Real horizontal scrolling starts
+        /// past the margin and is left alone. The cost is that dragging the
+        /// scroller through those few points settles at zero instead of inside
+        /// them, which is the same thing the reader wanted anyway.
+        private func snapOutOfTheLeftMargin() {
+            guard let textView,
+                  let scrollView = textView.enclosingScrollView,
+                  let container = textView.textContainer
+            else { return }
+            let clipView = scrollView.contentView
+            guard let corrected = Self.horizontalSnap(
+                offset: clipView.bounds.origin.x,
+                margin: textView.textContainerInset.width + container.lineFragmentPadding
+            ) else { return }
+
+            clipView.scroll(to: NSPoint(x: corrected, y: clipView.bounds.origin.y))
+            scrollView.reflectScrolledClipView(clipView)
+        }
+
+        /// Where a horizontal offset inside the left margin should go, or nil
+        /// when the offset is a real scroll position and must not be touched.
+        static func horizontalSnap(offset: CGFloat, margin: CGFloat) -> CGFloat? {
+            guard offset > 0, offset <= margin else { return nil }
+            return 0
         }
 
         /// Rebuilds the minimap shortly, rather than now.
@@ -541,7 +625,7 @@ struct CodeTextView: NSViewRepresentable {
         func refreshMinimap() {
             guard let minimap, minimap.isHidden == false, let textView else { return }
             let text = textView.string
-            let tokens = SyntaxHighlighter(language: storage.language)
+            let tokens = SyntaxHighlighter(syntax: storage.syntax)
                 .tokens(in: text, range: NSRange(location: 0, length: (text as NSString).length))
             minimap.setRows(CodeMinimapView.rows(for: text, tokens: tokens))
         }
@@ -624,7 +708,11 @@ struct CodeTextView: NSViewRepresentable {
             storage.endEditing()
         }
 
-        func applyAppearance(theme: CodeTheme, configuration: CodeEditorConfiguration) {
+        func applyAppearance(
+            theme: CodeTheme,
+            configuration: CodeEditorConfiguration,
+            dialect: CodeTagDialect
+        ) {
             guard let textView else { return }
 
             // Nothing to do unless the look actually changed.
@@ -669,9 +757,27 @@ struct CodeTextView: NSViewRepresentable {
             // the file's language, so it has to be told both. Outside the
             // guard for the same reason as the two above: a card built with a
             // stale theme is a card in the wrong colours.
+            //
+            // The auto-closing switches are here rather than below for a
+            // different reason, and it is worth stating because inside the
+            // guard they would appear to work. `unchanged` compares the whole
+            // configuration, so toggling one of these *is* a change and would
+            // pass — right up until someone adds a field that changes for an
+            // unrelated reason and starts absorbing the comparison. Then a
+            // switch silently stops taking effect until the file is reopened,
+            // which is precisely the bug `showsMinimap` above documents.
+            // Behaviour that decides what gets typed does not belong behind a
+            // guard about what gets drawn.
             if let code = textView as? CodeNSTextView {
                 code.hoverTheme = theme
                 code.hoverLanguage = storage.language
+                code.closesBrackets = configuration.closesBrackets
+                code.closesQuotes = configuration.closesQuotes
+                code.closesTags = configuration.closesTags
+                code.tagDialect = dialect
+                code.completionEnabled = configuration.completionEnabled
+                code.completesFromBuffer = configuration.completesFromBuffer
+                code.completionFetchDelay = configuration.completionFetchDelay
             }
 
             // Everything below rewrites attributes or re-lays out the document,
@@ -770,6 +876,10 @@ struct CodeTextView: NSViewRepresentable {
         /// the insertion point" can disagree, and the insertion point is the
         /// thing the reader sees. Where the caret is drawn is, by definition,
         /// where the band belongs.
+        ///
+        /// That rect is only the truth once the caret's line has been laid
+        /// out — see `layOutAroundCaret`, which is why the caret is measured
+        /// and not guessed at.
         func updateCurrentLineBand() {
             guard let band = currentLineBand, let textView else { return }
             let selection = textView.selectedRange()
@@ -782,22 +892,125 @@ struct CodeTextView: NSViewRepresentable {
                 return
             }
 
+            Self.layOutAroundCaret(in: textView, caret: selection.location)
+
             // Screen → window → clip view, the same trip `reveal` makes.
             let onScreen = textView.firstRect(forCharacterRange: selection, actualRange: nil)
-            guard onScreen.height > 0 else {
+            let inClip: NSRect
+            if onScreen.height > 0 {
+                inClip = clipView.convert(window.convertFromScreen(onScreen), from: nil)
+            } else if let laidOut = Self.caretRectInView(of: textView, caret: selection.location) {
+                inClip = clipView.convert(laidOut, from: textView)
+            } else {
                 band.isHidden = true
                 return
             }
-            let inClip = clipView.convert(window.convertFromScreen(onScreen), from: nil)
 
             band.layer?.backgroundColor = color.cgColor
-            band.frame = NSRect(
-                x: 0,
-                y: inClip.minY,
-                width: max(textView.bounds.width, clipView.bounds.width),
-                height: inClip.height
+            band.frame = Self.bandFrame(
+                caret: inClip,
+                documentWidth: textView.bounds.width,
+                clipWidth: clipView.bounds.width
             )
             band.isHidden = false
+        }
+
+        /// Lays out the caret's surroundings before anyone asks where the
+        /// caret is.
+        ///
+        /// TextKit 2 answers a geometry question inside an *invalidated* range
+        /// with an estimate — a position interpolated across the range —
+        /// rather than by laying the range out. The estimate barely moves
+        /// while the caret does, so the band fell a line further behind on
+        /// every Enter: not one stale measurement but a guess that never
+        /// catches up. Editing alone does not cause this. Re-colouring does:
+        /// `textDidChange` rewrites the attributes around the edit — over a
+        /// range that reaches thousands of characters *above* it, see
+        /// `CodeTextStorage.invalidationRange` — and the band is measured
+        /// directly afterwards.
+        ///
+        /// **Bounded, and no wider than it has to be.** Two narrower ranges
+        /// were tried on screen and rejected by what they drew. The caret's
+        /// own line alone leaves the bug exactly as it was — the band moves
+        /// 12px on the first Enter and then stops, which is the original
+        /// symptom — because the estimate is anchored *above* the caret and
+        /// laying out one line inside an invalid region does not make that
+        /// anchor real. Ensuring from the start of the document instead does
+        /// fix it, and costs 2.5 ms per keystroke at 5 000 lines and 10 ms at
+        /// 20 000 — measured, linear in the file, on a path that runs twice
+        /// per keystroke. So the range is the one that made the layout
+        /// invalid in the first place: the same window `highlight` was handed,
+        /// clipped to end at the caret. Its width is a constant, so the cost
+        /// is flat in the size of the file, and it reaches the last fragment
+        /// the re-colouring left alone — which is the anchor the caret's
+        /// position is measured from. Anything wider needs a measurement
+        /// before it goes in, and anything narrower needs the screenshots.
+        private static func layOutAroundCaret(in textView: NSTextView, caret: Int) {
+            guard let layout = textView.textLayoutManager,
+                  let content = layout.textContentManager
+            else { return }
+            let text = textView.string as NSString
+            let line = text.paragraphRange(
+                for: NSRange(location: min(caret, text.length), length: 0)
+            )
+            let invalidated = CodeTextStorage.invalidationRange(for: line, in: text)
+            let start = content.documentRange.location
+            guard let from = content.location(start, offsetBy: invalidated.location),
+                  let to = content.location(start, offsetBy: line.location + line.length),
+                  let range = NSTextRange(location: from, end: to)
+            else { return }
+            layout.ensureLayout(for: range)
+        }
+
+        /// Where the caret is, asked of the layout manager instead of the view.
+        ///
+        /// `firstRect(forCharacterRange:)` returns nothing for an empty range
+        /// at the very end of the document — and a file that ends in a newline
+        /// shows one more line than it has text for, so that position is the
+        /// last line of nearly every file in this repo. The band was hidden
+        /// there, on the one line a reader is most likely to be sitting on
+        /// while typing at the end of a file. The layout manager does answer:
+        /// it reports a segment for that position, in the text container's
+        /// space, which `textContainerOrigin` puts back in the view's.
+        ///
+        /// Consulted **only** when the view has already declined, so the rule
+        /// the doc comment above records — the band follows the caret's own
+        /// rect, never a fragment lookup — still decides every line that has
+        /// text on it.
+        private static func caretRectInView(of textView: NSTextView, caret: Int) -> NSRect? {
+            guard let layout = textView.textLayoutManager,
+                  let content = layout.textContentManager,
+                  let location = content.location(content.documentRange.location, offsetBy: caret),
+                  let empty = NSTextRange(location: location, end: location)
+            else { return nil }
+
+            var caretFrame: NSRect?
+            layout.enumerateTextSegments(in: empty, type: .standard) { _, frame, _, _ in
+                caretFrame = frame
+                return false
+            }
+            guard let caretFrame, caretFrame.height > 0 else { return nil }
+
+            let origin = textView.textContainerOrigin
+            return caretFrame.offsetBy(dx: origin.x, dy: origin.y)
+        }
+
+        /// The band's frame in the clip view, given where the caret is in it.
+        ///
+        /// Full width, and the wider of the two on purpose: the document is
+        /// only as wide as its longest line, so a band that stopped there
+        /// would stop mid-viewport on a file of short lines.
+        static func bandFrame(
+            caret: NSRect,
+            documentWidth: CGFloat,
+            clipWidth: CGFloat
+        ) -> NSRect {
+            NSRect(
+                x: 0,
+                y: caret.minY,
+                width: max(documentWidth, clipWidth),
+                height: caret.height
+            )
         }
 
         /// The one-based line the insertion point is on.
@@ -893,16 +1106,84 @@ final class CodeNSTextView: NSTextView {
     var onFormat: (() -> Void)?
     var onJumpToDefinition: ((Int) -> Void)?
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
-    var completionProvider: ((Int) async -> [String])?
+    var completionProvider: ((Int) async -> CodeCompletionAnswer)?
+    var completionDocProvider: ((CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome)?
 
-    /// The last answer from `completionProvider`.
+    /// Whether a row is worth offering an info glyph on.
     ///
-    /// AppKit asks for completions **synchronously**, and a language server
-    /// answers over a pipe. The only way to bridge the two is to fetch
-    /// first and open the list afterwards, serving it from here — which is
-    /// what `complete(_:)` below does.
-    private var pendingCompletions: [String] = []
-    private var isFetchingCompletions = false
+    /// Asked of the host because the honest answer is about the *server* — it
+    /// is "this row can be asked about", not "this row has prose", and for
+    /// most servers the prose does not exist until a second request has been
+    /// made. The engine is not allowed to know that a second request is a
+    /// thing, so the host collapses what it knows into a yes or a no.
+    var completionOffersDocumentation: ((CodeCompletionItem) -> Bool)?
+
+    /// The glyph font for the icon column, handed in as a value.
+    ///
+    /// The engine cannot go and find it: it is a resource in the app bundle,
+    /// and reaching `Bundle.main` from here is the dependency this whole side
+    /// of the code is arranged to avoid. Nil is a supported state — the list
+    /// falls back to system symbols, so a font that failed to register costs
+    /// prettier icons and nothing else.
+    var completionIconFont: NSFont?
+
+    /// The card beside the list, and the request behind it.
+    private var documentationPanel: CodeCompletionDocPanel?
+    private var documentationState: CodeCompletionDocPanel.State = .hidden
+    private var documentationTask: Task<Void, Never>?
+
+    /// Whether the reader has asked for the card. Separate from the panel's
+    /// own visibility because the card is legitimately empty for a server
+    /// that answers no documentation, and "asked for and empty" has to
+    /// survive the selection moving to a row that does have some.
+    private var isShowingDocumentation = false
+
+    /// How long the caret rests before the list asks for suggestions.
+    ///
+    /// A `var` for the same reason `hoverFetchDelay` is one: a timing test
+    /// has to be able to state its own ratio rather than bet that a fixed
+    /// value stays comfortably larger than a sleep on a machine running the
+    /// rest of the suite in parallel.
+    ///
+    /// 120ms sits under the ~150ms where a suggestion starts reading as late,
+    /// and above one keystroke interval for a fast typist — so a burst
+    /// coalesces into one request instead of one per character. An explicit
+    /// request and a trigger character both skip it: each is already a pause.
+    var completionFetchDelay: Duration = .milliseconds(120)
+
+    /// How many identifier characters open the list on their own.
+    ///
+    /// One, matching VS Code, and chosen deliberately over the safer two: at
+    /// a single character the list is large, so the *ordering* is the entire
+    /// experience. That is why `CodeCompletionFilter` scores a word-boundary
+    /// match so highly and handicaps buffer words against server answers.
+    var completionMinimumPrefix = 1
+
+    /// Trigger characters the server advertised — `.` almost everywhere,
+    /// plus `"`, `'`, `/`, `@` and `<` for TypeScript.
+    ///
+    /// Supplied as a value rather than hardcoded, because it is a fact about
+    /// the language server and the engine is not allowed to know which one is
+    /// running. The default keeps the dot working when nothing supplies it.
+    var completionTriggers: Set<Character> = ["."]
+
+    /// The list currently on screen, if any.
+    private var completionSession: CompletionSession?
+
+    /// Built on first use and kept, so a burst of typing reuses one window
+    /// rather than making and destroying one per keystroke.
+    private(set) var completionPanel: CodeCompletionPanel?
+
+    /// The in-flight fetch. Cancelled on every new one, rather than dropped —
+    /// dropping the *new* request is what the version this replaces did, and
+    /// it meant the answer on screen was always the one for a prefix the
+    /// reader had already moved past.
+    private var completionTask: Task<Void, Never>?
+
+    /// Bumped by every open and every close, so an answer that arrives after
+    /// the world moved can be recognised and discarded. The caret alone is
+    /// not enough: it can return to where it was.
+    private var completionGeneration = 0
 
     /// The offset the pointer last rested on, so the card describes what is
     /// under it rather than what the cursor happens to be near.
@@ -940,6 +1221,35 @@ final class CodeNSTextView: NSTextView {
     /// that knows the file's colours and language.
     var hoverTheme: CodeTheme = .fallback
     var hoverLanguage: CodeLanguage = .plain
+
+    /// The three auto-closing switches, mirrored from the configuration.
+    ///
+    /// Held here rather than read from a shared configuration because this is
+    /// the object the keystroke arrives at, and the answer has to be one
+    /// property load: the alternative is asking the coordinator on every
+    /// character typed.
+    var closesBrackets = true
+    var closesQuotes = true
+    var closesTags = true
+
+    /// Whether the list may open at all, and whether buffer words join the
+    /// server's answer. Mirrored from the configuration — see
+    /// `CodeEditorConfiguration` for why they are two switches and not one.
+    var completionEnabled = true
+    var completesFromBuffer = true
+
+    /// Which markup this file is, which the language cannot answer.
+    ///
+    /// `.ts` and `.tsx` are one `CodeLanguage`, and that is right for lexing
+    /// and wrong here: JSX is legal in one and a syntax error in the other,
+    /// so `<` means a tag in the first and only ever a generic in the second.
+    /// Kept beside the language rather than inside `CodeEditorConfiguration`
+    /// because it is a fact about the *file* and not a preference about the
+    /// editor — and because the configuration is what the appearance pass
+    /// compares to decide whether anything changed. A field that differs for
+    /// every tab would make that comparison always fail, which is how the
+    /// whole document ends up being re-coloured on each switch.
+    var tagDialect: CodeTagDialect = .none
 
     /// Whether a click means "go to the definition" rather than "put the
     /// cursor here".
@@ -1200,50 +1510,629 @@ final class CodeNSTextView: NSTextView {
         super.keyDown(with: event)
     }
 
-    /// Fetches, then opens the list.
+    /// One open completion list.
     ///
-    /// Re-entrant by design: the first call fetches and returns without a
-    /// popup, then calls itself once the answer is in. The flag is what
-    /// stops that second call from starting another fetch and never
-    /// showing anything.
+    /// `prefix` is the range the list was built for, and it is what makes
+    /// deleting a character a *refilter* rather than a close: the list stays
+    /// while the caret is still inside the word it opened on, and closes when
+    /// the word empties or the caret leaves. `CodeCompletionTrigger.decide`
+    /// deliberately cannot make that call — a single typed character does not
+    /// say which range the list on screen belongs to.
+    struct CompletionSession {
+        var prefix: NSRange
+        var items: [CodeCompletionItem]
+        var selection: Int
+    }
+
+    /// Asked for on purpose — ⌃Space, and `cancelOperation:` (AppKit binds
+    /// Escape to it, which is why Escape has always opened this list).
+    ///
+    /// Unlike a typed character this ignores both the delay and the minimum
+    /// prefix: someone who asks explicitly has already paused, and asking
+    /// inside a string is a request rather than an accident.
     override func complete(_ sender: Any?) {
-        guard let completionProvider, !isFetchingCompletions else {
-            super.complete(sender)
+        requestCompletions(explicitly: true)
+    }
+
+    /// Every printable character, funnelled from `insertText` so the four
+    /// auto-closing early returns cannot skip it.
+    func completionDidType(_ typed: Character) {
+        let isTrigger = completionTriggers.contains(typed)
+        let decision = completionDecision(typed: typed)
+
+        switch decision {
+        case .close:
+            dismissCompletions()
+        case .ignore:
+            break
+        case .open, .refilter:
+            requestCompletions(explicitly: false, immediate: isTrigger)
+        }
+    }
+
+    /// Backspace, funnelled the same way.
+    ///
+    /// Refilters rather than closing, which is what VS Code does and what
+    /// makes the list usable while correcting a typo. The list survives only
+    /// while the caret is still inside the word it opened on; `prefixRange`
+    /// returning something shorter is a narrowing, and returning nothing at
+    /// all is the word being gone.
+    func completionDidDelete() {
+        guard completionSession != nil else { return }
+        guard case .refilter = completionDecision(typed: nil) else {
+            dismissCompletions()
             return
         }
+        requestCompletions(explicitly: false, immediate: true)
+    }
 
-        isFetchingCompletions = true
+    /// Which language the caret's line is actually written in.
+    ///
+    /// A container language answers nothing useful about a single line, and
+    /// that was a real bug rather than a hypothetical one: `.vue` routes to
+    /// `SFCRegions`, which needs the whole document to find `^<script>` and
+    /// `^</script>`, so a lone line came back with **no tokens at all** and
+    /// the caller's string-and-comment suppression silently never fired in a
+    /// Vue file. Measured — the same line yields `[keyword, string]` as
+    /// `.javascript` and `[]` as `.vue`.
+    ///
+    /// The obvious repair is to hand over the whole document and scope the
+    /// range to the line, and that is correct and unaffordable: 2.7 ms per
+    /// keystroke on a 5000-line component, growing linearly with the file,
+    /// because `SFCRegions` compiles three expressions and scans everything
+    /// three times per call with no cache. Resolving the language instead
+    /// costs a bounded backwards literal search and leaves the tokenizing
+    /// scoped to one line, which is ~12 µs.
+    ///
+    /// Only a container needs resolving. Everything else — including `.jsx`,
+    /// which is JavaScript that happens to carry tags — is already the
+    /// language its lines are written in.
+    static func effectiveLanguage(
+        _ language: CodeLanguage,
+        in content: NSString,
+        at caret: Int,
+        dialect: CodeTagDialect
+    ) -> CodeLanguage {
+        guard language == .vue else { return language }
+        return CodeTagClose.isInMarkup(content, caret: caret, dialect: dialect) ? .html : .javascript
+    }
+
+    /// The trigger policy, asked over the caret's line only — a per-keystroke
+    /// path cannot afford to tokenize the document to find out whether it is
+    /// inside a string.
+    private func completionDecision(typed: Character?) -> CodeCompletionTrigger.Decision {
+        let content = string as NSString
+        let caret = selectedRange().location
+        let lineRange = content.lineRange(for: NSRange(location: min(caret, content.length), length: 0))
+        let line = content.substring(with: lineRange)
+        let caretInLine = caret - lineRange.location
+
+        let suppressed = SyntaxHighlighter(language: Self.effectiveLanguage(
+            hoverLanguage,
+            in: content,
+            at: caret,
+            dialect: tagDialect
+        ))
+            .tokens(in: line, range: NSRange(location: 0, length: (line as NSString).length))
+            .contains { token in
+                (token.kind == .string || token.kind == .comment)
+                    && NSLocationInRange(max(caretInLine - 1, 0), token.range)
+            }
+
+        let context = CodeCompletionTrigger.Context(
+            line: line,
+            caretInLine: caretInLine,
+            typed: typed,
+            isInStringOrComment: suppressed,
+            triggerCharacters: completionTriggers,
+            minimumPrefix: completionMinimumPrefix)
+
+        return CodeCompletionTrigger.decide(
+            context,
+            isListOpen: completionSession != nil,
+            isExplicit: false)
+    }
+
+    /// Fetches and shows, debounced and cancellable.
+    ///
+    /// The shape is the one `mouseMoved` established for hover — cancel the
+    /// previous task, sleep, check cancellation, await, check again, hop to
+    /// the main actor and re-check that the world has not moved — with one
+    /// addition hover does not need: the buffer moves under a completion, so
+    /// a generation counter guards it as well as the offset.
+    private func requestCompletions(explicitly: Bool, immediate: Bool = false) {
+        guard completionEnabled, let completionProvider else { return }
+
+        completionGeneration += 1
+        let generation = completionGeneration
         let offset = selectedRange().location
-        Task { [weak self] in
-            let words = await completionProvider(offset)
+        let delay = immediate || explicitly ? Duration.zero : completionFetchDelay
+
+        completionTask?.cancel()
+        completionTask = Task { [weak self, delay] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            guard !Task.isCancelled else { return }
+            let answer = await completionProvider(offset)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard let self else { return }
-                self.pendingCompletions = words
-                self.isFetchingCompletions = false
-                guard !words.isEmpty else { return }
-                self.openCompletionList(sender)
+                guard let self, self.completionGeneration == generation else { return }
+
+                /// The one case that must not reach `showCompletions`: it is
+                /// not an answer, so there is nothing to draw and — crucially
+                /// — nothing to clear.
+                guard case .items(let items) = answer else { return }
+                self.showCompletions(items, requestedAt: offset)
             }
         }
     }
 
-    /// Reaches `super.complete` from inside the fetch's closure, which Swift
-    /// will not let a captured `self` do directly.
-    private func openCompletionList(_ sender: Any?) {
-        super.complete(sender)
+    /// Ranks an answer and puts it on screen.
+    private func showCompletions(_ items: [CodeCompletionItem], requestedAt offset: Int) {
+        let content = string as NSString
+        let caret = selectedRange().location
+        let prefix = Self.identifierRange(in: content, endingAt: caret)
+
+        let query = content.substring(with: prefix)
+        let ranked = CodeCompletionFilter.rank(
+            items + bufferWords(matching: query, excluding: prefix, in: content),
+            query: query
+        )
+        guard !ranked.isEmpty else {
+            dismissCompletions()
+            return
+        }
+
+        completionSession = CompletionSession(prefix: prefix, items: ranked, selection: 0)
+
+        /// Anchored on the **start of the word**, not the caret, so the list
+        /// lines up under what is being completed rather than drifting right
+        /// as the reader types. A zero-height rect means TextKit has not laid
+        /// the line out yet, and the panel treats that as "do not show".
+        let anchor = firstRect(
+            forCharacterRange: NSRange(location: prefix.location, length: max(prefix.length, 1)),
+            actualRange: nil)
+
+        let panel = completionPanel ?? makeCompletionPanel()
+        panel.present(
+            ranked,
+            query: query,
+            theme: hoverTheme,
+            font: font ?? .monospacedSystemFont(ofSize: 12, weight: .regular),
+            anchor: anchor,
+            over: self
+        )
     }
 
-    /// Serves what the last fetch returned, narrowed to what is typed.
-    override func completions(
-        forPartialWordRange charRange: NSRange,
-        indexOfSelectedItem index: UnsafeMutablePointer<Int>
-    ) -> [String]? {
-        guard completionProvider != nil else {
-            return super.completions(forPartialWordRange: charRange, indexOfSelectedItem: index)
+    /// Identifiers scraped out of the buffer, offered alongside whatever the
+    /// server said.
+    ///
+    /// Merged on **every** request rather than only when the server answered
+    /// nothing, because the ranking was built for exactly this and has never
+    /// been given it: `CodeCompletionFilter` already handicaps a non-server row
+    /// against a server one, and already drops a scraped word that a server row
+    /// covers. Falling back only on an empty answer would make the feature
+    /// arrive precisely when the editor knows least — a server that is still
+    /// starting, or one that answered for a different position — and vanish
+    /// once it knows more.
+    ///
+    /// What this buys is the language nobody installed a server for. Before it,
+    /// those files offered nothing at all.
+    ///
+    /// **Keywords are not here, and that is a cut rather than an oversight.**
+    /// A built-in language has no keyword *list* — `LanguageSyntax.builtIn`
+    /// carries an empty one and the highlighter matches keywords by pattern —
+    /// so offering them would mean writing fourteen lists beside a table that
+    /// already encodes the same words, and watching the two drift. In a file
+    /// that has used a keyword even once it is already in the buffer and comes
+    /// back through here anyway. A *contributed* language does carry a list,
+    /// and this is where it would attach.
+    private func bufferWords(
+        matching query: String,
+        excluding prefix: NSRange,
+        in content: NSString
+    ) -> [CodeCompletionItem] {
+        guard completesFromBuffer, !query.isEmpty else { return [] }
+
+        return CodeWordIndex.words(
+            in: content,
+            excluding: prefix,
+            matching: query,
+            limit: Self.bufferWordLimit
+        )
+        .map { CodeCompletionItem(kind: .text, label: $0, source: .buffer) }
+    }
+
+    /// Enough to be worth having, few enough that they cannot bury a server's
+    /// answer before the ranking has had a chance to sort them.
+    private static let bufferWordLimit = 50
+
+    /// The tab stops of an insertion the reader is still filling in.
+    ///
+    /// Ranges are absolute buffer offsets rather than offsets into the
+    /// snippet, because the buffer is what everything else here speaks and a
+    /// second coordinate space would have to be converted at every use.
+    private struct SnippetSession {
+        var fields: [NSRange]
+        var active: Int
+        var finalCaret: Int
+    }
+
+    private var snippetSession: SnippetSession?
+
+    /// Inserts a snippet body and leaves the caret on its first stop.
+    ///
+    /// A body with no stops is not a session: there is nothing to Tab through,
+    /// and holding one open would claim Tab from a reader who has finished.
+    private func beginSnippet(_ snippet: CodeSnippet, replacing range: NSRange) {
+        guard shouldChangeText(in: range, replacementString: snippet.text) else { return }
+        textStorage?.replaceCharacters(in: range, with: snippet.text)
+        didChangeText()
+
+        let origin = range.location
+        let inserted = (snippet.text as NSString).length
+        let final = origin + (snippet.finalCaret ?? inserted)
+
+        guard !snippet.fields.isEmpty else {
+            setSelectedRange(NSRange(location: final, length: 0))
+            return
         }
-        let partial = (string as NSString).substring(with: charRange)
-        guard !partial.isEmpty else { return pendingCompletions }
-        return pendingCompletions.filter {
-            $0.range(of: partial, options: [.caseInsensitive, .anchored]) != nil
+
+        snippetSession = SnippetSession(
+            fields: snippet.fields.map {
+                NSRange(location: origin + $0.range.location, length: $0.range.length)
+            },
+            active: 0,
+            finalCaret: final
+        )
+        selectSnippetField()
+    }
+
+    /// Tab and Shift-Tab. Walking off either end finishes rather than wraps —
+    /// wrapping would make the last Tab of a snippet silently reopen it.
+    private func moveSnippetField(by step: Int) {
+        guard let session = snippetSession else { return }
+        let next = session.active + step
+
+        guard session.fields.indices.contains(next) else {
+            let final = session.finalCaret
+            endSnippet()
+            setSelectedRange(NSRange(location: min(final, (string as NSString).length), length: 0))
+            return
+        }
+
+        snippetSession?.active = next
+        selectSnippetField()
+    }
+
+    private func selectSnippetField() {
+        guard let session = snippetSession else { return }
+        let field = session.fields[session.active]
+        let length = (string as NSString).length
+        guard field.location <= length, field.location + field.length <= length else {
+            endSnippet()
+            return
+        }
+        setSelectedRange(field)
+    }
+
+    private func endSnippet() {
+        snippetSession = nil
+    }
+
+    /// The edit about to happen, remembered so the snippet stops can be moved
+    /// by the amount it actually changed.
+    ///
+    /// Captured on the way in because `didChangeText` is told *that* the text
+    /// changed and not what changed — and the delta is the one number the
+    /// field arithmetic needs.
+    private var pendingEdit: (range: NSRange, delta: Int)?
+
+    override func shouldChangeText(in range: NSRange, replacementString: String?) -> Bool {
+        if snippetSession != nil {
+            let inserted = (replacementString as NSString?)?.length ?? 0
+            pendingEdit = (range, inserted - range.length)
+        }
+        return super.shouldChangeText(in: range, replacementString: replacementString)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+
+        guard let session = snippetSession, let edit = pendingEdit else { return }
+        pendingEdit = nil
+
+        /// `nil` means the edit went somewhere the session does not model, and
+        /// the contract there is to **end** rather than to guess. A session
+        /// that survives an edit it did not understand starts moving the wrong
+        /// ranges, and the way that shows up is a later Tab selecting a piece
+        /// of the reader's own code.
+        guard let moved = CodeSnippet.adjust(
+            fields: session.fields,
+            active: session.active,
+            editedRange: edit.range,
+            delta: edit.delta
+        ) else {
+            endSnippet()
+            return
+        }
+
+        snippetSession?.fields = moved
+        snippetSession?.finalCaret = session.finalCaret + edit.delta
+    }
+
+    /// The word the caret sits at the end of.
+    ///
+    /// `$` counts, because it is a legal identifier character in JavaScript
+    /// and TypeScript and dropping it would make `$el` complete as `el`.
+    static func identifierRange(in content: NSString, endingAt caret: Int) -> NSRange {
+        var start = min(max(caret, 0), content.length)
+        while start > 0 {
+            let scalar = UnicodeScalar(content.character(at: start - 1)) ?? " "
+            let character = Character(scalar)
+            guard character.isLetter || character.isNumber || character == "_" || character == "$"
+            else { break }
+            start -= 1
+        }
+        return NSRange(location: start, length: min(max(caret, 0), content.length) - start)
+    }
+
+    private func makeCompletionPanel() -> CodeCompletionPanel {
+        let panel = CodeCompletionPanel()
+        panel.onAccept = { [weak self] item in self?.acceptCompletion(item) }
+        panel.iconFont = completionIconFont
+        panel.offersDocumentation = { [weak self] item in
+            self?.completionOffersDocumentation?(item) ?? false
+        }
+        panel.onInfoClicked = { [weak self] item in self?.toggleDocumentation(for: item) }
+
+        /// Once the card is open it follows the selection, which is what makes
+        /// it worth opening: a card that described the row you clicked and then
+        /// went stale under the arrow keys would have to be closed and reopened
+        /// to be read, and nobody does that twice.
+        panel.onSelectionChange = { [weak self] item in
+            guard let self, self.isShowingDocumentation else { return }
+            guard let item else {
+                self.hideDocumentation()
+                return
+            }
+            self.requestDocumentation(for: item)
+        }
+
+        completionPanel = panel
+        return panel
+    }
+
+    /// The info glyph is a toggle, not a one-way door: it is the same control
+    /// for "show me this" and "that is enough".
+    private func toggleDocumentation(for item: CodeCompletionItem) {
+        if isShowingDocumentation {
+            hideDocumentation()
+        } else {
+            isShowingDocumentation = true
+            requestDocumentation(for: item)
+        }
+    }
+
+    /// Draws what is already known, then asks for the rest.
+    ///
+    /// In that order, and the order is the feature. The row's own detail — a
+    /// type, a module — needs no request at all, so something true about the
+    /// highlighted row is on screen before anything is sent. Arrowing down a
+    /// list therefore never leaves an empty card waiting on a server; the prose
+    /// fills in underneath a signature that was already right.
+    private func requestDocumentation(for item: CodeCompletionItem) {
+        guard isShowingDocumentation, let completionDocProvider else { return }
+
+        documentationState = CodeCompletionDocPanel.state(
+            hasSelection: true,
+            supportsResolve: completionOffersDocumentation?(item) ?? false
+        )
+        presentDocumentation(detail: item.detail)
+
+        documentationTask?.cancel()
+        documentationTask = Task { [weak self] in
+            let outcome = await completionDocProvider(item)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.isShowingDocumentation else { return }
+
+                /// Folded through `state(after:current:)` rather than assigned,
+                /// because a superseded answer has to leave the card alone —
+                /// every request cancels the one before it, so that is the
+                /// answer that arrives most often.
+                self.documentationState = CodeCompletionDocPanel.state(
+                    after: outcome,
+                    current: self.documentationState
+                )
+                self.presentDocumentation(detail: item.detail)
+            }
+        }
+    }
+
+    private func presentDocumentation(detail: String?) {
+        guard let list = completionPanel, list.isVisible else { return }
+
+        let panel = documentationPanel ?? {
+            let made = CodeCompletionDocPanel()
+            documentationPanel = made
+            return made
+        }()
+
+        panel.present(
+            CodeCompletionDocPanel.Content(state: documentationState, detail: detail),
+            theme: hoverTheme,
+            font: font ?? .monospacedSystemFont(ofSize: 12, weight: .regular),
+            language: hoverLanguage,
+            beside: list.frame,
+            over: self
+        )
+    }
+
+    private func hideDocumentation() {
+        isShowingDocumentation = false
+        documentationTask?.cancel()
+        documentationTask = nil
+        documentationState = .hidden
+        documentationPanel?.dismiss()
+    }
+
+    /// Replaces the word being completed with the item's text.
+    ///
+    /// Through `shouldChangeText` and `didChangeText` rather than a bare
+    /// `replaceCharacters`, so undo registers it as one step and the
+    /// delegate fires — which is what tells the language server the buffer
+    /// moved. A raw replacement desynchronises the server silently.
+    private func acceptCompletion(_ item: CodeCompletionItem) {
+        guard let session = completionSession else { return }
+        let range = session.prefix
+        dismissCompletions()
+        endSnippet()
+
+        /// Everything lands inside one undo group, so a single ⌘Z takes back
+        /// the completion *and* the import it dragged in. Two steps would
+        /// leave the reader with an import for a symbol they just removed —
+        /// and they would have to notice that to fix it.
+        undoManager?.beginUndoGrouping()
+        defer { undoManager?.endUndoGrouping() }
+
+        /// The additional edits go in **first, back to front**. Every range
+        /// the server sent is measured against the document as it was, so
+        /// applying them in ascending order invalidates every position after
+        /// the first one. Descending means each edit lands before anything
+        /// that could have moved it — which is also why a server is free to
+        /// send them in any order at all.
+        ///
+        /// The main insertion comes last for the same reason: an import at the
+        /// top of the file would shift the caret's own range out from under it.
+        var caretRange = range
+        for edit in item.additionalEdits.sorted(by: { $0.range.location > $1.range.location }) {
+            guard edit.range.location <= (string as NSString).length else { continue }
+            guard shouldChangeText(in: edit.range, replacementString: edit.newText) else { continue }
+            textStorage?.replaceCharacters(in: edit.range, with: edit.newText)
+            didChangeText()
+
+            if edit.range.location <= caretRange.location {
+                caretRange.location += (edit.newText as NSString).length - edit.range.length
+            }
+        }
+
+        guard item.isSnippet else {
+            guard shouldChangeText(in: caretRange, replacementString: item.insertText) else { return }
+            textStorage?.replaceCharacters(in: caretRange, with: item.insertText)
+            didChangeText()
+            setSelectedRange(NSRange(
+                location: caretRange.location + (item.insertText as NSString).length,
+                length: 0
+            ))
+            return
+        }
+
+        beginSnippet(CodeSnippet.parse(item.insertText), replacing: caretRange)
+    }
+
+    /// Closes the list and invalidates anything still in flight for it.
+    ///
+    /// The card goes with it. It describes a row of this list and there is no
+    /// state in which it is right for one to outlive the other — a card left
+    /// floating over the text after the list closed is a window nothing can
+    /// dismiss.
+    func dismissCompletions() {
+        completionTask?.cancel()
+        completionTask = nil
+        completionSession = nil
+        completionGeneration += 1
+        completionPanel?.dismiss()
+        hideDocumentation()
+    }
+
+    /// Whether a list is open, for the key-handling table.
+    var isCompletionListOpen: Bool { completionSession != nil }
+
+    /// Which keys the open list claims, and — the part that matters — which
+    /// it does not.
+    ///
+    /// Nothing is claimed unless a list is open, which is the whole
+    /// conflict-avoidance strategy: with the list closed every selector falls
+    /// through untouched, so Return still reaches the find bar and Tab still
+    /// indents. Spelled as a static over a `Bool` so the entire keyboard
+    /// contract is testable without a window, an event or a panel.
+    /// What a key does when the list, or a snippet's tab stops, own it.
+    ///
+    /// An enum rather than the nested optional this used to be. Two readings
+    /// of `nil` were already one too many, and the snippet stops add two more
+    /// answers to the same question.
+    enum Claim: Equatable {
+        case move(CodeCompletionPanel.Movement)
+        case accept
+        case dismiss
+
+        /// Tab and Shift-Tab, once an insertion has left placeholders behind.
+        case nextField
+        case previousField
+    }
+
+    /// Which keys are claimed, and — the part that matters — which are not.
+    ///
+    /// **Nothing is claimed unless a list is open or a snippet is in progress.**
+    /// That single rule is the whole conflict-avoidance strategy: with neither
+    /// in play every selector falls through untouched, so Return still reaches
+    /// the find bar and Tab still indents. It is spelled as a static over two
+    /// `Bool`s so the entire keyboard contract can be asserted without a
+    /// window, an event or a panel.
+    ///
+    /// The list wins Tab when both are live, because the reader is looking at
+    /// a list they just opened and the stop they were on will still be there
+    /// afterwards.
+    static func completionCommand(
+        for selector: Selector,
+        isListOpen: Bool,
+        hasSnippetSession: Bool
+    ) -> Claim? {
+        if isListOpen {
+            switch selector {
+            case #selector(NSResponder.moveDown(_:)): return .move(.down)
+            case #selector(NSResponder.moveUp(_:)): return .move(.up)
+            case #selector(NSResponder.scrollPageDown(_:)): return .move(.pageDown)
+            case #selector(NSResponder.scrollPageUp(_:)): return .move(.pageUp)
+            case #selector(NSResponder.insertNewline(_:)),
+                 #selector(NSResponder.insertTab(_:)):
+                return .accept
+            case #selector(NSResponder.cancelOperation(_:)):
+                return .dismiss
+            default: return nil
+            }
+        }
+
+        guard hasSnippetSession else { return nil }
+        switch selector {
+        case #selector(NSResponder.insertTab(_:)): return .nextField
+        case #selector(NSResponder.insertBacktab(_:)): return .previousField
+        case #selector(NSResponder.cancelOperation(_:)): return .dismiss
+        default: return nil
+        }
+    }
+
+    override func doCommand(by selector: Selector) {
+        guard let claim = Self.completionCommand(
+            for: selector,
+            isListOpen: isCompletionListOpen,
+            hasSnippetSession: snippetSession != nil
+        ) else {
+            super.doCommand(by: selector)
+            return
+        }
+
+        switch claim {
+        case .move(let movement):
+            completionPanel?.moveSelection(movement)
+        case .accept:
+            completionPanel?.acceptSelection()
+        case .dismiss:
+            if isCompletionListOpen { dismissCompletions() } else { endSnippet() }
+        case .nextField:
+            moveSnippetField(by: 1)
+        case .previousField:
+            moveSnippetField(by: -1)
         }
     }
 
@@ -1258,9 +2147,102 @@ final class CodeNSTextView: NSTextView {
 
     private static let quoteCharacters: Set<Character> = ["\"", "'", "`"]
 
+    /// Whether auto-closing is switched on for the class this character
+    /// belongs to.
+    ///
+    /// Stepping over an existing closer is gated on the same answer as
+    /// inserting one, and that is a decision rather than an oversight. With
+    /// closing switched off nothing was ever inserted for the reader, so a
+    /// closer sitting after the caret is one they typed on purpose — stepping
+    /// over it would swallow the keystroke that was meant to produce the
+    /// second one.
+    private func closes(_ character: Character) -> Bool {
+        Self.quoteCharacters.contains(character) ? closesQuotes : closesBrackets
+    }
+
     private static func character(in content: NSString, at index: Int) -> Character? {
         guard index >= 0, index < content.length else { return nil }
         return Character(UnicodeScalar(content.character(at: index)) ?? " ")
+    }
+
+    /// Every printable character the reader types arrives here, so this is
+    /// where both features that react to typing hang: auto-closing, and the
+    /// completion list.
+    ///
+    /// They are split into two calls rather than one body for a reason worth
+    /// keeping: the auto-closing half has **four** early returns — a
+    /// non-single-character insert, stepping over an existing closer, a quote
+    /// touching a word, and the pair insertion itself — and a completion hook
+    /// written at the bottom of that body would be skipped by all four. Which
+    /// is to say it would fail on exactly the keystrokes where a bracket or a
+    /// quote was involved, and work everywhere else, which is the shape of bug
+    /// that survives a whole afternoon of testing by hand.
+    ///
+    /// So auto-closing runs first, unconditionally, on its own paths; the
+    /// completion hook runs after, on all of them.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        insertTextClosingBrackets(string, replacementRange: replacementRange)
+
+        /// `last`, not `first`: an input method commits a whole word at once,
+        /// and what the list should react to is the character the caret now
+        /// sits behind.
+        if let typed = (string as? String)?.last {
+            insertTextClosingTags(typed)
+            completionDidType(typed)
+        }
+    }
+
+    /// Closes a markup element once the character that decides it is already
+    /// in the document.
+    ///
+    /// A third call rather than two more branches inside the auto-closing
+    /// body, for two reasons that both point the same way. Neither `>` nor
+    /// `/` is a bracket or a quote, so nothing above ever consumes them —
+    /// they always reach the plain insertion at the bottom, which means this
+    /// runs on a document that already contains the typed character. And that
+    /// is exactly the arrangement `CodeTagClose` wants: it reads the deciding
+    /// character out of the text instead of being told what was typed, so the
+    /// caller and the scanner cannot disagree about what the buffer says.
+    ///
+    /// Keeping them out of that body also keeps its "four early returns"
+    /// warning true, which is the whole reason the completion hook lives in
+    /// the wrapper.
+    private func insertTextClosingTags(_ typed: Character) {
+        guard closesTags else { return }
+
+        let caret = selectedRange().location
+        let content = string as NSString
+
+        let insertion: String?
+        switch typed {
+        case ">":
+            insertion = CodeTagClose.closingTag(in: content, caret: caret, dialect: tagDialect)
+        case "/":
+            insertion = CodeTagClose.closingTagCompletion(in: content, caret: caret, dialect: tagDialect)
+        default:
+            return
+        }
+
+        guard let insertion else { return }
+
+        /// Through the delegate rather than by writing to the storage
+        /// directly: this is what registers a single undo step and what tells
+        /// the host the buffer moved. A raw `replaceCharacters` leaves the
+        /// language server describing a file that no longer exists — the same
+        /// desynchronisation the formatter had.
+        let range = NSRange(location: caret, length: 0)
+        guard shouldChangeText(in: range, replacementString: insertion) else { return }
+        textStorage?.replaceCharacters(in: range, with: insertion)
+        didChangeText()
+
+        /// Typing `>` leaves the caret **between** the two tags, which is
+        /// where the content goes. Completing a `</` puts it after the tag it
+        /// just finished, because that element is now closed and there is
+        /// nothing left to write inside it.
+        setSelectedRange(NSRange(
+            location: typed == ">" ? caret : caret + (insertion as NSString).length,
+            length: 0
+        ))
     }
 
     /// Closes a bracket or quote as it is typed, and steps over one that is
@@ -1272,7 +2254,7 @@ final class CodeNSTextView: NSTextView {
     /// the caret: `it's` and `5'` are an apostrophe and a prime mark, not
     /// the start of a string, and auto-closing them anyway is exactly the
     /// kind of wrong guess that gets this feature turned back off.
-    override func insertText(_ string: Any, replacementRange: NSRange) {
+    private func insertTextClosingBrackets(_ string: Any, replacementRange: NSRange) {
         guard let text = string as? String,
               text.count == 1,
               let typed = text.first,
@@ -1286,12 +2268,12 @@ final class CodeNSTextView: NSTextView {
         let content = self.string as NSString
         let after = Self.character(in: content, at: caret)
 
-        if let after, after == typed, Self.autoClosingPairs.values.contains(typed) {
+        if let after, after == typed, Self.autoClosingPairs.values.contains(typed), closes(typed) {
             setSelectedRange(NSRange(location: caret + 1, length: 0))
             return
         }
 
-        if let closing = Self.autoClosingPairs[typed] {
+        if let closing = Self.autoClosingPairs[typed], closes(typed) {
             if Self.quoteCharacters.contains(typed) {
                 let before = Self.character(in: content, at: caret - 1)
                 let touchesAWord = [before, after].contains { $0?.isLetter == true || $0?.isNumber == true }
@@ -1309,17 +2291,26 @@ final class CodeNSTextView: NSTextView {
         super.insertText(string, replacementRange: replacementRange)
     }
 
+    /// Deleting backwards, with the same split as `insertText` and for the
+    /// same reason: the pair-removal below returns early, and the completion
+    /// list has to hear about the deletion either way.
+    override func deleteBackward(_ sender: Any?) {
+        deleteBackwardClosingPair(sender)
+        completionDidDelete()
+    }
+
     /// Backspacing between an empty auto-closed pair removes both halves in
     /// one step. Without this, closing a bracket auto-close put there for
     /// you — and that you then changed your mind about — takes two
     /// backspaces where every other editor with this feature takes one.
-    override func deleteBackward(_ sender: Any?) {
+    private func deleteBackwardClosingPair(_ sender: Any?) {
         let caret = selectedRange().location
         if selectedRange().length == 0, caret > 0 {
             let content = self.string as NSString
             if let before = Self.character(in: content, at: caret - 1),
                let after = Self.character(in: content, at: caret),
-               Self.autoClosingPairs[before] == after {
+               Self.autoClosingPairs[before] == after,
+               closes(before) {
                 super.replaceCharacters(in: NSRange(location: caret - 1, length: 2), with: "")
                 return
             }

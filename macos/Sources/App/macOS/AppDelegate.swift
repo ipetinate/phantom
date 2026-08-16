@@ -419,6 +419,16 @@ class AppDelegate: NSObject,
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        /// The session as it stands at the moment the reader asked to quit,
+        /// while every window they have is certainly still theirs. Everything
+        /// after this point is the quit happening — windows the review closes,
+        /// windows AppKit tears down — and none of it may make the session
+        /// smaller, which is what `quitBegan` goes on to enforce. Recording it
+        /// here rather than relying on the last debounced save is what keeps a
+        /// window closed a moment before quitting from coming back.
+        PhantomSessionStore.shared.saveNow()
+        PhantomSessionStore.shared.quitBegan()
+
         let windows = NSApplication.shared.windows
         if windows.isEmpty { return .terminateNow }
 
@@ -1064,12 +1074,56 @@ class AppDelegate: NSObject,
         NSApplication.shared.arrangeInFront(sender)
     }
 
+    /// The undo manager belonging to whatever currently has focus, which is
+    /// not always the app's.
+    ///
+    /// `NSResponder.undoManager` is the responder chain's own answer to the
+    /// question: a responder that owns an undo stack returns it, and every
+    /// other one passes the question upwards until it reaches the window,
+    /// where `windowWillReturnUndoManager` hands back the app-level manager.
+    /// So a focused terminal resolves to the very same object as
+    /// `undoManager`, and a focused text view resolves to its own stack.
+    ///
+    /// Asked this way rather than by testing for a particular view class, so
+    /// nothing here has to know which kinds of thing in this app can hold an
+    /// undo stack — a view that grows one later is routed to correctly
+    /// without this line changing.
+    ///
+    /// Nil when no window is key, and that case is the one worth keeping:
+    /// closing the last window is exactly when "undo close window" has to
+    /// still work, and by then there is no responder left to ask.
+    private var focusedUndoManager: UndoManager? {
+        NSApp.keyWindow?.firstResponder?.undoManager
+    }
+
     @IBAction func undo(_ sender: Any?) {
-        undoManager.undo()
+        let focused = focusedUndoManager
+        switch UndoRouting.target(
+            responderCanAct: focused?.canUndo ?? false,
+            appCanAct: undoManager.canUndo
+        ) {
+        case .firstResponder:
+            focused?.undo()
+        case .application:
+            undoManager.undo()
+        case .neither:
+            break
+        }
     }
 
     @IBAction func redo(_ sender: Any?) {
-        undoManager.redo()
+        let focused = focusedUndoManager
+        switch UndoRouting.target(
+            responderCanAct: focused?.canRedo ?? false,
+            appCanAct: undoManager.canRedo
+        ) {
+        case .firstResponder:
+            focused?.redo()
+        case .application:
+            undoManager.redo()
+        case .neither:
+            break
+        }
     }
 
     private struct DerivedConfig {
@@ -1332,21 +1386,52 @@ extension AppDelegate: NSMenuItemValidation {
             // terminal window (not quick terminal).
             return NSApp.keyWindow is TerminalWindow
 
+        /// Validated through the same routing the action uses, and not
+        /// separately, because the two disagreeing is its own bug: validate
+        /// against one manager and act on another and you get a menu item
+        /// that is enabled and does nothing, or greyed out over a stack that
+        /// had something to undo.
         case #selector(undo(_:)):
-            if undoManager.canUndo {
-                item.title = "Undo \(undoManager.undoActionName)"
-            } else {
+            let focused = focusedUndoManager
+            switch UndoRouting.target(
+                responderCanAct: focused?.canUndo ?? false,
+                appCanAct: undoManager.canUndo
+            ) {
+            case .firstResponder:
+                item.title = UndoRouting.menuTitle(
+                    verb: "Undo",
+                    actionName: focused?.undoActionName ?? "")
+                return true
+            case .application:
+                item.title = UndoRouting.menuTitle(
+                    verb: "Undo",
+                    actionName: undoManager.undoActionName)
+                return true
+            case .neither:
                 item.title = "Undo"
+                return false
             }
-            return undoManager.canUndo
 
         case #selector(redo(_:)):
-            if undoManager.canRedo {
-                item.title = "Redo \(undoManager.redoActionName)"
-            } else {
+            let focused = focusedUndoManager
+            switch UndoRouting.target(
+                responderCanAct: focused?.canRedo ?? false,
+                appCanAct: undoManager.canRedo
+            ) {
+            case .firstResponder:
+                item.title = UndoRouting.menuTitle(
+                    verb: "Redo",
+                    actionName: focused?.redoActionName ?? "")
+                return true
+            case .application:
+                item.title = UndoRouting.menuTitle(
+                    verb: "Redo",
+                    actionName: undoManager.redoActionName)
+                return true
+            case .neither:
                 item.title = "Redo"
+                return false
             }
-            return undoManager.canRedo
 
         default:
             return true
@@ -1377,6 +1462,7 @@ extension AppDelegate {
                 if [.OK, .alertFirstButtonReturn].contains(response) {
                     await NSApp.reply(toApplicationShouldTerminate: true)
                 } else {
+                    PhantomSessionStore.shared.quitWasCancelled()
                     await NSApp.reply(toApplicationShouldTerminate: false)
                 }
             }
@@ -1398,6 +1484,7 @@ extension AppDelegate {
             case .alertSecondButtonReturn:
                 return .terminateNow
             default:
+                PhantomSessionStore.shared.quitWasCancelled()
                 return .terminateCancel
             }
         }
@@ -1417,6 +1504,7 @@ extension AppDelegate {
                     await controller.window?.close()
                     continue
                 } else {
+                    PhantomSessionStore.shared.quitWasCancelled()
                     await NSApp.reply(toApplicationShouldTerminate: false)
                     // Cancel the review
                     return
@@ -1424,6 +1512,69 @@ extension AppDelegate {
             }
             await NSApp.reply(toApplicationShouldTerminate: true)
         }
+    }
+}
+
+/// Which undo manager Edit ▸ Undo and Edit ▸ Redo belong to.
+///
+/// There are two of them and they are not interchangeable. The app-level
+/// `ExpiringUndoManager` undoes window operations — closing a tab, closing a
+/// split — and a focused text view owns a separate stack holding the reader's
+/// typing. The Undo menu item is wired to the First Responder in `MainMenu.xib`
+/// and `AppDelegate` is the only object in the app that implements `undo:`, so
+/// every ⌘Z in the app arrives here regardless of what has focus. Sending them
+/// all to the app-level manager left the editor with an undo stack nothing
+/// asked and a menu item greyed out over a buffer full of unsaved keystrokes.
+///
+/// Inherited rather than introduced: upstream Ghostty has no text editor, so
+/// the app-level manager was the only thing ⌘Z could have meant. It became
+/// wrong the day this fork grew an editor.
+///
+/// Spelled over booleans rather than over the managers themselves so the rule
+/// can be exercised without a window, a menu or a responder chain — the same
+/// reason `PhantomSessionStore` states its predicates this way. The action and
+/// the menu validation must reach identical conclusions, and the only way to
+/// hold them to that is for both to call this.
+enum UndoRouting {
+    /// The manager an Edit menu action should be sent to.
+    enum Target: Equatable {
+        /// The focused responder's own stack.
+        case firstResponder
+        /// The app-level stack: window operations, and the fallback whenever
+        /// the responder has nothing of its own to give back.
+        case application
+        /// Neither has anything to undo, so the menu item is disabled.
+        ///
+        /// Named for what it means rather than `none`, which in a switch over
+        /// this type reads like `Optional.none` to everyone but the compiler.
+        case neither
+    }
+
+    /// The focused responder wins when it has something to undo; the app-level
+    /// manager is the fallback.
+    ///
+    /// Deliberately not "whichever is non-nil": a terminal surface has no undo
+    /// stack of its own, so the chain resolves it to the app-level manager and
+    /// both arguments describe the same object. Choosing the responder there is
+    /// the same act as choosing the app, which is why this needs no third
+    /// question about whether the two are one.
+    ///
+    /// Used for redo as well — hence `canAct` rather than `canUndo`. The rule
+    /// is about which stack is in front, and that does not change with the
+    /// direction of travel.
+    static func target(responderCanAct: Bool, appCanAct: Bool) -> Target {
+        if responderCanAct { return .firstResponder }
+        if appCanAct { return .application }
+        return .neither
+    }
+
+    /// The menu item's title for the manager that is going to act.
+    ///
+    /// `undoActionName` is empty for a registration nobody named, and pasting
+    /// an empty name onto the verb leaves "Undo " sitting in the menu with a
+    /// trailing space. The bare verb is the honest title in that case.
+    static func menuTitle(verb: String, actionName: String) -> String {
+        actionName.isEmpty ? verb : "\(verb) \(actionName)"
     }
 }
 

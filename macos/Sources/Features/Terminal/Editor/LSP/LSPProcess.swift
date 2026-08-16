@@ -172,6 +172,11 @@ final class LSPProcess: @unchecked Sendable {
     /// entire feature reports "not installed" on a machine where all of it
     /// is installed.
     ///
+    /// `JAVA_HOME` gets the same treatment for the opposite reason: it is
+    /// inherited, and for a server that cannot run on the JDK it names, it
+    /// is inherited fatally. See `LSPJavaRuntime`, which also keeps the
+    /// inherited JDK reachable by the build tool the server shells out to.
+    ///
     /// - Parameter workingDirectory: Left unset, `Process` inherits this
     ///   app's own cwd — `/`, for a GUI app launched through Launch
     ///   Services — not the project the server is about to be asked to
@@ -181,8 +186,8 @@ final class LSPProcess: @unchecked Sendable {
     func start(workingDirectory: String) async throws {
         try claimStart()
 
-        let environment = await Task.detached(priority: .userInitiated) { [environmentProvider] in
-            environmentProvider()
+        let environment = await Task.detached(priority: .userInitiated) { [environmentProvider, definition] in
+            LSPJavaRuntime.adjustedEnvironment(environmentProvider(), for: definition)
         }.value
 
         do {
@@ -659,6 +664,12 @@ extension LSPProcess {
     /// pass their own — announcing a capability the client does not have
     /// makes servers send things nobody reads, and in a few cases makes
     /// them wait for replies that never come.
+    ///
+    /// One caller does exactly that: `LSPCenter.clientCapabilities` deep
+    /// merges its own `textDocument.completion` block over this one, because
+    /// the promises in it are about behaviour that lives in `LSPCenter` and
+    /// not down here. **Edit the completion block there, not this one** —
+    /// this is the floor a bare transport can stand behind on its own.
     static let defaultCapabilities: LSPValue = [
         "general": ["positionEncodings": ["utf-16"]],
         "textDocument": [
@@ -669,6 +680,19 @@ extension LSPProcess {
             ],
             "publishDiagnostics": ["relatedInformation": true],
             "hover": ["contentFormat": ["markdown", "plaintext"]],
+            /// **Shadowed on every path that completes anything.**
+            /// `LSPCenter.clientCapabilities` lays its own `completion` block
+            /// over this one, and `LSPValue.merging` resolves a leaf in the
+            /// overlay's favour — so every key here has a counterpart there
+            /// that wins. Reachable only through `initialize`'s default
+            /// argument, which today is a bare transport in a test.
+            ///
+            /// `snippetSupport` therefore stays `false` here while it is
+            /// `true` there, and the disagreement is the honest one: a
+            /// transport with no editor behind it has nothing to consume a
+            /// `${1:placeholder}` with, and promising otherwise is how the
+            /// marker ends up typed into a file. The promise belongs where
+            /// the parser is.
             "completion": [
                 "completionItem": ["snippetSupport": false],
                 "contextSupport": true

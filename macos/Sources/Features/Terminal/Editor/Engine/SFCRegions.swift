@@ -15,6 +15,12 @@ import Foundation
 /// mode is worth stating: a nested block written flush to the left margin
 /// would end the outer one early. Every formatter in this ecosystem indents
 /// it, and the alternative is carrying a real HTML parser to colour text.
+///
+/// **This is a colouring-pass tool, not one for the typing path.** Every
+/// call compiles three regular expressions and scans the whole document
+/// three times, with nothing cached — fine once per highlight, unaffordable
+/// once per keystroke. Anything reacting to a keypress wants a probe, not a
+/// partition; `CodeTagClose` carries one.
 enum SFCRegions {
     struct Region: Equatable {
         let range: NSRange

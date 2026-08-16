@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 
 /// The editor as it sits in the terminal's pane: tab bar on top, text
@@ -18,6 +19,23 @@ struct EditorPaneView: View {
     @AppStorage(EditorSettings.tabWidthKey) private var tabWidth = EditorSettings.defaultTabWidth
     @AppStorage(EditorSettings.showsMinimapKey) private var showsMinimap = true
     @AppStorage(EditorSettings.colorsBracketPairsKey) private var colorsBracketPairs = true
+    @AppStorage(EditorSettings.closesBracketsKey) private var closesBrackets = true
+    @AppStorage(EditorSettings.closesQuotesKey) private var closesQuotes = true
+    @AppStorage(EditorSettings.closesTagsKey) private var closesTags = true
+
+    @AppStorage(CompletionSettingsStore.enabledKey) private var completionEnabled = true
+    @AppStorage(CompletionSettingsStore.bufferWordsKey) private var completesFromBuffer = true
+    @AppStorage(CompletionSettingsStore.delayKey)
+    private var completionDelayRaw = CompletionDelay.default.rawValue
+
+    /// Observed, not read, and load-bearing anyway — do not delete it as
+    /// dead. `@AppStorage` has no dictionary, so the per-language table is
+    /// one JSON blob, and observing that blob is what republishes this view
+    /// when a language's switch moves in Settings. Without it the new answer
+    /// would sit in `UserDefaults` until some unrelated update happened to
+    /// rebuild the configuration, which is the `showsMinimap` bug wearing a
+    /// different key.
+    @AppStorage(CompletionSettingsStore.byLanguageKey) private var completionByLanguage = Data()
 
     @ObservedObject var search: WorkspaceSearchCenter
     @ObservedObject private var lsp: LSPCenter = .shared
@@ -132,7 +150,27 @@ struct EditorPaneView: View {
     }
 
     private var configuration: CodeEditorConfiguration {
-        CodeEditorConfiguration(
+        /// The LSP language id, never `document.language`. `CodeLanguage` is
+        /// a lexer grouping — `.javascript` is ts, tsx, js, jsx, mts and cts
+        /// at once — so keying completion on it would make "no completion in
+        /// `.tsx`" mean "no completion in every `.js` file in the project",
+        /// which is the collapse `CompletionSettingsStore`'s keying decision
+        /// exists to prevent. Resolved through `LanguageResolver` rather than
+        /// the registry, because a language an extension contributed has a
+        /// switch in Settings too.
+        ///
+        /// The store folds the master switch and the per-language answer
+        /// together. Doing it here instead would put that rule in two places.
+        let completion = CompletionSettingsStore.settings(
+            forLanguage: center.selectedDocument.flatMap {
+                LanguageResolver.shared.languageID(forPath: $0.url.path)
+            },
+            isEnabled: completionEnabled,
+            delay: .named(completionDelayRaw),
+            usesBufferWords: completesFromBuffer
+        )
+
+        return CodeEditorConfiguration(
             font: EditorSettings.font(size: fontSize, family: palette.interfaceFontFamily),
             showsLineNumbers: showsLineNumbers,
             wrapsLines: wrapsLines,
@@ -140,7 +178,13 @@ struct EditorPaneView: View {
             insertsSpacesForTab: true,
             highlightsCurrentLine: true,
             colorsBracketPairs: colorsBracketPairs,
-            showsMinimap: showsMinimap
+            showsMinimap: showsMinimap,
+            closesBrackets: closesBrackets,
+            closesQuotes: closesQuotes,
+            closesTags: closesTags,
+            completionEnabled: completion.isEnabled,
+            completesFromBuffer: completion.usesBufferWords,
+            completionFetchDelay: completion.delay.duration
         )
     }
 }
@@ -186,6 +230,25 @@ private struct DocumentView: View {
     /// is the only time they actually change.
     @State private var underlines: [(range: NSRange, color: NSColor)] = []
 
+    /// A diagnostic with its range already resolved against the document.
+    private struct LocatedProblem {
+        let range: NSRange
+        let problem: CodeHoverInfo.Problem
+    }
+
+    /// Every diagnostic, located once. The underlines are a subset of these
+    /// and the hover card reads them directly — see `refreshUnderlines`.
+    @State private var located: [LocatedProblem] = []
+
+    /// Translates between the server's vocabulary and the list's.
+    ///
+    /// `@State` because it has to *survive* body evaluation: it remembers the
+    /// server's own item behind each row so that row can later be resolved,
+    /// and a fresh one per keystroke would hand out tokens that resolve to
+    /// nothing. One per document, which is also the scope of the list it
+    /// describes.
+    @State private var completionBridge = CompletionBridge()
+
     var body: some View {
         VStack(spacing: 0) {
             if document.hasConflict {
@@ -199,7 +262,16 @@ private struct DocumentView: View {
             CodeTextView(
                 text: document.currentText,
                 textRevision: document.revision,
-                language: document.language,
+                /// Through the resolver, not `CodeLanguage.resolve` — a
+                /// language an extension contributed carries its own
+                /// keywords and comment markers, and asking the filename
+                /// directly is what made such a file get a language server
+                /// and no syntax colouring.
+                syntax: LanguageResolver.shared.syntax(forFileName: document.url.lastPathComponent),
+                /// From the file's name, not its language: `.ts` and `.tsx`
+                /// are the same `CodeLanguage`, and a tag closed in `.ts` is
+                /// always wrong because a `<` there can only be a generic.
+                tagDialect: CodeTagDialect.resolve(fileName: document.url.lastPathComponent),
                 theme: theme,
                 configuration: configuration,
                 onEdit: { edited in
@@ -208,12 +280,10 @@ private struct DocumentView: View {
                 },
                 underlines: underlines,
                 hoverProvider: { offset in await hoverInfo(at: offset) },
-                completionProvider: { offset in
-                    await lsp.completions(
-                        path: document.url.path,
-                        position: position(at: offset)
-                    ).map(\.insertText)
-                },
+                completionProvider: { offset in await completions(at: offset) },
+                completionDocProvider: { item in await documentation(for: item) },
+                completionOffersDocumentation: { item in offersDocumentation(item) },
+                completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
                 reveal: revealRange,
                 onJumpToDefinition: { offset in jump(from: offset) },
                 onRename: { offset in
@@ -318,15 +388,40 @@ private struct DocumentView: View {
     private func refreshUnderlines() {
         let reported = lsp.diagnostics[document.url.path] ?? []
         guard !reported.isEmpty else {
+            if !located.isEmpty { located = [] }
             if !underlines.isEmpty { underlines = [] }
             return
         }
 
+        /// Resolved **once**, here, and read by both the squiggle and the
+        /// card. They used to share the diagnostics list and convert it
+        /// separately — the underlines when the server spoke, the card when
+        /// the pointer stopped — and a comment claimed they therefore could
+        /// not disagree. They could: every keystroke between the two moved
+        /// the text under one of them, so the squiggle sat where the problem
+        /// *was* while the card asked where it *is*, and hovering the mark
+        /// answered nothing. Sharing the list is not the same as sharing the
+        /// answer.
         let index = LSPLineIndex(document.currentText as NSString)
-        underlines = reported.compactMap { diagnostic in
-            guard let range = index.range(of: diagnostic.range), range.length > 0
-            else { return nil }
-            return (range, Self.color(for: diagnostic.severity))
+        located = reported.compactMap { diagnostic in
+            guard let range = index.range(of: diagnostic.range) else { return nil }
+            return LocatedProblem(
+                range: range,
+                problem: CodeHoverInfo.Problem(
+                    message: diagnostic.message,
+                    source: diagnostic.source,
+                    color: Self.color(for: diagnostic.severity)
+                )
+            )
+        }
+
+        /// A zero-length range is kept above and dropped here, which is the
+        /// one place the two legitimately differ: a server pointing at a
+        /// position rather than a span — a missing semicolon, an unexpected
+        /// end of file — has something to say and nothing to underline.
+        underlines = located.compactMap { found in
+            guard found.range.length > 0 else { return nil }
+            return (found.range, found.problem.color)
         }
     }
 
@@ -356,34 +451,91 @@ private struct DocumentView: View {
         return info
     }
 
+    /// What to offer at an offset.
+    ///
+    /// The whole of the translation lives in `CompletionBridge`; what this
+    /// adds is the two facts only the document has — the text the server's
+    /// line/character ranges are measured against, and whether this file's
+    /// server answers a resolve at all. The second is asked here rather than
+    /// cached because a server can finish starting between two keystrokes,
+    /// and a `false` remembered from before it was ready would leave the
+    /// documentation card permanently silent.
+    private func completions(at offset: Int) async -> CodeCompletionAnswer {
+        let outcome = await lsp.completions(
+            path: document.url.path,
+            position: position(at: offset)
+        )
+
+        completionBridge.note(
+            supportsResolve: lsp.completionSupport(forPath: document.url.path)?.resolveProvider == true
+        )
+
+        return completionBridge.items(from: outcome, in: document.currentText as NSString)
+    }
+
+    /// Asks the server to finish one row, for the documentation card.
+    ///
+    /// The item is looked up rather than rebuilt, because the server has to be
+    /// handed back the object it sent: a reconstruction from the fields this
+    /// app models drops everything it does not, and a server that cannot match
+    /// the item it receives answers with that item **unchanged rather than
+    /// with an error** — an empty card that is indistinguishable from a symbol
+    /// nobody documented.
+    private func documentation(for item: CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome {
+        guard let completion = completionBridge.completion(for: item.resolveToken) else {
+            Self.completionLog.debug(
+                "resolve skipped: no stored item for token \(item.resolveToken ?? -1, privacy: .public)"
+            )
+            return .superseded
+        }
+
+        let outcome = await lsp.resolve(completion, path: document.url.path)
+        Self.completionLog.debug(
+            """
+            resolve \(item.label, privacy: .public) \
+            itemEpoch=\(completion.epoch, privacy: .public) \
+            -> \(String(describing: outcome), privacy: .public)
+            """
+        )
+        return CompletionBridge.outcome(of: outcome)
+    }
+
+    /// Temporary, for tracking down a documentation card that stuck on
+    /// "Loading…". Reachable with
+    /// `log stream --predicate 'subsystem == "com.ipetinate.phantom"'`.
+    static let completionLog = Logger(
+        subsystem: "com.ipetinate.phantom",
+        category: "completion"
+    )
+
+    /// Whether this row is worth an info glyph.
+    ///
+    /// Two conditions, and both are needed. The server has to answer resolve
+    /// at all — `kotlin-language-server` 1.3.13 does not, and ships no
+    /// per-item documentation either, so for Kotlin the glyph would be a
+    /// control that is permanently going to answer nothing. And the row has to
+    /// still be one this bridge can name: an item from a superseded list has
+    /// no token left, and asking about it would come back unchanged rather
+    /// than refused.
+    private func offersDocumentation(_ item: CodeCompletionItem) -> Bool {
+        completionBridge.supportsResolve && completionBridge.completion(for: item.resolveToken) != nil
+    }
+
     /// The diagnostics whose range covers this offset.
     ///
-    /// Read from the same list the underlines come from, so the squiggle and
-    /// the card can never disagree about what is wrong where.
+    /// Read from the ranges `refreshUnderlines` already resolved, so the
+    /// squiggle and the card cannot disagree about where a problem is —
+    /// they are now the same values rather than the same source recomputed
+    /// twice at different moments.
+    ///
+    /// The bound is inclusive, and a zero-length range counts as covering
+    /// where it sits. Both because the offset is an *insertion* index:
+    /// resting on the last character of a word reports the index after it,
+    /// so a half-open test makes the end of every word a dead spot.
     private func problems(at offset: Int) -> [CodeHoverInfo.Problem] {
-        let reported = lsp.diagnostics[document.url.path] ?? []
-        guard !reported.isEmpty else { return [] }
-
-        let index = LSPLineIndex(document.currentText as NSString)
-        return reported.compactMap { diagnostic in
-            guard let range = index.range(of: diagnostic.range),
-                  // Inclusive of the upper bound, and a zero-length range
-                  // counts as covering where it sits. Both because the offset
-                  // is an *insertion* index: resting on the last character of
-                  // a word reports the index after it, so a half-open test
-                  // makes the end of every word a dead spot. Servers that
-                  // point at a position rather than a span — a missing
-                  // semicolon, an unexpected end of file — have nothing but a
-                  // zero-length range to give.
-                  offset >= range.location, offset <= range.upperBound
-            else { return nil }
-
-            return CodeHoverInfo.Problem(
-                message: diagnostic.message,
-                source: diagnostic.source,
-                color: Self.color(for: diagnostic.severity)
-            )
-        }
+        located
+            .filter { offset >= $0.range.location && offset <= $0.range.upperBound }
+            .map(\.problem)
     }
 
     /// One reading of severity for the whole feature: the squiggle under the
@@ -429,6 +581,23 @@ private struct DocumentView: View {
 
     private func format() {
         Task {
+            /// Captured before the request, compared after it.
+            ///
+            /// A formatting reply is a list of ranges computed against the
+            /// text as it was when the request went out. Reading
+            /// `document.currentText` *after* the await and splicing those
+            /// ranges into it assumes nothing moved in between — and
+            /// something moving is the ordinary case: the reader keeps
+            /// typing, or the file watcher reloads.
+            ///
+            /// It does not fail loudly when that happens. An edit whose line
+            /// is now past the end is dropped silently by `LSPTextEdit.apply`,
+            /// and an edit that still lands inside the buffer is applied **at
+            /// the wrong offset** — so the file the reader asked to tidy comes
+            /// back mangled, with no error anywhere. The window is as wide as
+            /// the server is slow, which on a large file is seconds.
+            let revision = document.revision
+
             let edits = await lsp.formatting(
                 path: document.url.path,
                 tabSize: configuration.tabWidth,
@@ -442,7 +611,21 @@ private struct DocumentView: View {
                 )
                 return
             }
-            document.replaceText(LSPTextEdit.apply(edits, to: document.currentText))
+            guard document.revision == revision else { return }
+            let formatted = LSPTextEdit.apply(edits, to: document.currentText)
+            document.replaceText(formatted)
+
+            /// Told explicitly, because a programmatic replacement does not
+            /// travel the path a keystroke does. `replaceText` sets the
+            /// coordinator's "this edit came from us" flag, `textDidChange`
+            /// returns early on it, and `onEdit` — the only caller of
+            /// `didChange` — lives inside that method. So without this line
+            /// the server keeps the *pre-format* text: not merely stale, but
+            /// stale in a way that moves every line break and every indent,
+            /// so hovers, completions and definitions all answer about
+            /// positions that no longer exist. It repairs itself on the next
+            /// keystroke, by accident, which is why nobody notices.
+            lsp.didChange(path: document.url.path, text: formatted)
         }
     }
 
@@ -453,6 +636,7 @@ private struct DocumentView: View {
     /// project broken in exactly the places you were not looking.
     private func rename(at offset: Int, to name: String) {
         Task {
+            let revision = document.revision
             let byFile = await lsp.rename(
                 path: document.url.path,
                 position: position(at: offset),
@@ -470,7 +654,14 @@ private struct DocumentView: View {
             var changed = 0
             for (path, edits) in byFile {
                 if path == document.url.path {
-                    document.replaceText(LSPTextEdit.apply(edits, to: document.currentText))
+                    /// Same guard as `format`, and needed for the same reason:
+                    /// the ranges describe the text as of the request. Note
+                    /// the on-disk branch below is already safe by accident —
+                    /// it re-reads each file immediately before editing it.
+                    guard document.revision == revision else { continue }
+                    let renamed = LSPTextEdit.apply(edits, to: document.currentText)
+                    document.replaceText(renamed)
+                    lsp.didChange(path: path, text: renamed)
                 } else if let existing = try? String(contentsOfFile: path, encoding: .utf8) {
                     let updated = LSPTextEdit.apply(edits, to: existing)
                     try? updated.write(toFile: path, atomically: true, encoding: .utf8)

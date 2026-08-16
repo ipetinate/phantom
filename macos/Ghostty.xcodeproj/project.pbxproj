@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		FE1C0N7HEME50000000001 /* icon-themes in Resources */ = {isa = PBXBuildFile; fileRef = FE1C0N7HEME50000000002 /* icon-themes */; };
+		FEC0D1C0N50000000001 /* codicons in Resources */ = {isa = PBXBuildFile; fileRef = FEC0D1C0N50000000002 /* codicons */; };
 		6F12C049EEFE4A658EF336CB /* PhantomIconVariants in Resources */ = {isa = PBXBuildFile; fileRef = 1A193CAD60CA403F9852A3A2 /* PhantomIconVariants */; };
 		29C15B1D2CDC3B2900520DD4 /* bat in Resources */ = {isa = PBXBuildFile; fileRef = 29C15B1C2CDC3B2000520DD4 /* bat */; };
 		55154BE02B33911F001622DC /* ghostty in Resources */ = {isa = PBXBuildFile; fileRef = 55154BDF2B33911F001622DC /* ghostty */; };
@@ -72,6 +73,7 @@
 
 /* Begin PBXFileReference section */
 		FE1C0N7HEME50000000002 /* icon-themes */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "icon-themes"; path = "Resources/icon-themes"; sourceTree = "<group>"; };
+		FEC0D1C0N50000000002 /* codicons */ = {isa = PBXFileReference; lastKnownFileType = folder; name = codicons; path = "Resources/codicons"; sourceTree = "<group>"; };
 		1A193CAD60CA403F9852A3A2 /* PhantomIconVariants */ = {isa = PBXFileReference; lastKnownFileType = folder; name = PhantomIconVariants; path = "Resources/PhantomIconVariants"; sourceTree = "<group>"; };
 		29C15B1C2CDC3B2000520DD4 /* bat */ = {isa = PBXFileReference; lastKnownFileType = folder; name = bat; path = "../zig-out/share/bat"; sourceTree = "<group>"; };
 		3B39CAA42B33949B00DABEB8 /* GhosttyReleaseLocal.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GhosttyReleaseLocal.entitlements; sourceTree = "<group>"; };
@@ -316,6 +318,7 @@
 			children = (
 				FC9ABA9B2D0F538D0020D4C8 /* bash-completion */,
 				29C15B1C2CDC3B2000520DD4 /* bat */,
+				FEC0D1C0N50000000002 /* codicons */,
 				FE1C0N7HEME50000000002 /* icon-themes */,
 				1A193CAD60CA403F9852A3A2 /* PhantomIconVariants */,
 				A586167B2B7703CC009BDB1D /* fish */,
@@ -568,6 +571,7 @@
 			files = (
 				FC9ABA9C2D0F53F80020D4C8 /* bash-completion in Resources */,
 				29C15B1D2CDC3B2900520DD4 /* bat in Resources */,
+				FEC0D1C0N50000000001 /* codicons in Resources */,
 				FE1C0N7HEME50000000001 /* icon-themes in Resources */,
 				6F12C049EEFE4A658EF336CB /* PhantomIconVariants in Resources */,
 				A586167C2B7703CC009BDB1D /* fish in Resources */,

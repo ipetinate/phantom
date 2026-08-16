@@ -27,6 +27,15 @@ final class GuiConfigStore: ObservableObject {
     /// theme, each containing its own `icon-theme.json`.
     var iconThemesDirURL: URL { configDir.appendingPathComponent("icon-themes", isDirectory: true) }
 
+    /// Where user-installed language extensions live: one directory per
+    /// extension, each holding an `extension.json`. See `LanguageManifest`.
+    ///
+    /// Note what is *not* kept here — the record of which extensions the
+    /// user has trusted, which lives in `UserDefaults`. This directory is
+    /// writable by whatever put a manifest in it, so a trust decision stored
+    /// alongside would be one the manifest's author could grant itself.
+    var extensionsDirURL: URL { configDir.appendingPathComponent("extensions", isDirectory: true) }
+
     init(configDir: URL? = nil) {
         self.configDir = configDir ?? Self.defaultConfigDir()
         load()

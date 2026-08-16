@@ -112,7 +112,10 @@ struct SyntaxHighlighterTests {
     /// A language with no rules produces no tokens rather than failing to
     /// build — plain text has to open like anything else.
     @Test func plainTextHighlightsNothing() {
-        #expect(SyntaxHighlighter.pattern(for: .plain) == nil)
+        /// Spelled with the type because `pattern(for:)` now has two
+        /// overloads — one over `CodeLanguage`, one over `LanguageSyntax` —
+        /// and both types have a `.plain`, so the bare literal is ambiguous.
+        #expect(SyntaxHighlighter.pattern(for: CodeLanguage.plain) == nil)
         #expect(tokens("anything at all", .plain).isEmpty)
     }
 

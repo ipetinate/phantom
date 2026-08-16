@@ -45,6 +45,50 @@ final class PhantomSessionStore {
     /// window set can never overwrite the saved session.
     private var isRestoring = false
 
+    /// Whether the app has begun quitting.
+    ///
+    /// This is the term `saveNow` was missing, and the reason it could eat a
+    /// session on the way down: **a window that went away because the reader
+    /// closed it and a window that went away because quitting took it are the
+    /// same window to every predicate here.** Both are gone from `isOpen`, and
+    /// the first has to shrink the session while the second must never.
+    /// Nothing about the window can tell them apart, so the answer has to come
+    /// from what the app is doing — and only the app knows that.
+    ///
+    /// Measured, on the Review Windows path, with ten terminals open: the
+    /// review closes them one at a time, each close schedules a save, and each
+    /// save lands between two closes and writes what is left. Nine, eight,
+    /// seven, six, five, four — one entry lost per window reviewed, all of it
+    /// on the way to a quit the reader expected to come back from. Whether the
+    /// last save is the empty one that `shouldWrite` refuses is pure timing:
+    /// finish the review and the session survives by luck, stop half way and
+    /// the file keeps the half.
+    ///
+    /// Set from the moment the app is asked whether it may quit until it dies
+    /// or the quit is called off. Should a cancelled quit ever fail to clear
+    /// it, the cost is a session that stops shrinking — closed windows come
+    /// back — which is the direction to be wrong in.
+    private var isQuitting = false
+
+    /// The app has been asked to quit. Until it dies or `quitWasCancelled` is
+    /// called, no save may record fewer terminals than the session already has.
+    func quitBegan() {
+        isQuitting = true
+    }
+
+    /// The quit was called off and the reader is using the app again, so their
+    /// window set means what it says once more.
+    ///
+    /// A save follows, because a quit can be called off part way through:
+    /// cancelling a review after answering for three of ten windows leaves
+    /// seven, and the refusals along the way mean the file still says ten. The
+    /// windows the reader agreed to close on the way out are closed either
+    /// way, and without this they would come back at the next launch.
+    func quitWasCancelled() {
+        isQuitting = false
+        scheduleSave()
+    }
+
     /// True when this process is a test host rather than the app someone is
     /// using.
     ///
@@ -373,12 +417,30 @@ final class PhantomSessionStore {
     /// file we cannot read counts as having something in it, so a decode
     /// failure cannot compound into an erased session.
     ///
-    /// A *shorter* set does replace a longer one, deliberately: closing one
-    /// of three windows has to leave a session of two, or a session could
-    /// only ever grow. What made short saves dangerous was the window
-    /// predicate quietly dropping minimized windows, and that is fixed where
-    /// it belongs, in `isOpen`.
-    static func shouldWrite(stateCount: Int, over existing: SavedSession) -> Bool {
+    /// A *shorter* set does replace a longer one while the reader is using
+    /// the app, deliberately: closing one of three windows has to leave a
+    /// session of two, or a session could only ever grow. What made short
+    /// saves dangerous was the window predicate quietly dropping minimized
+    /// windows, and that is fixed where it belongs, in `isOpen`.
+    ///
+    /// `mayShrink` is the caller saying whether a shorter set means what it
+    /// says. It does while the app is running: the reader closed something.
+    /// It does not once the app is quitting, because the windows disappearing
+    /// then are the quit taking them, not the reader giving them up — see
+    /// `isQuitting` for the measurement. Passed rather than read from the
+    /// store so the rule stays a question about two numbers, answerable
+    /// without an app to be quitting.
+    static func shouldWrite(
+        stateCount: Int,
+        over existing: SavedSession,
+        mayShrink: Bool
+    ) -> Bool {
+        if !mayShrink,
+           case .readable(let count, _) = existing,
+           stateCount < count {
+            return false
+        }
+
         if stateCount > 0 { return true }
 
         switch existing {
@@ -499,7 +561,11 @@ final class PhantomSessionStore {
                 isSelectedTab: isSelectedTab)
         }
 
-        guard Self.shouldWrite(stateCount: states.count, over: savedSession()) else { return }
+        guard Self.shouldWrite(
+            stateCount: states.count,
+            over: savedSession(),
+            mayShrink: !isQuitting
+        ) else { return }
 
         do {
             try FileManager.default.createDirectory(
