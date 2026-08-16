@@ -22,25 +22,6 @@ enum LoginEnvironment {
     /// people put slow things in those.
     private static let resolveTimeout: TimeInterval = 5
 
-    /// Under test, the login shell is not asked at all.
-    ///
-    /// A test must not depend on how the machine running it configures its
-    /// shell. On a fresh CI runner there are no rc files, so `zsh -lic`
-    /// answers with the bare system `PATH` — which is *narrower* than the
-    /// one the test process already inherited, and drops the directory
-    /// Homebrew installs into. Resolving therefore makes the environment
-    /// worse there while making it better on a developer's machine, which
-    /// is the exact shape of a test that passes locally and fails in CI.
-    ///
-    /// Same detection as `PhantomSessionStore.isRunningTests`, and for the
-    /// same reason: side effects that are right for the app are wrong for a
-    /// test host.
-    static let isRunningTests: Bool = {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || ProcessInfo.processInfo.environment["XCTestSessionIdentifier"] != nil
-            || NSClassFromString("XCTestCase") != nil
-    }()
-
     private static let lock = NSLock()
     private static var cachedPath: String?
     private static var didResolve = false
@@ -59,7 +40,6 @@ enum LoginEnvironment {
     /// everything.
     static func environment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
-        guard !isRunningTests else { return env }
         if let path = loginPath() { env["PATH"] = path }
         return env
     }
@@ -73,7 +53,6 @@ enum LoginEnvironment {
     /// directly.
     static func executableEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
-        guard !isRunningTests else { return env }
         env["PATH"] = executableSearchPath()
         return env
     }
