@@ -52,10 +52,10 @@ extension GitDiffInlineEdits {
         let removedTokens = tokenize(removed)
         let addedTokens = tokenize(added)
 
-        // Most edits change the middle of a line and leave both ends alone,
-        // so trimming the matching ends first is not only a speed-up: it
-        // keeps the comparison off the part of the line nobody is asking
-        // about.
+        /// Most edits change the middle of a line and leave both ends alone,
+        /// so trimming the matching ends first is not only a speed-up: it
+        /// keeps the comparison off the part of the line nobody is asking
+        /// about.
         var head = 0
         while head < removedTokens.count, head < addedTokens.count,
               removedTokens[head].text == addedTokens[head].text {
@@ -78,9 +78,9 @@ extension GitDiffInlineEdits {
         let changedRemoved = Set(0..<removedMiddle.count).subtracting(matched.map(\.left))
         let changedAdded = Set(0..<addedMiddle.count).subtracting(matched.map(\.right))
 
-        // Two lines that share nothing but brackets and commas are a
-        // replacement, not an edit. Pointing at the coincidences speckles
-        // the row and hides the change instead of showing it.
+        /// Two lines that share nothing but brackets and commas are a
+        /// replacement, not an edit. Pointing at the coincidences speckles
+        /// the row and hides the change instead of showing it.
         let shared = sharedCharacters(in: removedTokens, head: head, tail: tail, changed: changedRemoved)
         let shortest = min(nonBlankCount(removed), nonBlankCount(added))
         if shortest > 0, Double(shared) / Double(shortest) < minimumSharedFraction { return nil }

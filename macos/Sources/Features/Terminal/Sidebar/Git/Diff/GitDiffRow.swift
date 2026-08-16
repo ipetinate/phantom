@@ -67,10 +67,10 @@ enum GitDiffAlignment {
         var budget = inlineEditBudget
 
         for (index, hunk) in diff.hunks.enumerated() {
-            // A gap band says "lines were skipped here". Above the first
-            // hunk of a file that starts at its own first line — every new
-            // file, and any edit near the top — nothing was skipped, and
-            // the band is a header for a gap that isn't there.
+            /// A gap band says "lines were skipped here". Above the first
+            /// hunk of a file that starts at its own first line — every new
+            /// file, and any edit near the top — nothing was skipped, and
+            /// the band is a header for a gap that isn't there.
             if !(index == 0 && hunk.header.oldStart <= 1 && hunk.header.newStart <= 1) {
                 rows.append(GitDiffRow(id: rows.count, content: .gap(hunk.header)))
             }

@@ -151,8 +151,8 @@ struct GitDiffAlignmentTests {
         +C
         """#))
 
-        // The first block is one removal with nothing to pair with; the
-        // second is one removal against two additions.
+        /// The first block is one removal with nothing to pair with; the
+        /// second is one removal against two additions.
         #expect(rows.count == 4)
         #expect(rows[0].left?.text == "a")
         #expect(rows[0].right == nil)
@@ -186,7 +186,7 @@ struct GitDiffAlignmentTests {
         #expect(bands[0].oldStart == 40)
         #expect(bands[0].heading == "func later()")
 
-        // And it sits between the two hunks, not at either end.
+        /// And it sits between the two hunks, not at either end.
         let bandIndex = try #require(rows.firstIndex { $0.gap != nil })
         #expect(bandIndex == 2)
     }

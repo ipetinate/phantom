@@ -93,8 +93,8 @@ struct GitDiffLoaderTests {
         repo.write("one\ntwo\n", to: "file.txt")
         repo.git("add", "file.txt")
 
-        // Staged and unstaged are different questions about the same file,
-        // and after staging only one of them has an answer.
+        /// Staged and unstaged are different questions about the same file,
+        /// and after staging only one of them has an answer.
         let staged = try expectDiff(GitDiffLoader.load(path: "file.txt", side: .staged, in: repo.root))
         #expect(staged.file.addedCount == 1)
         #expect(GitDiffLoader.load(path: "file.txt", side: .unstaged, in: repo.root) == .unchanged)
@@ -289,9 +289,9 @@ struct GitDiffLoaderTests {
         let change = try #require(repo.status().unmerged.first)
         #expect(GitDiffLoader.load(change, side: .unstaged, in: repo.root) == .conflicted)
 
-        // And by raw path too, where there is no `GitFileChange` to say so:
-        // git answers with a combined diff on one side and a one-line
-        // notice on the other.
+        /// And by raw path too, where there is no `GitFileChange` to say so:
+        /// git answers with a combined diff on one side and a one-line
+        /// notice on the other.
         #expect(GitDiffLoader.load(path: "conf.txt", side: .unstaged, in: repo.root) == .conflicted)
         #expect(GitDiffLoader.load(path: "conf.txt", side: .staged, in: repo.root) == .conflicted)
     }

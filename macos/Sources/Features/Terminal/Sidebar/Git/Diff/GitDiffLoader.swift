@@ -70,8 +70,8 @@ enum GitDiffLoader {
         if change.isUnmerged { return .conflicted }
 
         if change.isUntracked {
-            // Nothing about an untracked file is in the index, so there is
-            // no staged side of it to show.
+            /// Nothing about an untracked file is in the index, so there is
+            /// no staged side of it to show.
             guard side == .unstaged else { return .unchanged }
             return loadUntracked(path: change.path, in: root, context: context)
         }
@@ -134,9 +134,9 @@ enum GitDiffLoader {
 
         let result = GitCommand.run(arguments, in: root)
 
-        // `--no-index` reports through the exit status the way `diff(1)`
-        // does: 0 identical, 1 differ, anything else an actual error.
-        // Treating 1 as failure rejects every untracked file there is.
+        /// `--no-index` reports through the exit status the way `diff(1)`
+        /// does: 0 identical, 1 differ, anything else an actual error.
+        /// Treating 1 as failure rejects every untracked file there is.
         guard result.status == 0 || result.status == 1 else {
             return .failed(failure(from: result))
         }
@@ -174,8 +174,8 @@ enum GitDiffLoader {
     }
 
     private static func outcome(for output: String, path: String) -> GitDiffOutcome {
-        // `git diff --cached` on a conflicted path prints this one line and
-        // no diff at all.
+        /// `git diff --cached` on a conflicted path prints this one line and
+        /// no diff at all.
         if output.hasPrefix("* Unmerged path") { return .conflicted }
 
         let bytes = output.utf8.count

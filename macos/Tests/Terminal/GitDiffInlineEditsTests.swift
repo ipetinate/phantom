@@ -114,8 +114,8 @@ struct GitDiffInlineEditsTests {
         #expect(text(removed, edits.removed) == ["café"])
         #expect(text(added, edits.added) == ["cafés"])
 
-        // Every span converts back into a Swift range, which it only can
-        // when both ends sit on a character boundary.
+        /// Every span converts back into a Swift range, which it only can
+        /// when both ends sit on a character boundary.
         for range in edits.added {
             #expect(Range(range, in: added) != nil)
         }

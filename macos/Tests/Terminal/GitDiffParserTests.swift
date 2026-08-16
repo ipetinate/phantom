@@ -40,14 +40,14 @@ struct GitDiffParserTests {
         #expect(lines.map(\.kind) == [.context, .removed, .added, .context, .context])
         #expect(lines.map(\.text) == ["a", "b", "B", "c", "d"])
 
-        // The removed line is line 2 of the old file and of no line of the
-        // new one; the added line is the reverse.
+        /// The removed line is line 2 of the old file and of no line of the
+        /// new one; the added line is the reverse.
         #expect(lines[1].oldNumber == 2)
         #expect(lines[1].newNumber == nil)
         #expect(lines[2].oldNumber == nil)
         #expect(lines[2].newNumber == 2)
 
-        // Context after a one-for-one swap is line 3 on both sides.
+        /// Context after a one-for-one swap is line 3 on both sides.
         #expect(lines[3].oldNumber == 3)
         #expect(lines[3].newNumber == 3)
     }
@@ -70,8 +70,8 @@ struct GitDiffParserTests {
         let file = try #require(files.first)
         #expect(file.hunks.count == 2)
 
-        // The insertion in the first hunk pushes the new side one ahead,
-        // and the second hunk's header is what re-synchronizes them.
+        /// The insertion in the first hunk pushes the new side one ahead,
+        /// and the second hunk's header is what re-synchronizes them.
         let second = file.hunks[1].lines
         #expect(second[0].oldNumber == 40)
         #expect(second[1].newNumber == 41)
@@ -158,8 +158,8 @@ struct GitDiffParserTests {
         #expect(lines.count == 3)
         #expect(lines.map(\.text) == ["one", "two", "two"])
 
-        // Only the old file lacked the newline, so only the removed line
-        // carries the flag.
+        /// Only the old file lacked the newline, so only the removed line
+        /// carries the flag.
         #expect(lines[1].kind == .removed)
         #expect(lines[1].isEndOfFileWithoutNewline)
         #expect(!lines[2].isEndOfFileWithoutNewline)
@@ -239,7 +239,7 @@ struct GitDiffParserTests {
             ]
         )
 
-        // The first character is the marker; everything after it is text.
+        /// The first character is the marker; everything after it is text.
         #expect(lines[0].text == "diff --git a/x b/x")
         #expect(lines[3].text == "@@ -1,2 +1,2 @@")
         #expect(lines[5].text == "-old")
