@@ -39,23 +39,40 @@ struct EditorPresentationControl: View {
                     button(for: option)
                 }
             }
-            .padding(3)
+            .padding(4)
             .background(background)
-            .opacity(isHovered ? 1 : 0.4)
+            .opacity(isHovered ? 1 : 0.78)
             .onHover { isHovered = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovered)
             .padding(6)
         }
     }
 
+    /// Always drawn, which is the whole difference between a control you
+    /// can find and one you have to know about.
+    ///
+    /// It used to appear only on hover, so at rest the glyphs floated
+    /// unbacked over whatever the editor happened to be drawing — and the
+    /// place it sits is beside the minimap, which is the busiest, most
+    /// multicoloured strip in the window. Contrast cannot come from the
+    /// glyph alone when the thing behind it is arbitrary.
+    ///
+    /// `.regularMaterial` rather than `.thinMaterial`: thin lets the code
+    /// underneath read straight through, which is the property that made
+    /// this hard to see. The extra wash on hover is the affordance now,
+    /// rather than the background's whole existence.
     private var background: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(.thinMaterial)
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .fill(.regularMaterial)
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(.separator, lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
             )
-            .opacity(isHovered ? 1 : 0)
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(isHovered ? 0.22 : 0.14), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.28), radius: 3, y: 1)
     }
 
     private func button(for option: EditorPresentation) -> some View {
@@ -65,11 +82,11 @@ struct EditorPresentationControl: View {
             presentation = option
         } label: {
             Image(systemName: symbol(for: option))
-                .font(.system(size: 11, weight: .medium))
-                .frame(width: 22, height: 18)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 27, height: 22)
                 .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(Color.primary.opacity(isCurrent ? 0.12 : 0))
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.primary.opacity(isCurrent ? 0.18 : 0))
                 )
                 .contentShape(Rectangle())
         }
@@ -84,7 +101,11 @@ struct EditorPresentationControl: View {
         switch option {
         case .source: "chevron.left.forwardslash.chevron.right"
         case .preview: "doc.richtext"
-        case .diff: "plus.forwardslash.minus"
+        /// Two versions of one document, the earlier one dashed. Not
+        /// `plus.forwardslash.minus`, which was here first and reads as a
+        /// percent sign, and not a swap arrow, which would say "switch" —
+        /// ambiguous next to buttons whose whole job is switching.
+        case .diff: "square.on.square.dashed"
         case .split: "rectangle.split.2x1"
         }
     }
