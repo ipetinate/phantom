@@ -142,7 +142,8 @@ final class ScrollSyncLink: NSObject, ObservableObject {
         let target = strategy.followerOrigin(
             leader: leaderMetrics,
             follower: followerMetrics,
-            axes: axes
+            axes: axes,
+            from: side
         )
 
         /// A pane already sitting where it is being sent posts nothing,

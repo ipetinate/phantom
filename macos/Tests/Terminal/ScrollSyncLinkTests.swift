@@ -184,6 +184,69 @@ struct ScrollSyncLinkTests {
         #expect(offset(of: follower) == CGFloat(200))
     }
 
+    /// An asymmetric mapping leans on the echo filter harder than anything
+    /// else does, so it gets its own test.
+    ///
+    /// `.absolute` survives a stray round trip by luck — its round trip is
+    /// the identity. This mapping's is not: it adds a hundred points each
+    /// way, so a single unfiltered echo would walk the panes to their ends
+    /// and stay there. That is the shape of every raw-to-rendered mapping,
+    /// where the two directions are unrelated functions and nothing brings
+    /// a round trip home.
+    ///
+    /// Both halves again: the echo suppressed, and a real scroll of the same
+    /// pane still getting through.
+    @Test func anAsymmetricStrategysEchoIsStillSwallowed() {
+        let (leader, follower) = (
+            scrollView(contentHeight: 1000, viewportHeight: 200),
+            scrollView(contentHeight: 1000, viewportHeight: 200)
+        )
+        let link = ScrollSyncLink(
+            strategy: ScrollSyncStrategy { geometry, _ in geometry.leaderOffset + 100 },
+            isEnabled: true
+        )
+        link.attach(leader, as: .first)
+        link.attach(follower, as: .second)
+
+        move(leader, to: 100)
+        link.relay(from: .first)
+        #expect(offset(of: follower) == CGFloat(200))
+
+        link.relay(from: .second)
+        #expect(offset(of: leader) == CGFloat(100))
+
+        move(follower, to: 500)
+        link.relay(from: .second)
+        #expect(offset(of: leader) == CGFloat(600))
+    }
+
+    /// The side reaching the mapping is the side that *moved*, not always
+    /// `.first`. Getting this backwards would apply a raw-to-rendered map to
+    /// the rendered pane and vice versa — wrong in both directions at once,
+    /// and invisible under any symmetric strategy.
+    @Test func theMappingIsToldWhichSideActuallyMoved() {
+        let (leader, follower) = pair()
+        let seen = SideLog()
+        let link = ScrollSyncLink(
+            strategy: ScrollSyncStrategy { geometry, side in
+                seen.sides.append(side)
+                return geometry.leaderOffset
+            },
+            isEnabled: true
+        )
+        link.attach(leader, as: .first)
+        link.attach(follower, as: .second)
+
+        link.relay(from: .second)
+        link.relay(from: .first)
+
+        #expect(seen.sides == [.second, .first])
+    }
+
+    private final class SideLog {
+        var sides: [ScrollSyncSide] = []
+    }
+
     // MARK: - Through the notification
 
     /// Proves the observer is registered against the right clip view and
@@ -211,7 +274,7 @@ struct ScrollSyncLinkTests {
         let (leader, follower) = pair()
         let counter = Counter()
         let link = ScrollSyncLink(
-            strategy: ScrollSyncStrategy { geometry in
+            strategy: ScrollSyncStrategy { geometry, _ in
                 counter.count += 1
                 return geometry.leaderOffset
             },
@@ -242,7 +305,7 @@ struct ScrollSyncLinkTests {
         let replacement = scrollView(contentHeight: 1000, viewportHeight: 200)
         let counter = Counter()
         let link = ScrollSyncLink(
-            strategy: ScrollSyncStrategy { geometry in
+            strategy: ScrollSyncStrategy { geometry, _ in
                 counter.count += 1
                 return geometry.leaderOffset
             },

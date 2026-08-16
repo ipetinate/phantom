@@ -69,17 +69,20 @@ struct ScrollSyncTests {
     // MARK: - Absolute
 
     @Test func absolutePutsTheFollowerAtTheLeadersOwnOffset() {
-        let offset = ScrollSyncStrategy.absolute.followerOffset(for: geometry(
-            leaderOffset: 250,
-            followerContent: 1000
-        ))
+        let offset = ScrollSyncStrategy.absolute.followerOffset(
+            for: geometry(leaderOffset: 250, followerContent: 1000),
+            from: .first
+        )
         #expect(offset == CGFloat(250))
     }
 
     /// The case a padded diff still runs into: the two sides are the same
     /// length until a trailing newline difference makes one a row shorter.
     @Test func absoluteStopsAtTheFollowersEnd() {
-        let offset = ScrollSyncStrategy.absolute.followerOffset(for: geometry(leaderOffset: 700))
+        let offset = ScrollSyncStrategy.absolute.followerOffset(
+            for: geometry(leaderOffset: 700),
+            from: .first
+        )
         #expect(offset == CGFloat(400))
     }
 
@@ -87,45 +90,49 @@ struct ScrollSyncTests {
 
     @Test func proportionalMatchesHowFarThroughEachPaneIs() {
         let offset = ScrollSyncStrategy.proportional.followerOffset(
-            for: geometry(leaderOffset: 400)
+            for: geometry(leaderOffset: 400),
+            from: .first
         )
         #expect(offset == CGFloat(200))
     }
 
     @Test func proportionalMatchesTheEnds() {
         #expect(
-            ScrollSyncStrategy.proportional.followerOffset(for: geometry(leaderOffset: 0))
-                == CGFloat(0)
+            ScrollSyncStrategy.proportional
+                .followerOffset(for: geometry(leaderOffset: 0), from: .first) == CGFloat(0)
         )
         #expect(
-            ScrollSyncStrategy.proportional.followerOffset(for: geometry(leaderOffset: 800))
-                == CGFloat(400)
+            ScrollSyncStrategy.proportional
+                .followerOffset(for: geometry(leaderOffset: 800), from: .first) == CGFloat(400)
         )
     }
 
     /// A rendered preview shorter than its viewport has nothing to scroll,
     /// and scrolling the raw text beside it must not try to move it anyway.
     @Test func aFollowerWithNoTravelStaysPut() {
-        let offset = ScrollSyncStrategy.proportional.followerOffset(for: geometry(
-            leaderOffset: 400,
-            followerContent: 150,
-            followerViewport: 400
-        ))
+        let offset = ScrollSyncStrategy.proportional.followerOffset(
+            for: geometry(leaderOffset: 400, followerContent: 150, followerViewport: 400),
+            from: .first
+        )
         #expect(offset == CGFloat(0))
     }
 
     // MARK: - Clamping a host's own mapping
 
-    /// The clamp is in `followerOffset(for:)` rather than in each mapping
+    /// The clamp is in `followerOffset(for:from:)` rather than in each mapping
     /// precisely so a host cannot skip it.
     @Test func aMappingThatOvershootsIsBroughtBackToTheEnd() {
-        let runaway = ScrollSyncStrategy { _ in 99_999 }
-        #expect(runaway.followerOffset(for: geometry(leaderOffset: 10)) == CGFloat(400))
+        let runaway = ScrollSyncStrategy { _, _ in 99_999 }
+        #expect(
+            runaway.followerOffset(for: geometry(leaderOffset: 10), from: .first) == CGFloat(400)
+        )
     }
 
     @Test func aMappingThatGoesNegativeIsBroughtBackToTheTop() {
-        let underflow = ScrollSyncStrategy { _ in -500 }
-        #expect(underflow.followerOffset(for: geometry(leaderOffset: 10)) == CGFloat(0))
+        let underflow = ScrollSyncStrategy { _, _ in -500 }
+        #expect(
+            underflow.followerOffset(for: geometry(leaderOffset: 10), from: .first) == CGFloat(0)
+        )
     }
 
     // MARK: - Row alignment
@@ -133,21 +140,86 @@ struct ScrollSyncTests {
     /// The diff's case: row 2 of the leader is row 5 of the follower, and
     /// the five points the reader is scrolled into that row come along.
     @Test func rowAlignmentCarriesThePartRowOver() {
-        let strategy = ScrollSyncStrategy.rowAligned(rowHeight: 20) { $0 + 3 }
-        let offset = strategy.followerOffset(for: geometry(
-            leaderOffset: 45,
-            followerContent: 1000
-        ))
+        let strategy = ScrollSyncStrategy.rowAligned(
+            rowHeight: 20,
+            firstToSecond: { $0 + 3 },
+            secondToFirst: { $0 - 3 }
+        )
+        let offset = strategy.followerOffset(
+            for: geometry(leaderOffset: 45, followerContent: 1000),
+            from: .first
+        )
         #expect(offset == CGFloat(105))
     }
 
     @Test func rowAlignmentWithoutARowHeightFallsBackToTheLeadersOffset() {
-        let strategy = ScrollSyncStrategy.rowAligned(rowHeight: 0) { $0 }
-        let offset = strategy.followerOffset(for: geometry(
-            leaderOffset: 50,
-            followerContent: 1000
-        ))
+        let strategy = ScrollSyncStrategy.rowAligned(
+            rowHeight: 0,
+            firstToSecond: { $0 },
+            secondToFirst: { $0 }
+        )
+        let offset = strategy.followerOffset(
+            for: geometry(leaderOffset: 50, followerContent: 1000),
+            from: .first
+        )
         #expect(offset == CGFloat(50))
+    }
+
+    // MARK: - Which side is leading
+
+    /// The whole point of telling the mapping which side moved.
+    ///
+    /// Raw markdown against its rendered form needs two different functions,
+    /// and nothing about the geometry says which one to use — both
+    /// directions see a leader offset and two content lengths. Only the side
+    /// distinguishes them.
+    @Test func anAsymmetricMappingGetsADifferentAnswerForEachDirection() {
+        let strategy = ScrollSyncStrategy { geometry, side in
+            side == .first ? geometry.leaderOffset * 2 : geometry.leaderOffset / 2
+        }
+
+        let leading = strategy.followerOffset(
+            for: geometry(leaderOffset: 100, followerContent: 5000),
+            from: .first
+        )
+        let following = strategy.followerOffset(
+            for: geometry(leaderOffset: 100, followerContent: 5000),
+            from: .second
+        )
+
+        #expect(leading == CGFloat(200))
+        #expect(following == CGFloat(50))
+    }
+
+    /// The two mappings the built-ins are: unchanged by the new argument, so
+    /// a diff keeps behaving exactly as it did.
+    @Test func theBuiltInMappingsIgnoreWhichSideIsLeading() {
+        let shape = geometry(leaderOffset: 400)
+
+        #expect(
+            ScrollSyncStrategy.absolute.followerOffset(for: shape, from: .first)
+                == ScrollSyncStrategy.absolute.followerOffset(for: shape, from: .second)
+        )
+        #expect(
+            ScrollSyncStrategy.proportional.followerOffset(for: shape, from: .first)
+                == ScrollSyncStrategy.proportional.followerOffset(for: shape, from: .second)
+        )
+    }
+
+    /// Row alignment takes both directions because an unpadded diff's
+    /// alignment is not invertible: a run of deleted lines puts several
+    /// left-hand rows opposite one right-hand row, so `secondToFirst` cannot
+    /// be derived from `firstToSecond`.
+    @Test func rowAlignmentUsesTheMapForTheDirectionBeingScrolled() {
+        let strategy = ScrollSyncStrategy.rowAligned(
+            rowHeight: 20,
+            firstToSecond: { $0 + 3 },
+            secondToFirst: { max(0, $0 - 3) }
+        )
+
+        let shape = geometry(leaderOffset: 100, followerContent: 1000)
+        #expect(strategy.followerOffset(for: shape, from: .first) == CGFloat(160))
+        #expect(strategy.followerOffset(for: shape, from: .second) == CGFloat(40))
     }
 
     // MARK: - Axes
@@ -160,7 +232,8 @@ struct ScrollSyncTests {
                 viewportSize: CGSize(width: 300, height: 200)
             ),
             follower: follower(offset: 0),
-            axes: .vertical
+            axes: .vertical,
+            from: .first
         )
         #expect(origin.y == CGFloat(200))
         #expect(origin.x == CGFloat(0))
@@ -178,7 +251,8 @@ struct ScrollSyncTests {
                 contentSize: CGSize(width: 900, height: 600),
                 viewportSize: CGSize(width: 300, height: 200)
             ),
-            axes: .horizontal
+            axes: .horizontal,
+            from: .first
         )
         #expect(origin.x == CGFloat(120))
         #expect(origin.y == CGFloat(77))
@@ -196,7 +270,8 @@ struct ScrollSyncTests {
                 contentSize: CGSize(width: 900, height: 1000),
                 viewportSize: CGSize(width: 300, height: 200)
             ),
-            axes: .both
+            axes: .both,
+            from: .first
         )
         #expect(origin.x == CGFloat(120))
         #expect(origin.y == CGFloat(400))

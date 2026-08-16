@@ -81,10 +81,29 @@ struct ScrollSyncGeometry: Equatable {
 /// output a source line ended up. Neither fact is derivable from heights,
 /// so the container takes the mapping as a parameter and supplies only the
 /// two answers that *are* derivable.
+/// ## Both directions, always
+///
+/// The mapping is told **which side is leading**, because one strategy value
+/// serves both directions and the two directions are not always the same
+/// function.
+///
+/// A padded diff hides this: with both sides on one grid, `.absolute` really
+/// is symmetric, so a map that ignored the side would be correct by
+/// accident. Raw markdown against its rendered form is where it breaks.
+/// Source line 12 landing at rendered y=400 does not mean rendered y=400
+/// came from source line 12 — the relation is not even injective, since a
+/// fenced block is many source lines at one rendered offset. Handed only a
+/// source→rendered map, the link would apply that very map to the
+/// *preview's* offset the moment a reader scrolled the preview, and push a
+/// meaningless number back into the source. Worse than `.proportional`,
+/// which is at least wrong symmetrically.
 struct ScrollSyncStrategy {
-    private let map: (ScrollSyncGeometry) -> CGFloat
+    private let map: (ScrollSyncGeometry, ScrollSyncSide) -> CGFloat
 
-    init(_ map: @escaping (ScrollSyncGeometry) -> CGFloat) {
+    /// - Parameter map: Where the follower goes, given the geometry and
+    ///   which side is currently leading. A symmetric mapping is free to
+    ///   ignore the second argument; an asymmetric one must branch on it.
+    init(_ map: @escaping (ScrollSyncGeometry, ScrollSyncSide) -> CGFloat) {
         self.map = map
     }
 
@@ -96,7 +115,9 @@ struct ScrollSyncStrategy {
     /// inserted and deleted lines. Row *n* of one pane is then at the same y
     /// as row *n* of the other, so equal offsets *are* line-for-line
     /// alignment and nobody has to count lines to get it.
-    static let absolute = ScrollSyncStrategy { $0.leaderOffset }
+    ///
+    /// Symmetric, so the leading side changes nothing.
+    static let absolute = ScrollSyncStrategy { geometry, _ in geometry.leaderOffset }
 
     /// The follower sits the same fraction into its own travel.
     ///
@@ -105,8 +126,10 @@ struct ScrollSyncStrategy {
     /// block and a link renders shorter than its source. There is no row *n*
     /// to match, so matching the ends is the most that is true: top with
     /// top, bottom with bottom, and a proportion in between.
-    static let proportional = ScrollSyncStrategy {
-        $0.leaderProgress * $0.followerScrollableLength
+    /// Symmetric in the sense that matters: whichever side leads, the
+    /// answer is that side's progress applied to the other's travel.
+    static let proportional = ScrollSyncStrategy { geometry, _ in
+        geometry.leaderProgress * geometry.followerScrollableLength
     }
 
     /// Where the follower should sit along one axis, clamped to what it can
@@ -115,8 +138,13 @@ struct ScrollSyncStrategy {
     /// The clamp lives here rather than inside each mapping so that a host's
     /// own mapping cannot scroll a pane past its end into blank space, and
     /// so there is one place to look when it does.
-    func followerOffset(for geometry: ScrollSyncGeometry) -> CGFloat {
-        min(geometry.followerScrollableLength, max(0, map(geometry)))
+    /// - Parameter side: Which side is leading, passed through to the
+    ///   mapping so an asymmetric one can pick the right direction.
+    func followerOffset(
+        for geometry: ScrollSyncGeometry,
+        from side: ScrollSyncSide
+    ) -> CGFloat {
+        min(geometry.followerScrollableLength, max(0, map(geometry, side)))
     }
 
     /// Where the follower's clip view should go, for the axes being kept in
@@ -127,28 +155,35 @@ struct ScrollSyncStrategy {
     func followerOrigin(
         leader: ScrollPaneMetrics,
         follower: ScrollPaneMetrics,
-        axes: ScrollSyncAxes
+        axes: ScrollSyncAxes,
+        from side: ScrollSyncSide
     ) -> CGPoint {
         var origin = follower.offset
 
         if axes.contains(.vertical) {
-            origin.y = followerOffset(for: ScrollSyncGeometry(
-                leaderOffset: leader.offset.y,
-                leaderContentLength: leader.contentSize.height,
-                leaderViewportLength: leader.viewportSize.height,
-                followerContentLength: follower.contentSize.height,
-                followerViewportLength: follower.viewportSize.height
-            ))
+            origin.y = followerOffset(
+                for: ScrollSyncGeometry(
+                    leaderOffset: leader.offset.y,
+                    leaderContentLength: leader.contentSize.height,
+                    leaderViewportLength: leader.viewportSize.height,
+                    followerContentLength: follower.contentSize.height,
+                    followerViewportLength: follower.viewportSize.height
+                ),
+                from: side
+            )
         }
 
         if axes.contains(.horizontal) {
-            origin.x = followerOffset(for: ScrollSyncGeometry(
-                leaderOffset: leader.offset.x,
-                leaderContentLength: leader.contentSize.width,
-                leaderViewportLength: leader.viewportSize.width,
-                followerContentLength: follower.contentSize.width,
-                followerViewportLength: follower.viewportSize.width
-            ))
+            origin.x = followerOffset(
+                for: ScrollSyncGeometry(
+                    leaderOffset: leader.offset.x,
+                    leaderContentLength: leader.contentSize.width,
+                    leaderViewportLength: leader.viewportSize.width,
+                    followerContentLength: follower.contentSize.width,
+                    followerViewportLength: follower.viewportSize.width
+                ),
+                from: side
+            )
         }
 
         return origin
@@ -165,18 +200,36 @@ extension ScrollSyncStrategy {
     /// no rows at all on the right, so line 40 of the old file may be line
     /// 31 of the new one, and no arithmetic over heights can discover that.
     ///
+    /// **Both directions are required, and that is not ceremony.** An
+    /// alignment between two unpadded files is not symmetric: old→new and
+    /// new→old are different functions, and neither is the other's inverse
+    /// wherever a run of lines was deleted or inserted, because several rows
+    /// on one side collapse onto one row of the other. A single closure
+    /// would be applied to whichever pane the reader happened to scroll, and
+    /// would be right only half the time — silently, and only in files that
+    /// actually have deletions.
+    ///
     /// Whatever fraction of a row the leader is scrolled by is carried over
     /// unchanged, so the follower moves smoothly with it instead of jumping
     /// a whole row at a time.
+    ///
+    /// - Parameters:
+    ///   - firstToSecond: Given a row of the pane attached as `.first`, the
+    ///     row of `.second` beside it.
+    ///   - secondToFirst: The same journey the other way. Derive it from the
+    ///     same alignment table rather than by inverting the closure above,
+    ///     which cannot be inverted.
     static func rowAligned(
         rowHeight: CGFloat,
-        followerRow: @escaping (Int) -> Int
+        firstToSecond: @escaping (Int) -> Int,
+        secondToFirst: @escaping (Int) -> Int
     ) -> ScrollSyncStrategy {
-        ScrollSyncStrategy { geometry in
+        ScrollSyncStrategy { geometry, side in
             guard rowHeight > 0 else { return geometry.leaderOffset }
             let row = (geometry.leaderOffset / rowHeight).rounded(.down)
             let withinRow = geometry.leaderOffset - row * rowHeight
-            return CGFloat(followerRow(Int(row))) * rowHeight + withinRow
+            let followerRow = side == .first ? firstToSecond(Int(row)) : secondToFirst(Int(row))
+            return CGFloat(followerRow) * rowHeight + withinRow
         }
     }
 }
@@ -186,12 +239,30 @@ extension ScrollSyncStrategy {
 ///
 /// Without this the panes chase each other. A moves; B is moved to follow;
 /// B's clip view reports a bounds change, which is indistinguishable from
-/// the reader scrolling B; so A is moved to follow *that*. Under
-/// `.absolute` the round trip happens to land back where it started and the
-/// loop dies quietly, which is exactly why it is not a safe thing to leave
-/// to luck — under `.proportional` with panes of different lengths it does
-/// not land back, and the two drift a few points apart per hop until they
-/// pin against the ends.
+/// the reader scrolling B; so A is moved to follow *that*.
+///
+/// **How badly that ends depends entirely on the strategy, and the worst
+/// case is now the ordinary one.** Three tiers, and do not read the first
+/// as the general behaviour:
+///
+/// - `.absolute`'s round trip is the identity, so a leaked echo lands back
+///   where it started and the loop dies quietly. That is luck, not design —
+///   a property of that one mapping.
+/// - `.proportional` between panes of different lengths does not land back,
+///   and the two drift a few points apart per hop until they pin against
+///   the ends.
+/// - **An asymmetric mapping has no such property at all.** Raw markdown
+///   against its rendered form is two unrelated functions, and nothing
+///   brings a round trip home: a single unfiltered echo does not drift, it
+///   walks both panes to their ends in one go.
+///
+/// So this is not a defensive optimisation and must not be simplified into
+/// one. For a symmetric strategy it is insurance; for an asymmetric one it
+/// is the only thing standing between the reader and two pinned panes.
+/// `ScrollSyncLinkTests.anAsymmetricStrategysEchoIsStillSwallowed` keeps a
+/// deliberately pathological mapping — one adding a hundred points in
+/// *both* directions — so that removing this fails loudly there rather than
+/// only on somebody's README.
 ///
 /// The filter remembers the origin it last handed to each side and refuses
 /// to relay a report that matches it. Remembering the *value* rather than
