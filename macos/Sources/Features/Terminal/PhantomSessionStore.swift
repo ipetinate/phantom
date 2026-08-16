@@ -43,7 +43,13 @@ final class PhantomSessionStore {
 
     /// While restoring from the store, saves are suspended so a partial
     /// window set can never overwrite the saved session.
-    private var isRestoring = false
+    ///
+    /// Read (never written) outside this type by `SidebarTabManager`, which
+    /// consults it to skip seeding a just-created window's sidebar from
+    /// whichever window happens to be key — see `SidebarTabManager.shouldSeed`
+    /// for why that heuristic cannot be trusted while a restore is placing
+    /// windows of its own.
+    private(set) var isRestoring = false
 
     /// Whether the app has begun quitting.
     ///

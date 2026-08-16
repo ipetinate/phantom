@@ -29,6 +29,9 @@ final class SidebarTabManager: ObservableObject {
     /// adds it to the tab group; until then, the parent group (the key
     /// window's at creation time) seeds the list so the sidebar never
     /// flashes empty.
+    ///
+    /// Only ever set when `shouldSeed` allows it — see there for why a
+    /// window `PhantomSessionStore` is restoring must never get one.
     private weak var seedTabGroup: NSWindowTabGroup?
 
     private var modelsById: [ObjectIdentifier: SidebarTabModel] = [:]
@@ -51,7 +54,8 @@ final class SidebarTabManager: ObservableObject {
     init(window: NSWindow) {
         self.window = window
 
-        if let keyWindow = NSApp.keyWindow as? TerminalWindow,
+        if Self.shouldSeed(isRestoringSession: PhantomSessionStore.shared.isRestoring),
+           let keyWindow = NSApp.keyWindow as? TerminalWindow,
            keyWindow !== window,
            let parentGroup = keyWindow.tabGroup {
             self.seedTabGroup = parentGroup
@@ -73,6 +77,33 @@ final class SidebarTabManager: ObservableObject {
     deinit {
         metadataRefreshTimer?.invalidate()
         notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    /// Whether a just-initializing window may seed its sidebar from
+    /// whichever window is currently key.
+    ///
+    /// True for the case the seed exists to serve: a genuinely new tab,
+    /// created (say, by Cmd-T) while some other window is key, is about to
+    /// join *that* window's group — `addTabbedWindowSafely` runs moments
+    /// later, and the seed only bridges the gap until `own.tabGroup.windows
+    /// .count > 1` becomes true and clears it itself.
+    ///
+    /// False during `PhantomSessionStore` restore, where the premise
+    /// breaks: a restored window's group membership is decided entirely by
+    /// the states in `session.json`, not by whatever happens to be key at
+    /// the instant it is created, and a state that decoded with no
+    /// `tabGroupID` is deliberately kept standalone — `tabbingMode` is
+    /// forced `.disallowed` specifically so it never joins anything.
+    /// `own.tabGroup.windows.count` can therefore never exceed 1 for that
+    /// window, so the self-correction the seed relies on never fires, and
+    /// the wrong group — some *other*, unrelated restored window's, borrowed
+    /// only because it happened to be shown a moment earlier — would sit in
+    /// `seedTabGroup` for as long as the window stays open. Its sidebar
+    /// would go on listing tabs that live in somebody else's window, and
+    /// selecting or closing one of those rows would act on that window
+    /// instead of this one.
+    static func shouldSeed(isRestoringSession: Bool) -> Bool {
+        !isRestoringSession
     }
 
     /// All windows participating in this sidebar: our tab group once

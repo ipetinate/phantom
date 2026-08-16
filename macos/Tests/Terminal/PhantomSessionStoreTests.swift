@@ -318,6 +318,106 @@ struct PhantomSessionStoreTests {
         #expect(standalones.map(\.id) == [1])
     }
 
+    /// The file measured behind the bug this suite exists for: a real
+    /// `session.json` with four states, the first of which has no
+    /// `tabGroupID`, `tabIndex` or `isSelectedTab` at all — not `null`,
+    /// simply absent, which is what a window saved as a standalone (never
+    /// having joined a tab group) looks like. The other three are a
+    /// coherent group.
+    ///
+    /// Decoded through `InternalState<MockView>`, per the note on this
+    /// suite — same field values as the real file, with each surface's
+    /// `uuid`/`pwd`/`title` collapsed to the bare `id` `MockView` decodes.
+    /// Confirms `partition` and `ordered` place the orphan on its own
+    /// rather than folding it into, or dropping it from, the group — the
+    /// half of "becomes its own window rather than vanishing" that these
+    /// pure decisions are responsible for.
+    @MainActor
+    @Test func anOrphanStateAmongATabGroupBecomesItsOwnStandalone() throws {
+        let json = """
+        {
+          "version": 1,
+          "states": [
+            {
+              "isFullscreen": false,
+              "titleOverride": "front-app-eita",
+              "frame": [[0, 0], [1800, 1130]],
+              "surfaceTree": {
+                "root": {"view": {"id": "87C47F3F-9F16-4AEC-8387-B1F2C14B0EB6"}},
+                "version": 1
+              },
+              "focusedSurface": "87C47F3F-9F16-4AEC-8387-B1F2C14B0EB6",
+              "tabColor": 0,
+              "effectiveFullscreenMode": "native"
+            },
+            {
+              "effectiveFullscreenMode": "native",
+              "isFullscreen": false,
+              "tabIndex": 0,
+              "frame": [[0, 0], [1800, 1130]],
+              "surfaceTree": {
+                "root": {"view": {"id": "6EA45561-5082-47E5-84C2-2CA528B0979D"}},
+                "version": 1
+              },
+              "isSelectedTab": false,
+              "focusedSurface": "6EA45561-5082-47E5-84C2-2CA528B0979D",
+              "tabColor": 0,
+              "tabGroupID": 0
+            },
+            {
+              "tabColor": 0,
+              "isFullscreen": false,
+              "tabIndex": 1,
+              "frame": [[0, 0], [1800, 1130]],
+              "surfaceTree": {
+                "root": {"view": {"id": "9411024F-1C9E-49C1-99A1-E32DF0042C6B"}},
+                "version": 1
+              },
+              "isSelectedTab": false,
+              "focusedSurface": "9411024F-1C9E-49C1-99A1-E32DF0042C6B",
+              "tabGroupID": 0,
+              "effectiveFullscreenMode": "native"
+            },
+            {
+              "effectiveFullscreenMode": "native",
+              "isFullscreen": false,
+              "tabIndex": 2,
+              "frame": [[0, 0], [1800, 1130]],
+              "surfaceTree": {
+                "root": {"view": {"id": "BD86389F-A779-41CD-AEE4-7C2AA7D69647"}},
+                "version": 1
+              },
+              "isSelectedTab": true,
+              "focusedSurface": "BD86389F-A779-41CD-AEE4-7C2AA7D69647",
+              "tabColor": 0,
+              "tabGroupID": 0
+            }
+          ]
+        }
+        """
+
+        let envelope = try JSONDecoder().decode(
+            FixtureEnvelope.self, from: Data(json.utf8))
+        let states = envelope.states
+        #expect(states.count == 4)
+
+        let (groups, standalones) = PhantomSessionStore.partition(states)
+
+        #expect(groups.count == 1)
+        #expect(standalones.count == 1)
+
+        let orphan = try #require(standalones.first)
+        #expect(orphan.titleOverride == "front-app-eita")
+        #expect(orphan.tabGroupID == nil)
+        #expect(orphan.tabIndex == nil)
+        #expect(orphan.isSelectedTab == nil)
+        #expect(orphan.frame == CGRect(x: 0, y: 0, width: 1800, height: 1130))
+
+        let ordered = PhantomSessionStore.ordered(groups[0])
+        #expect(ordered.map(\.tabIndex) == [0, 1, 2])
+        #expect(PhantomSessionStore.selectedIndex(in: ordered) == 2)
+    }
+
     /// The tab bar's order is the file's to keep, not the order the states
     /// happen to sit in.
     @Test func ordersTabsByTheirSavedPosition() {
@@ -501,4 +601,18 @@ private struct FakeSessionState: PhantomSessionState, Equatable {
     var frame: CGRect?
     var effectiveFullscreenMode: FullscreenMode?
     var isFullscreen: Bool?
+}
+
+/// Lets a decoded `InternalState<MockView>` stand in for the store's
+/// decisions the same way `FakeSessionState` does — needed only for
+/// `anOrphanStateAmongATabGroupBecomesItsOwnStandalone`, which decodes a
+/// real `session.json` rather than constructing states by hand.
+extension TerminalRestorableState.InternalState: PhantomSessionState {}
+
+/// The envelope shape `PhantomSessionStore` writes, decoded into
+/// `MockView`-backed states so a real `session.json` fixture can drive
+/// `partition`/`ordered` without touching `Ghostty.SurfaceView`.
+private struct FixtureEnvelope: Decodable {
+    let version: Int
+    let states: [TerminalRestorableState.InternalState<MockView>]
 }
