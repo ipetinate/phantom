@@ -37,16 +37,20 @@ enum ShellCommand {
             self.onLine = onLine
         }
 
+        /// The remainder is kept exactly as it arrived, `\r` included: a
+        /// chunk can end between the `\r` and the `\n` of one terminator,
+        /// and trimming the buffer would lose the half that has to pair
+        /// with the next chunk.
         func ingest(_ data: Data) {
             sink.append(data)
             lock.withLock {
                 pending += String(data: data, encoding: .utf8) ?? ""
-                var lines = pending.split(separator: "\n", omittingEmptySubsequences: false)
+                var lines = pending.splitIntoLines()
                 if let last = lines.popLast() {
-                    pending = String(last)
+                    pending = last
                 }
                 for line in lines {
-                    onLine(String(line))
+                    onLine(line.droppingTrailingCarriageReturn)
                 }
             }
         }
@@ -54,7 +58,7 @@ enum ShellCommand {
         func flush() {
             lock.withLock {
                 guard !pending.isEmpty else { return }
-                onLine(pending)
+                onLine(pending.droppingTrailingCarriageReturn)
                 pending = ""
             }
         }

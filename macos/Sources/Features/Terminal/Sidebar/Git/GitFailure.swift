@@ -196,8 +196,13 @@ struct GitFailure: Equatable {
     }
 
     /// The indented paths git lists under a "would be overwritten" notice.
+    ///
+    /// Split by scalar: a transcript with CRLF endings has no `\n`
+    /// *Character* in it at all, so a `Character`-based split returns the
+    /// whole thing as one line, nothing matches `hasPrefix("\t")`, and this
+    /// silently hands back an empty list. See `String.splitIntoLines()`.
     private static func filesListed(after marker: String, in output: String) -> [String] {
-        let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
+        let lines = output.splitIntoLines().map(\.droppingTrailingCarriageReturn)
         guard let start = lines.firstIndex(where: { $0.lowercased().contains(marker) }) else { return [] }
 
         var files: [String] = []
@@ -214,8 +219,16 @@ struct GitFailure: Equatable {
     /// Git leads with `error:` or `fatal:` when it has something specific
     /// to say; those lines are worth more than the fetch transcript above
     /// them.
+    ///
+    /// Also split by scalar. On a CRLF transcript a `Character`-based split
+    /// yields one line containing everything, and a transcript that happens
+    /// to open with `error:` then matches — returning the entire wall of
+    /// text as the one-line summary, which is precisely what this type
+    /// exists to avoid.
     private static func firstMeaningfulLine(in output: String) -> String? {
-        let lines = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        let lines = output.splitIntoLines()
+            .filter { !$0.isEmpty }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
 
         if let flagged = lines.first(where: {
             let l = $0.lowercased()

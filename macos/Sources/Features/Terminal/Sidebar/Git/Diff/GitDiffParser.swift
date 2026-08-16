@@ -16,11 +16,15 @@ import Foundation
 enum GitDiffParser {
     /// Parses the whole of a `git diff`, which may describe several files.
     nonisolated static func parse(unified output: String) -> [GitFileDiff] {
-        var lines = splitLines(output)
+        /// Scalars, not characters — see `String.splitIntoLines()`. A diff of
+        /// a CRLF file has no `\n` *Character* in it, so the ordinary split
+        /// returns the whole patch as one line. The `\r` is deliberately left
+        /// on here: in a diff it is file content, not a terminator.
+        var lines = output.splitIntoLines()
 
-        // Output ends with a newline, so the split leaves a phantom empty
-        // element. Left in, a truncated hunk would consume it as an empty
-        // context line.
+        /// Output ends with a newline, so the split leaves a phantom empty
+        /// element. Left in, a truncated hunk would consume it as an empty
+        /// context line.
         if lines.last?.isEmpty == true { lines.removeLast() }
 
         var files: [GitFileDiff] = []
@@ -35,32 +39,12 @@ enum GitDiffParser {
             let (file, next) = parseFile(lines, from: index)
             if let file { files.append(file) }
 
-            // Never trust the sub-parser to advance; a header it cannot
-            // make sense of would otherwise spin here forever.
+            /// Never trust the sub-parser to advance; a header it cannot
+            /// make sense of would otherwise spin here forever.
             index = max(next, index + 1)
         }
 
         return files
-    }
-
-    /// Splits on newlines *by Unicode scalar*, which for once is not
-    /// pedantry.
-    ///
-    /// Swift counts `\r\n` as a single `Character` — one grapheme cluster,
-    /// not two — and a `Character` of `\r\n` is not equal to one of `\n`.
-    /// So `split(separator: "\n")` finds no separators at all in the diff
-    /// of a CRLF file, hands back the entire diff as one line, and the
-    /// viewer shows a single context row containing the whole patch. It
-    /// fails silently and completely, on every file with Windows line
-    /// endings.
-    ///
-    /// Splitting scalars matches the `\n` and leaves the `\r` where it
-    /// belongs: at the end of the line's content, which is where it is a
-    /// real difference worth drawing.
-    private static func splitLines(_ text: String) -> [String] {
-        text.unicodeScalars
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { String(String.UnicodeScalarView($0)) }
     }
 
     private static func isFileHeader(_ line: String) -> Bool {
@@ -94,11 +78,11 @@ enum GitDiffParser {
             if isFileHeader(line) { break }
 
             if line.hasPrefix("@@") {
-                // A combined diff's body carries one marker column per
-                // merge parent (`@@@ -1,2 -1,2 +1,6 @@@`, then two markers
-                // per line), so reading it as a two-column hunk mislabels
-                // every line in it. Everything worth having — the paths —
-                // is already above this point.
+                /// A combined diff's body carries one marker column per
+                /// merge parent (`@@@ -1,2 -1,2 +1,6 @@@`, then two markers
+                /// per line), so reading it as a two-column hunk mislabels
+                /// every line in it. Everything worth having — the paths —
+                /// is already above this point.
                 if isCombined { break }
 
                 guard let parsed = parseHunkHeader(line) else {
@@ -118,7 +102,7 @@ enum GitDiffParser {
                 continue
             }
 
-            // Order matters: "new file mode" also has the prefix "new".
+            /// Order matters: "new file mode" also has the prefix "new".
             if let mode = value(of: "new file mode ", in: line) {
                 isNewFile = true
                 newMode = mode
@@ -150,8 +134,8 @@ enum GitDiffParser {
         let old = renameFrom ?? copyFrom ?? oldPath ?? fallback.old
         let new = renameTo ?? copyTo ?? newPath ?? fallback.new
 
-        // A deletion has no new path and an addition no old one, so the
-        // surviving side is the one to name the file by.
+        /// A deletion has no new path and an addition no old one, so the
+        /// surviving side is the one to name the file by.
         guard let path = new ?? old else { return (nil, index) }
 
         let status: GitFileDiff.Status
@@ -245,9 +229,9 @@ enum GitDiffParser {
         while index < lines.count, consumedOld < header.oldCount || consumedNew < header.newCount {
             let raw = lines[index]
 
-            // Git writes a lone space for an empty context line, but plenty
-            // of tools that pass a patch around strip trailing whitespace
-            // and leave nothing at all. It is still that context line.
+            /// Git writes a lone space for an empty context line, but plenty
+            /// of tools that pass a patch around strip trailing whitespace
+            /// and leave nothing at all. It is still that context line.
             guard let marker = raw.first else {
                 body.append(
                     GitDiffLine(
@@ -311,21 +295,21 @@ enum GitDiffParser {
                 consumedNew += 1
 
             case "\\":
-                // `\ No newline at end of file` belongs to the line above
-                // and counts toward neither side's total.
+                /// `\ No newline at end of file` belongs to the line above
+                /// and counts toward neither side's total.
                 markEndOfFileWithoutNewline(&body)
 
             default:
-                // Nothing else can be inside a hunk. A patch whose counts
-                // overshoot its body ends here rather than swallowing the
-                // next file's header.
+                /// Nothing else can be inside a hunk. A patch whose counts
+                /// overshoot its body ends here rather than swallowing the
+                /// next file's header.
                 return (GitDiffHunk(header: header, lines: body), index)
             }
 
             index += 1
         }
 
-        // The marker for the final line arrives after the counts are met.
+        /// The marker for the final line arrives after the counts are met.
         if index < lines.count, lines[index].hasPrefix("\\") {
             markEndOfFileWithoutNewline(&body)
             index += 1
@@ -399,8 +383,8 @@ enum GitDiffParser {
             return (strip(prefix: "a/", from: first), strip(prefix: "b/", from: unquote(second)))
         }
 
-        // `a/P b/P` — the halves are equal, so their length follows from
-        // the whole: two prefixes of two characters, one separating space.
+        /// `a/P b/P` — the halves are equal, so their length follows from
+        /// the whole: two prefixes of two characters, one separating space.
         let characters = Array(rest)
         let pathLength = (characters.count - 5) / 2
         if pathLength >= 0,
@@ -412,7 +396,7 @@ enum GitDiffParser {
             return (path, path)
         }
 
-        // Unequal halves: the first ` b/` is the best guess available.
+        /// Unequal halves: the first ` b/` is the best guess available.
         guard let separator = rest.range(of: " b/") else { return (nil, nil) }
         return (
             strip(prefix: "a/", from: String(rest[rest.startIndex..<separator.lowerBound])),
@@ -477,9 +461,9 @@ enum GitDiffParser {
             }
         }
 
-        // A path whose escapes do not decode as UTF-8 keeps the form git
-        // printed. Unreadable is better than eight replacement characters
-        // that match nothing.
+        /// A path whose escapes do not decode as UTF-8 keeps the form git
+        /// printed. Unreadable is better than eight replacement characters
+        /// that match nothing.
         return String(bytes: bytes, encoding: .utf8) ?? field
     }
 }
