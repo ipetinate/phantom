@@ -259,12 +259,13 @@ private struct DocumentView: View {
     /// reads diffs stacked wants the next one stacked too.
     @AppStorage("EditorSplitDirection") private var splitDirectionRaw = SplitViewDirection.horizontal.storageKey
 
-    private var splitDirection: Binding<SplitViewDirection> {
-        Binding(
-            get: { SplitViewDirection.fromStorage(splitDirectionRaw) },
-            set: { splitDirectionRaw = $0.storageKey }
-        )
-    }
+    /// The arrangement of whatever split this document is showing.
+    ///
+    /// Owned here rather than by the document because it is where the
+    /// divider sits, which is a property of the window this file is being
+    /// read in. Its direction is kept in step with the stored preference in
+    /// both directions — see `body`.
+    @StateObject private var splitModel = SplitPaneModel()
 
     /// What this document can be shown as, from the file's name and whether
     /// git has anything to compare it against.
@@ -272,14 +273,81 @@ private struct DocumentView: View {
         .resolve(fileName: document.url.lastPathComponent, hasChanges: documentHasChanges)
     }
 
-    private var documentHasChanges: Bool {
+    private var documentHasChanges: Bool { gitContext != nil }
+
+    /// Everything a diff of this document needs, or nil when git has
+    /// nothing to compare it against.
+    private var gitContext: (root: String, change: GitFileChange, side: GitDiffSide)? {
         let path = document.url.path
         guard let root = EditorChangeLookup.owningRoot(forPath: path, amongRoots: Array(git.statuses.keys)),
               let status = git.status(forRoot: root),
-              let relative = EditorChangeLookup.relativePath(forPath: path, root: root)
-        else { return false }
+              let relative = EditorChangeLookup.relativePath(forPath: path, root: root),
+              let found = EditorChangeLookup.change(relativePath: relative, in: status)
+        else { return nil }
 
-        return EditorChangeLookup.hasChanges(relativePath: relative, in: status)
+        return (root, found.change, found.side)
+    }
+
+    /// The document, drawn the way it is currently being read.
+    ///
+    /// Routed through `nearest`, so a presentation that stopped being
+    /// available — the diff of a file whose changes were just committed —
+    /// draws the source rather than an empty pane.
+    @ViewBuilder
+    private var presentedContent: some View {
+        switch presentationOptions.nearest(to: document.presentation) {
+        case .source:
+            sourcePane
+
+        case .diff:
+            diffPane
+
+        case .preview:
+            previewPane
+
+        case .split:
+            SplitPaneContainer(model: splitModel) {
+                sourcePane
+            } second: {
+                /// Whichever alternative this file offers. A document never
+                /// offers both, so there is no third case to choose in.
+                if presentationOptions.splitPartner == .diff {
+                    diffPane
+                } else {
+                    previewPane
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var diffPane: some View {
+        if let context = gitContext {
+            GitDiffView(
+                path: document.url.path,
+                root: context.root,
+                change: context.change,
+                side: context.side,
+                theme: theme,
+                font: configuration.font,
+                model: splitModel,
+                reloadKey: "\(context.change.index)\(context.change.worktree)\(document.isDirty)"
+            )
+        } else {
+            /// Reachable for an instant: the control was drawn from a status
+            /// that has since been replaced by one with no entry for this
+            /// file. The next body evaluation moves off `.diff` entirely.
+            Color(nsColor: theme.background)
+        }
+    }
+
+    private var previewPane: some View {
+        MarkdownPreviewView(
+            text: document.currentText,
+            fileURL: document.url,
+            theme: theme,
+            configuration: configuration
+        )
     }
 
     /// The editable text, which every document has and every presentation
@@ -336,7 +404,7 @@ private struct DocumentView: View {
             }
 
             ZStack(alignment: .topTrailing) {
-                sourcePane
+                presentedContent
 
                 EditorPresentationControl(
                     options: presentationOptions,
@@ -348,7 +416,6 @@ private struct DocumentView: View {
                         get: { presentationOptions.nearest(to: document.presentation) },
                         set: { document.presentation = $0 }
                     ),
-                    direction: splitDirection
                 )
             }
         }
@@ -360,7 +427,23 @@ private struct DocumentView: View {
         .onAppear {
             lsp.didOpen(path: document.url.path, text: document.currentText)
             refreshUnderlines()
+
+            /// The model is fresh per tab; the preference is not. Read it
+            /// back so a reader who chose stacked splits gets stacked
+            /// splits in the next file too.
+            splitModel.direction = SplitViewDirection.fromStorage(splitDirectionRaw)
+
+            /// Ask about this file's repository, rather than waiting to be
+            /// told. `owningRoot` can only choose among roots git has
+            /// already been asked about, so without this whether a file
+            /// offers a diff would depend on whether the reader had
+            /// happened to open the sidebar first. `requestStatus` is
+            /// already debounced per root and a no-op when it is loaded.
+            if let root = EditorChangeLookup.repositoryRoot(forPath: document.url.path) {
+                git.requestStatus(root: root)
+            }
         }
+        .onChange(of: splitModel.direction) { splitDirectionRaw = $0.storageKey }
         .onDisappear { lsp.didClose(path: document.url.path) }
         .onChange(of: lsp.diagnostics[document.url.path] ?? []) { _ in
             refreshUnderlines()

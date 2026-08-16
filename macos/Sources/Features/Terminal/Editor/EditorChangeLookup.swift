@@ -38,6 +38,64 @@ enum EditorChangeLookup {
         return String(path.dropFirst(base.count + 1))
     }
 
+    /// The repository a file is in, found by walking up from it.
+    ///
+    /// Needed because `owningRoot` can only choose among roots git has
+    /// already been asked about, and until the Git panel is opened that
+    /// list is empty. Without this, whether a file offers a diff would
+    /// depend on whether the reader had happened to look at the sidebar
+    /// first.
+    ///
+    /// `.git` is tested for existence rather than for being a directory: in
+    /// a worktree or a submodule it is a *file* containing a `gitdir:`
+    /// pointer, and treating those as "not a repository" would quietly
+    /// exclude exactly the checkouts people do parallel work in.
+    ///
+    /// - Parameter maximumDepth: a walk that cannot run away. A path is
+    ///   arbitrary user input and this runs from `body`.
+    static func repositoryRoot(
+        forPath path: String,
+        maximumDepth: Int = 64,
+        fileManager: FileManager = .default
+    ) -> String? {
+        var directory = URL(fileURLWithPath: path).deletingLastPathComponent()
+
+        for _ in 0..<maximumDepth {
+            if fileManager.fileExists(atPath: directory.appendingPathComponent(".git").path) {
+                return directory.path
+            }
+
+            let parent = directory.deletingLastPathComponent()
+            guard parent.path != directory.path else { return nil }
+            directory = parent
+        }
+
+        return nil
+    }
+
+    /// The entry git holds for this path, and which side of the index it
+    /// is on.
+    ///
+    /// Unstaged is preferred when a file is in both lists — an `MM` file
+    /// has two different diffs, and the working tree is the one the reader
+    /// is looking at in the pane beside it.
+    static func change(relativePath: String, in status: GitStatus) -> (change: GitFileChange, side: GitDiffSide)? {
+        if let unstaged = status.unmerged.first(where: { matches($0, relativePath) }) {
+            return (unstaged, .unstaged)
+        }
+        if let unstaged = status.unstaged.first(where: { matches($0, relativePath) && !$0.isUntracked }) {
+            return (unstaged, .unstaged)
+        }
+        if let staged = status.staged.first(where: { matches($0, relativePath) }) {
+            return (staged, .staged)
+        }
+        return nil
+    }
+
+    private static func matches(_ change: GitFileChange, _ relativePath: String) -> Bool {
+        change.path == relativePath || change.originalPath == relativePath
+    }
+
     /// Whether the status reports this path as changed in any way that a
     /// diff could show.
     ///

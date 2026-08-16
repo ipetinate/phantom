@@ -1,38 +1,13 @@
 import SwiftUI
 
-/// How a split reads in a control.
+/// Remembering how the reader likes their splits cut.
 ///
-/// `SplitViewDirection` is the app's existing word for this — the terminal
-/// splits have used it since before the editor existed, and it is already
-/// `Codable`. These are the presentation-layer adornments, kept out of it
-/// so a type shared with the terminal does not grow an opinion about SF
-/// Symbols.
-///
-/// The names describe the direction the **panes** run in, not the divider's,
-/// and the two are perpendicular: `.horizontal` puts the panes side by side,
-/// separated by a vertical line. Every bug in this area starts with someone
-/// reading it the other way — which is also why the button is labelled with
-/// what it *does* rather than with the state it is in.
+/// `SplitViewDirection` is `Codable`, which `@AppStorage` cannot use — it
+/// wants a `String`. Only the storage spelling lives here: the symbol and
+/// the tooltip belong to `SplitPaneDirectionToggle`, which draws the actual
+/// button inside the split container, and a second opinion about either
+/// would be a second thing to keep in step.
 extension SplitViewDirection {
-    var toggled: SplitViewDirection {
-        self == .horizontal ? .vertical : .horizontal
-    }
-
-    var symbol: String {
-        switch self {
-        case .horizontal: "rectangle.split.2x1"
-        case .vertical: "rectangle.split.1x2"
-        }
-    }
-
-    var splitActionName: String {
-        switch self {
-        case .horizontal: "Split Vertically"
-        case .vertical: "Split Horizontally"
-        }
-    }
-
-    /// For `@AppStorage`, which needs a `String` and cannot use `Codable`.
     var storageKey: String {
         self == .horizontal ? "horizontal" : "vertical"
     }
@@ -54,7 +29,6 @@ extension SplitViewDirection {
 struct EditorPresentationControl: View {
     let options: EditorPresentationOptions
     @Binding var presentation: EditorPresentation
-    @Binding var direction: SplitViewDirection
 
     @State private var isHovered = false
 
@@ -63,17 +37,6 @@ struct EditorPresentationControl: View {
             HStack(spacing: 1) {
                 ForEach(options.available, id: \.self) { option in
                     button(for: option)
-                }
-
-                /// Only while split, because orientation is meaningless with
-                /// one pane — and showing a dead control next to live ones
-                /// teaches people to distrust the whole cluster.
-                if presentation == .split {
-                    Divider()
-                        .frame(height: 12)
-                        .padding(.horizontal, 3)
-
-                    directionButton
                 }
             }
             .padding(3)
@@ -117,27 +80,12 @@ struct EditorPresentationControl: View {
         .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
     }
 
-    private var directionButton: some View {
-        Button {
-            direction = direction.toggled
-        } label: {
-            Image(systemName: direction.symbol)
-                .font(.system(size: 11, weight: .medium))
-                .frame(width: 22, height: 18)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.secondary)
-        .help(direction.splitActionName)
-        .accessibilityLabel(direction.splitActionName)
-    }
-
     private func symbol(for option: EditorPresentation) -> String {
         switch option {
         case .source: "chevron.left.forwardslash.chevron.right"
         case .preview: "doc.richtext"
         case .diff: "plus.forwardslash.minus"
-        case .split: direction.symbol
+        case .split: "rectangle.split.2x1"
         }
     }
 
