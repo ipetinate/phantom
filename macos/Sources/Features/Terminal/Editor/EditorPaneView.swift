@@ -249,6 +249,82 @@ private struct DocumentView: View {
     /// describes.
     @State private var completionBridge = CompletionBridge()
 
+    /// Read to decide whether this file can be shown as a diff. Observed, so
+    /// committing while a diff is open takes the diff away rather than
+    /// leaving a stale one on screen.
+    @ObservedObject private var git: GitCenter = .shared
+
+    /// How a split is cut. A preference rather than a property of the file,
+    /// so it is shared by every split and outlives the launch — someone who
+    /// reads diffs stacked wants the next one stacked too.
+    @AppStorage("EditorSplitDirection") private var splitDirectionRaw = SplitViewDirection.horizontal.storageKey
+
+    private var splitDirection: Binding<SplitViewDirection> {
+        Binding(
+            get: { SplitViewDirection.fromStorage(splitDirectionRaw) },
+            set: { splitDirectionRaw = $0.storageKey }
+        )
+    }
+
+    /// What this document can be shown as, from the file's name and whether
+    /// git has anything to compare it against.
+    private var presentationOptions: EditorPresentationOptions {
+        .resolve(fileName: document.url.lastPathComponent, hasChanges: documentHasChanges)
+    }
+
+    private var documentHasChanges: Bool {
+        let path = document.url.path
+        guard let root = EditorChangeLookup.owningRoot(forPath: path, amongRoots: Array(git.statuses.keys)),
+              let status = git.status(forRoot: root),
+              let relative = EditorChangeLookup.relativePath(forPath: path, root: root)
+        else { return false }
+
+        return EditorChangeLookup.hasChanges(relativePath: relative, in: status)
+    }
+
+    /// The editable text, which every document has and every presentation
+    /// either is or sits beside.
+    private var sourcePane: some View {
+        CodeTextView(
+            text: document.currentText,
+            textRevision: document.revision,
+            /// Through the resolver, not `CodeLanguage.resolve` — a
+            /// language an extension contributed carries its own
+            /// keywords and comment markers, and asking the filename
+            /// directly is what made such a file get a language server
+            /// and no syntax colouring.
+            syntax: LanguageResolver.shared.syntax(forFileName: document.url.lastPathComponent),
+            /// From the file's name, not its language: `.ts` and `.tsx`
+            /// are the same `CodeLanguage`, and a tag closed in `.ts` is
+            /// always wrong because a `<` there can only be a generic.
+            tagDialect: CodeTagDialect.resolve(fileName: document.url.lastPathComponent),
+            theme: theme,
+            configuration: configuration,
+            onEdit: { edited in
+                document.edited(edited)
+                lsp.didChange(path: document.url.path, text: edited)
+            },
+            underlines: underlines,
+            hoverProvider: { offset in await hoverInfo(at: offset) },
+            completionProvider: { offset in await completions(at: offset) },
+            completionDocProvider: { item in await documentation(for: item) },
+            completionOffersDocumentation: { item in offersDocumentation(item) },
+            completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
+            reveal: revealRange,
+            onJumpToDefinition: { offset in jump(from: offset) },
+            onRename: { offset in
+                newName = EditorPaneView.identifier(at: offset, in: document.currentText)
+                renamingAt = offset
+            },
+            onFindReferences: { offset in findReferences(from: offset) },
+            onFormat: { format() },
+            onSave: onSave,
+            onSaveAll: onSaveAll,
+            onCloseTab: onCloseTab,
+            onSearchWorkspace: onSearchWorkspace
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if document.hasConflict {
@@ -259,58 +335,41 @@ private struct DocumentView: View {
                 serverStatusBanner(server: server, status: status)
             }
 
-            CodeTextView(
-                text: document.currentText,
-                textRevision: document.revision,
-                /// Through the resolver, not `CodeLanguage.resolve` — a
-                /// language an extension contributed carries its own
-                /// keywords and comment markers, and asking the filename
-                /// directly is what made such a file get a language server
-                /// and no syntax colouring.
-                syntax: LanguageResolver.shared.syntax(forFileName: document.url.lastPathComponent),
-                /// From the file's name, not its language: `.ts` and `.tsx`
-                /// are the same `CodeLanguage`, and a tag closed in `.ts` is
-                /// always wrong because a `<` there can only be a generic.
-                tagDialect: CodeTagDialect.resolve(fileName: document.url.lastPathComponent),
-                theme: theme,
-                configuration: configuration,
-                onEdit: { edited in
-                    document.edited(edited)
-                    lsp.didChange(path: document.url.path, text: edited)
-                },
-                underlines: underlines,
-                hoverProvider: { offset in await hoverInfo(at: offset) },
-                completionProvider: { offset in await completions(at: offset) },
-                completionDocProvider: { item in await documentation(for: item) },
-                completionOffersDocumentation: { item in offersDocumentation(item) },
-                completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
-                reveal: revealRange,
-                onJumpToDefinition: { offset in jump(from: offset) },
-                onRename: { offset in
-                    newName = EditorPaneView.identifier(at: offset, in: document.currentText)
-                    renamingAt = offset
-                },
-                onFindReferences: { offset in findReferences(from: offset) },
-                onFormat: { format() },
-                onSave: onSave,
-                onSaveAll: onSaveAll,
-                onCloseTab: onCloseTab,
-                onSearchWorkspace: onSearchWorkspace
-            )
-            .onAppear {
-                lsp.didOpen(path: document.url.path, text: document.currentText)
-                refreshUnderlines()
+            ZStack(alignment: .topTrailing) {
+                sourcePane
+
+                EditorPresentationControl(
+                    options: presentationOptions,
+                    presentation: Binding(
+                        /// Through `nearest` on the way out, so a diff that
+                        /// stops existing — the change was just committed —
+                        /// reads as source instead of pointing at a
+                        /// presentation this file no longer has.
+                        get: { presentationOptions.nearest(to: document.presentation) },
+                        set: { document.presentation = $0 }
+                    ),
+                    direction: splitDirection
+                )
             }
-            .onDisappear { lsp.didClose(path: document.url.path) }
-            .onChange(of: lsp.diagnostics[document.url.path] ?? []) { _ in
-                refreshUnderlines()
-            }
-            // A server that started after this file was opened has never
-            // heard of it, so the introduction has to be made again. The
-            // document owns its text; the centre only says when.
-            .onChange(of: lsp.availabilityGeneration) { _ in
-                lsp.didOpen(path: document.url.path, text: document.currentText)
-            }
+        }
+        /// The document is open for as long as the tab exists, which is not
+        /// the same as for as long as the text view is on screen. These used
+        /// to hang off `CodeTextView`, and once a document can be shown as a
+        /// preview instead, that would announce `didClose` to the language
+        /// server every time somebody looked at their README.
+        .onAppear {
+            lsp.didOpen(path: document.url.path, text: document.currentText)
+            refreshUnderlines()
+        }
+        .onDisappear { lsp.didClose(path: document.url.path) }
+        .onChange(of: lsp.diagnostics[document.url.path] ?? []) { _ in
+            refreshUnderlines()
+        }
+        // A server that started after this file was opened has never
+        // heard of it, so the introduction has to be made again. The
+        // document owns its text; the centre only says when.
+        .onChange(of: lsp.availabilityGeneration) { _ in
+            lsp.didOpen(path: document.url.path, text: document.currentText)
         }
         .sheet(isPresented: Binding(
             get: { renamingAt != nil },
