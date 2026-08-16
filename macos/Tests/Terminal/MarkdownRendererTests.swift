@@ -162,6 +162,55 @@ struct MarkdownRendererTests {
         #expect(alignments.contains(.right))
     }
 
+    /// ⚠️ The regression guard for a bug that reached the screen.
+    ///
+    /// `NSTextBlock` defaults its content width to **zero**, and zero is a
+    /// real width rather than "as wide as whatever contains me". Every
+    /// decorated block — heading, quote, fence, table, rule — laid out one
+    /// glyph per line, a vertical column of letters, while plain paragraphs
+    /// were perfect because they carry no block at all.
+    ///
+    /// Checked here as a property of the blocks rather than of the layout so
+    /// that a *new* kind of decoration added without going through
+    /// `decorationBlock()` fails immediately, with no window and no
+    /// measuring. `MarkdownPreviewTests` covers the same bug from the other
+    /// end, in real fragments.
+    ///
+    /// Table cells are exempt and must be: a cell's width comes from the
+    /// enclosing `NSTextTable`'s layout algorithm, and pinning each cell to
+    /// 100% would make every column as wide as the whole table.
+    @Test func everyDecorationBlockHasAWidth() {
+        let everything = """
+        # Heading
+
+        > quoted
+
+        ```swift
+        let x = 1
+        ```
+
+        | a | b |
+        |---|---|
+        | 1 | 2 |
+
+        ---
+
+        <div>raw</div>
+        """
+
+        let blocks = textBlocks(in: render(everything).text)
+            .filter { !($0 is NSTextTableBlock) }
+        #expect(!blocks.isEmpty, "no decoration blocks found — the check would pass vacuously")
+
+        for block in blocks {
+            #expect(
+                block.contentWidth > 0,
+                "a text block with no content width lays its text out one glyph per line"
+            )
+            #expect(block.contentWidthValueType == .percentageValueType)
+        }
+    }
+
     @Test func aThematicBreakDrawsARule() {
         let blocks = textBlocks(in: render("a\n\n---\n\nb").text)
         #expect(blocks.contains { $0.borderColor(for: .minY) != nil })

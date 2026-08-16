@@ -182,7 +182,7 @@ struct MarkdownRenderer {
         /// The rule under the top two levels, which is what makes a long
         /// README scannable rather than a wall of bold text.
         if level <= 2 {
-            let rule = NSTextBlock()
+            let rule = decorationBlock()
             rule.setWidth(1, type: .absoluteValueType, for: .border, edge: .maxY)
             rule.setBorderColor(style.ruleColor, for: .maxY)
             rule.setWidth(size * 0.28, type: .absoluteValueType, for: .padding, edge: .maxY)
@@ -232,7 +232,7 @@ struct MarkdownRenderer {
         indent: CGFloat,
         containers: [NSTextBlock]
     ) {
-        let panel = NSTextBlock()
+        let panel = decorationBlock()
         panel.backgroundColor = style.fillColor
         for edge in [NSRectEdge.minX, .maxX] {
             panel.setWidth(10, type: .absoluteValueType, for: .padding, edge: edge)
@@ -299,6 +299,12 @@ struct MarkdownRenderer {
         let step = Self.indentStep
         let air = list.isTight ? 0 : style.bodyFont.pointSize * 0.4
 
+        /// Tightness governs the space *between items*, not the space after
+        /// the list. Letting it govern both is what glued a bullet list, the
+        /// ordered list under it and the quote under that into one
+        /// undifferentiated block of text.
+        let trailing = style.bodyFont.pointSize * 0.75
+
         for (position, item) in list.items.enumerated() {
             var rest = item.blocks
             let leading: NSAttributedString
@@ -324,10 +330,11 @@ struct MarkdownRenderer {
             line.append(leading)
             line.append(NSAttributedString(string: "\n"))
 
+            let isLast = position == list.items.count - 1
             let paragraphStyle = paragraph(
                 indent: indent,
                 spacingBefore: position == 0 ? air : 0,
-                spacing: air,
+                spacing: isLast && rest.isEmpty ? trailing : air,
                 containers: containers
             )
             paragraphStyle.firstLineHeadIndent = indent
@@ -366,12 +373,17 @@ struct MarkdownRenderer {
         indent: CGFloat,
         containers: [NSTextBlock]
     ) {
-        let bar = NSTextBlock()
+        let bar = decorationBlock()
         bar.setWidth(3, type: .absoluteValueType, for: .border, edge: .minX)
         bar.setBorderColor(style.secondaryColor, for: .minX)
         bar.setWidth(14, type: .absoluteValueType, for: .padding, edge: .minX)
         for edge in [NSRectEdge.minY, .maxY] {
             bar.setWidth(4, type: .absoluteValueType, for: .padding, edge: edge)
+            /// Outer separation as a *margin* rather than as paragraph
+            /// spacing on the quoted text: spacing inside the block would
+            /// push the text down the bar, leaving the bar drawn taller than
+            /// what it marks.
+            bar.setWidth(8, type: .absoluteValueType, for: .margin, edge: edge)
         }
 
         for block in inner {
@@ -466,7 +478,7 @@ struct MarkdownRenderer {
         indent: CGFloat,
         containers: [NSTextBlock]
     ) {
-        let rule = NSTextBlock()
+        let rule = decorationBlock()
         rule.setWidth(1, type: .absoluteValueType, for: .border, edge: .minY)
         rule.setBorderColor(style.ruleColor, for: .minY)
 
@@ -482,6 +494,27 @@ struct MarkdownRenderer {
     }
 
     // MARK: - Attributes
+
+    /// Every decoration block this renderer makes, made in one place.
+    ///
+    /// ⚠️ **`NSTextBlock` defaults its content width to zero**, and zero is a
+    /// real width rather than "as wide as whatever contains me". A block left
+    /// at the default gets about ten points to lay out in, so every paragraph
+    /// inside one breaks after a single glyph and the block renders as a
+    /// vertical column of letters. Nothing warns; the text is all there and
+    /// all wrong.
+    ///
+    /// It cost a visible bug: headings, quotes, fenced code and tables — every
+    /// block carrying decoration — came out one character per line, while
+    /// plain paragraphs, which carry no block at all, were perfect. That is
+    /// also why the constructor is here rather than at each call site: the
+    /// property is invisible by omission, so there must be exactly one place
+    /// it can be omitted from.
+    private func decorationBlock() -> NSTextBlock {
+        let block = NSTextBlock()
+        block.setContentWidth(100, type: .percentageValueType)
+        return block
+    }
 
     private func paragraph(
         indent: CGFloat,
@@ -499,12 +532,42 @@ struct MarkdownRenderer {
         return style
     }
 
+    /// Applies a block's paragraph style, keeping the block's outer spacing
+    /// on the *outside* of it.
+    ///
+    /// ⚠️ `paragraphSpacing` is added after **every** paragraph, and to
+    /// TextKit every newline ends a paragraph — so a block that is one unit
+    /// of meaning containing several lines gets its trailing gap repeated
+    /// internally. A fenced code block rendered visibly double-spaced
+    /// because of it, ten points of air after each line of code, and a
+    /// paragraph using a hard line break had the same fault in miniature.
+    ///
+    /// The gap belongs to the block, so the first line keeps the space
+    /// before, the last line keeps the space after, and everything between
+    /// them gets line spacing alone.
     private func apply(_ paragraphStyle: NSParagraphStyle, to text: NSMutableAttributedString) {
-        text.addAttribute(
-            .paragraphStyle,
-            value: paragraphStyle,
-            range: NSRange(location: 0, length: text.length)
-        )
+        guard text.length > 0 else { return }
+        let whole = NSRange(location: 0, length: text.length)
+
+        var paragraphs: [NSRange] = []
+        (text.string as NSString).enumerateSubstrings(in: whole, options: [.byParagraphs]) { _, _, enclosing, _ in
+            paragraphs.append(enclosing)
+        }
+
+        guard paragraphs.count > 1 else {
+            text.addAttribute(.paragraphStyle, value: paragraphStyle, range: whole)
+            return
+        }
+
+        for (position, range) in paragraphs.enumerated() {
+            guard let line = paragraphStyle.mutableCopy() as? NSMutableParagraphStyle else { continue }
+            if position > 0 { line.paragraphSpacingBefore = 0 }
+            if position < paragraphs.count - 1 { line.paragraphSpacing = 0 }
+            /// The copies still hold the *same* `NSTextBlock` instances, which
+            /// is what keeps the lines one block rather than several stacked
+            /// ones with a border each.
+            text.addAttribute(.paragraphStyle, value: line, range: range)
+        }
     }
 
     /// Re-sizes inline text to a heading's font while keeping the traits the
