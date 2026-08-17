@@ -219,17 +219,20 @@ struct FileExplorerView: View {
         .padding(.bottom, 4)
     }
 
-    /// The directory to show beside a name, and only when it is needed.
+    /// The directory to show beside a name, on every search result.
     ///
-    /// Search results are a flat list, so two files called `index.ts` are two
-    /// identical rows — the one thing the list must not be. The folder is
-    /// shown for those and left off everywhere else, because a path repeated
-    /// on every row is noise that makes the ambiguous case harder to spot,
-    /// not easier.
+    /// It used to appear only where two matches shared a name, on the theory
+    /// that a path on every row is noise. Using it says otherwise: a flat
+    /// list of names strips the one thing that tells you *which* file you are
+    /// about to open, and having to notice a collision before the folder
+    /// appears means the reader is doing the disambiguating the list was
+    /// meant to do. Repeated paths read as a column; a path that comes and
+    /// goes reads as a glitch.
+    ///
+    /// Still search-only. The tree already shows where a file is by where it
+    /// sits, so a folder name beside it there would be saying it twice.
     private func ghostPath(for row: FileRow) -> String? {
-        guard let matches = model.matches, let root = model.root else { return nil }
-        guard matches.contains(where: { $0.id != row.id && $0.node.name == row.node.name })
-        else { return nil }
+        guard model.matches != nil, let root = model.root else { return nil }
 
         let directory = (row.node.path as NSString).deletingLastPathComponent
         guard directory.hasPrefix(root.path) else { return directory }
