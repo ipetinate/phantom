@@ -794,6 +794,8 @@ struct CodeTextView: NSViewRepresentable {
                 code.completionEnabled = configuration.completionEnabled
                 code.completesFromBuffer = configuration.completesFromBuffer
                 code.completionFetchDelay = configuration.completionFetchDelay
+                code.insertsSpacesForTab = configuration.insertsSpacesForTab
+                code.tabWidth = configuration.tabWidth
             }
 
             // Everything below rewrites attributes or re-lays out the document,
@@ -1253,6 +1255,16 @@ final class CodeNSTextView: NSTextView {
     /// `CodeEditorConfiguration` for why they are two switches and not one.
     var completionEnabled = true
     var completesFromBuffer = true
+
+    /// What Tab types, and how far.
+    ///
+    /// Mirrored onto the view for the same reason as the switches above: the
+    /// keystroke arrives here, and the answer has to be a property load.
+    /// Both values already existed in the configuration and reached only the
+    /// formatting request sent to the language server — so a file was
+    /// formatted with spaces and then typed into with tabs.
+    var insertsSpacesForTab = true
+    var tabWidth = 4
 
     /// Which markup this file is, which the language cannot answer.
     ///
@@ -2128,12 +2140,69 @@ final class CodeNSTextView: NSTextView {
         }
     }
 
+    /// How many spaces a Tab inserts from a given column.
+    ///
+    /// Aligned to the next tab stop, not a flat `width` spaces: with a width
+    /// of four, a Tab at column two inserts two and lands on four. That is
+    /// what makes a column of code line up, and inserting four there instead
+    /// would put the next line at six.
+    ///
+    /// - Parameter column: characters since the start of the line, zero for
+    ///   the first one.
+    static func spacesForTab(atColumn column: Int, width: Int) -> Int {
+        guard width > 0 else { return 1 }
+        return width - (column % width)
+    }
+
+    /// Characters between the caret and the start of its line.
+    ///
+    /// Counted in characters rather than in rendered width, which is the
+    /// same thing here: this only runs when Tab inserts spaces, so the
+    /// leading run is spaces, and a file that mixes in real tabs is one the
+    /// reader is already converting away from.
+    private var caretColumn: Int {
+        let text = string as NSString
+        let caret = min(selectedRange().location, text.length)
+        let lineStart = text.range(
+            of: "\n",
+            options: .backwards,
+            range: NSRange(location: 0, length: caret)
+        )
+        guard lineStart.location != NSNotFound else { return caret }
+        return caret - NSMaxRange(lineStart)
+    }
+
+    /// Tab as spaces, when that is what the reader asked for.
+    ///
+    /// `tabWidth` and `insertsSpacesForTab` existed in the configuration and
+    /// reached only the *formatting* request sent to the language server —
+    /// so a file was formatted with spaces and then typed into with tabs.
+    /// Nothing was reading either value on the typing path.
+    ///
+    /// Goes through `insertText` rather than writing the storage directly, so
+    /// it lands in one undo group with the surrounding typing and the edit is
+    /// announced to the language server like any other.
+    private func insertTabAsSpacesIfWanted() -> Bool {
+        guard insertsSpacesForTab else { return false }
+
+        let spaces = Self.spacesForTab(atColumn: caretColumn, width: tabWidth)
+        insertText(String(repeating: " ", count: spaces), replacementRange: selectedRange())
+        return true
+    }
+
     override func doCommand(by selector: Selector) {
         guard let claim = Self.completionCommand(
             for: selector,
             isListOpen: isCompletionListOpen,
             hasSnippetSession: snippetSession != nil
         ) else {
+            /// After the completion claim, never before: a Tab with a list
+            /// open accepts the selection, and a Tab inside a snippet moves
+            /// to the next field. Only a Tab that means nothing else indents.
+            if selector == #selector(NSResponder.insertTab(_:)), insertTabAsSpacesIfWanted() {
+                return
+            }
+
             super.doCommand(by: selector)
             return
         }
