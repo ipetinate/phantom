@@ -261,6 +261,13 @@ struct GitChangeRow: View {
     let onPrimary: () -> Void
     let onDiscard: (() -> Void)?
 
+    /// Adds this path to the repository's `.gitignore`.
+    ///
+    /// A callback rather than the row doing it, because the row does not know
+    /// the repository root — and giving it one would make every row able to
+    /// write to disk.
+    var onIgnore: (() -> Void)?
+
     @ObservedObject private var palette: ThemePalette = .shared
     @ObservedObject private var icons: FileIconProvider = .shared
     @State private var isHovered = false
@@ -328,6 +335,15 @@ struct GitChangeRow: View {
             Button("Copy Path") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(change.path, forType: .string)
+            }
+
+            /// Only for a file git is not already tracking. Adding a tracked
+            /// path to `.gitignore` does nothing — git keeps reporting it,
+            /// because ignore rules apply to untracked paths — so offering it
+            /// there would be a menu item that quietly achieves nothing.
+            if change.isUntracked, let onIgnore {
+                Divider()
+                Button("Add to .gitignore", action: onIgnore)
             }
         }
     }

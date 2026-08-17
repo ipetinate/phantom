@@ -474,7 +474,8 @@ struct GitRepoView: View {
                     staged: staged,
                     onOpen: { open(row.change) },
                     onPrimary: { toggleStage(row.change, staged: staged) },
-                    onDiscard: merge ? nil : { discarding = [row.change] }
+                    onDiscard: merge ? nil : { discarding = [row.change] },
+                    onIgnore: { ignore(row.change) }
                 )
             }
         }
@@ -504,6 +505,28 @@ struct GitRepoView: View {
     /// look at this in the terminal, or hand it to an app. Git reports
     /// paths relative to the repository, so they have to be rejoined with
     /// the root before anything can open them.
+    /// Adds an untracked path to `.gitignore` and refreshes, so the row it
+    /// was invoked from disappears rather than lingering as a change that is
+    /// now ignored.
+    ///
+    /// Whether the path is a directory is asked of the filesystem rather than
+    /// inferred from the name: git prints an untracked directory with a
+    /// trailing slash, but not always, and a directory ignored as if it were
+    /// a file leaves everything inside it still reported.
+    private func ignore(_ change: GitFileChange) {
+        let url = URL(fileURLWithPath: root).appendingPathComponent(change.path)
+        var isDirectory: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+
+        guard GitIgnore.add(
+            relativePath: change.path,
+            isDirectory: isDirectory.boolValue,
+            inRepositoryAt: root
+        ) else { return }
+
+        center.requestStatus(root: root, force: true)
+    }
+
     private func open(_ change: GitFileChange) {
         let url = URL(fileURLWithPath: root).appendingPathComponent(change.path)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
