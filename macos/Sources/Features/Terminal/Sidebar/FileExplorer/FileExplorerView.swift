@@ -35,6 +35,16 @@ struct FileExplorerView: View {
     /// The path waiting for the "Move to Trash" confirmation.
     @State private var pendingDelete: String?
 
+    /// The file a reveal still owes a scroll to, or nil when nothing is
+    /// pending.
+    ///
+    /// Held for one reason: a row inside a folder that had never been listed
+    /// does not exist yet, and the listing lands off the main actor a moment
+    /// later. Cleared as soon as the scroll happens, which is what keeps the
+    /// reveal an event — a folder the reader collapses afterwards stays
+    /// collapsed, because nothing remembers it was ever revealed.
+    @State private var revealTarget: String?
+
     private var selectedTab: SidebarTabModel? {
         tabManager.models.first { $0.isSelected }
     }
@@ -303,6 +313,13 @@ struct FileExplorerView: View {
                     proxy.scrollTo(id, anchor: .center)
                 }
             }
+            .onChange(of: editorCenter.tabs.selectedPath) { path in
+                revealOpenFile(path, using: proxy)
+            }
+            .onChange(of: model.rows) { _ in
+                guard let target = revealTarget else { return }
+                scrollToReveal(target, using: proxy)
+            }
             // A create field lands at the end of a possibly long folder, so
             // it can start below the fold; make sure the keys the explorer
             // answers for have somewhere to land.
@@ -343,6 +360,65 @@ struct FileExplorerView: View {
             spawnTerminal: onSpawnTerminal,
             openInEditor: onOpenInEditor
         )
+    }
+
+    /// Opens the folders holding the file the pane just switched to, and
+    /// scrolls its row into view.
+    ///
+    /// Answers the *change* of open file, never the file that is open: the
+    /// highlight can only be seen if the row is on screen, and a reveal that
+    /// ran on every redraw would re-open a folder the reader had deliberately
+    /// collapsed, which is a worse thing than an unseen highlight.
+    ///
+    /// While a search is on, the list on screen is matches rather than the
+    /// tree, so scrolling one of those into view would say nothing about
+    /// where the file lives. The folders open anyway, so clearing the search
+    /// — which is how most files reached from a search get opened — finds
+    /// the tree already standing open at the right place.
+    private func revealOpenFile(_ path: String?, using proxy: ScrollViewProxy) {
+        revealTarget = nil
+        guard let path else { return }
+
+        model.expandAncestors(of: path)
+        guard model.matches == nil else { return }
+
+        revealTarget = path
+        scrollToReveal(path, using: proxy)
+    }
+
+    /// Scrolls to the file a reveal is waiting on, a runloop turn later.
+    ///
+    /// Never in the same turn: a row inside a folder that just opened does
+    /// not exist until the rebuilt list has been through a render, and
+    /// `scrollTo` an id the list doesn't hold does nothing at all. A folder
+    /// that had never been listed takes longer than a turn — its rows arrive
+    /// with the listing, off the main actor — which is why `rows` changing
+    /// calls this again.
+    ///
+    /// The target is dropped once nothing is listing and the row still isn't
+    /// there: a folder that couldn't be read yields no children and no row,
+    /// and a file outside the tree never had one. Waiting forever would let
+    /// an unrelated expansion, minutes later, jump the tree somewhere the
+    /// reader didn't ask to go. A search starting inside that same wait
+    /// drops it too — the list on screen stopped being the tree, and the
+    /// row this was going to scroll to is not in the one that replaced it.
+    private func scrollToReveal(_ target: String, using proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            guard revealTarget == target else { return }
+            guard model.matches == nil else {
+                revealTarget = nil
+                return
+            }
+            guard model.rows.contains(where: { $0.id == target }) else {
+                if model.loading.isEmpty { revealTarget = nil }
+                return
+            }
+
+            revealTarget = nil
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(target, anchor: .center)
+            }
+        }
     }
 
     /// The keys the explorer answers for while it has focus: the configured

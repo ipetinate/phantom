@@ -223,27 +223,15 @@ final class FileExplorerModel: ObservableObject {
     ///
     /// The root deliberately doesn't move — `cd`-ing into a subdirectory
     /// shouldn't re-root the tree and lose the rest of the project.
+    ///
+    /// The folder itself opens too, unlike `expandAncestors(of:)`: arriving
+    /// somewhere by `cd` is a request to see what is in it.
     func reveal(_ path: String?) {
         currentDirectory = path
 
-        guard let path, let root, path.hasPrefix(root.path) else { return }
-
-        var toOpen: [String] = []
-        var cursor = URL(fileURLWithPath: path, isDirectory: true)
-        while cursor.path.count > root.path.count {
-            toOpen.append(cursor.path)
-            cursor = cursor.deletingLastPathComponent()
-        }
-
-        var changed = false
-        for dir in toOpen where !expanded.contains(dir) {
-            expanded.insert(dir)
-            changed = true
-        }
-
-        guard changed else { return }
-        persistExpansion()
-        for dir in toOpen where children[dir] == nil { load(dir) }
+        guard let path, let root, isInsideRoot(path), path != root.path else { return }
+        guard openFolders(Self.ancestorsToOpen(revealing: path, under: root.path) + [path])
+        else { return }
         rebuildRows()
     }
 
@@ -265,6 +253,79 @@ final class FileExplorerModel: ObservableObject {
 
     func isExpanded(_ node: FileNode) -> Bool {
         expanded.contains(node.path)
+    }
+
+    /// Opens every collapsed folder between the root and `path`, so the row
+    /// for it exists and can be scrolled to.
+    ///
+    /// Meant for the moment the open file *changes*, never for the file that
+    /// happens to be open: a reader who collapses the folder holding what
+    /// they are editing means it, and a tree that re-opened it on the next
+    /// redraw would be worse than one that never revealed anything. Nothing
+    /// here remembers having run, so nothing here can undo that collapse.
+    ///
+    /// Costs one directory listing per ancestor that has never been shown —
+    /// at most the file's depth, each off the main actor, and none at all
+    /// for a file whose folders are already open. Those listings are also
+    /// why the row can lag the call: see `openFolders(_:)`.
+    func expandAncestors(of path: String) {
+        guard let root else { return }
+        guard openFolders(Self.ancestorsToOpen(revealing: path, under: root.path)) else { return }
+        rebuildRows()
+    }
+
+    /// The folders that must be open for the row at `path` to be built at
+    /// all, outermost first, in a tree rooted at `root`.
+    ///
+    /// Strict ancestors: the root is drawn whether or not it is in the
+    /// expanded set, and `path` itself is the thing being revealed — opening
+    /// it would show a folder nobody asked to see inside, and means nothing
+    /// for a file.
+    ///
+    /// A path outside the root opens nothing rather than guessing. The
+    /// boundary is a path component, not a string prefix: `/w/application`
+    /// is not inside `/w/app`.
+    nonisolated static func ancestorsToOpen(revealing path: String, under root: String) -> [String] {
+        let root = withoutTrailingSlash(root)
+        let path = withoutTrailingSlash(path)
+        guard !root.isEmpty, path != root else { return [] }
+        guard path.hasPrefix(root == "/" ? "/" : root + "/") else { return [] }
+
+        var result: [String] = []
+        var cursor = (path as NSString).deletingLastPathComponent
+        while cursor != root, cursor.count > root.count {
+            result.append(cursor)
+            let parent = (cursor as NSString).deletingLastPathComponent
+            guard parent.count < cursor.count else { break }
+            cursor = parent
+        }
+        return result.reversed()
+    }
+
+    /// A path without its trailing slashes, so `/w` and `/w/` are one root.
+    /// The filesystem root keeps its slash — it is the whole path.
+    private nonisolated static func withoutTrailingSlash(_ path: String) -> String {
+        var trimmed = path
+        while trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast() }
+        return trimmed
+    }
+
+    /// Opens `folders`, lists whichever have never been read, and says
+    /// whether any of them was closed before.
+    ///
+    /// A listing runs off the main actor, so the rows for a folder that had
+    /// never been shown do not exist when this returns. A caller that needs
+    /// them has to wait for `rows` to change rather than assume.
+    @discardableResult
+    private func openFolders(_ folders: [String]) -> Bool {
+        var changed = false
+        for folder in folders where !expanded.contains(folder) {
+            expanded.insert(folder)
+            changed = true
+        }
+        if changed { persistExpansion() }
+        for folder in folders where children[folder] == nil { load(folder) }
+        return changed
     }
 
     // MARK: Selection and editing
@@ -321,25 +382,12 @@ final class FileExplorerModel: ObservableObject {
         editing == state
     }
 
-    /// Opens every folder between the root and `directory`, loading what
-    /// hasn't been listed yet, so a row inside it can be built at all.
+    /// Opens every folder between the root and `directory`, and `directory`
+    /// itself, loading what hasn't been listed yet, so a row *inside* it can
+    /// be built at all.
     private func expand(upTo directory: String) {
-        guard let root, directory.hasPrefix(root.path) else { return }
-
-        var toOpen: [String] = []
-        var cursor = URL(fileURLWithPath: directory, isDirectory: true)
-        while cursor.path.count > root.path.count {
-            toOpen.append(cursor.path)
-            cursor = cursor.deletingLastPathComponent()
-        }
-
-        var changed = false
-        for dir in toOpen where !expanded.contains(dir) {
-            expanded.insert(dir)
-            changed = true
-        }
-        if changed { persistExpansion() }
-        for dir in toOpen where children[dir] == nil { load(dir) }
+        guard let root, isInsideRoot(directory), directory != root.path else { return }
+        openFolders(Self.ancestorsToOpen(revealing: directory, under: root.path) + [directory])
     }
 
     private func isInsideRoot(_ path: String) -> Bool {
