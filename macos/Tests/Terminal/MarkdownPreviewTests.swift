@@ -118,6 +118,52 @@ struct MarkdownPreviewTests {
         #expect(coordinator.sourceLine(forRenderedY: 40) == nil)
     }
 
+    // MARK: - The pane has to be able to grow past its viewport
+
+    /// ⚠️ The bug this test exists to never allow again: the preview drew
+    /// exactly one screenful and could not be scrolled past it, so every
+    /// document longer than the pane was half unreadable.
+    ///
+    /// Built through `makeTextView` and dropped into a real `NSScrollView`,
+    /// because that is the only place the fault was visible. The parse, the
+    /// render and the anchor snapshot were all correct throughout — the
+    /// *document view* was simply the same height as the clip view, which
+    /// leaves the scroller no travel no matter how tall the text is.
+    ///
+    /// Asserted against the layout manager's own used rect rather than a
+    /// fixed number of points, so it keeps holding when the styling changes
+    /// what a paragraph costs. No window is involved: the scroll view lays
+    /// out offscreen, and nothing here is ever shown.
+    @Test func theRenderedDocumentGrowsPastItsViewport() {
+        let viewport = NSRect(x: 0, y: 0, width: 480, height: 200)
+        let scrollView = NSScrollView(frame: viewport)
+        let textView = MarkdownPreviewView.makeTextView()
+        scrollView.documentView = textView
+        scrollView.layoutSubtreeIfNeeded()
+
+        let tall = (1...120)
+            .map { "Paragraph \($0), long enough that a hundred of them cannot fit on one screen." }
+            .joined(separator: "\n\n")
+        let output = MarkdownRenderer(style: .fallback).render(MarkdownParser.parse(tall))
+        textView.textStorage?.setAttributedString(output.text)
+
+        guard let layoutManager = textView.layoutManager, let container = textView.textContainer else {
+            #expect(Bool(false), "the preview lost the TextKit 1 stack its decoration needs")
+            return
+        }
+        layoutManager.ensureLayout(for: container)
+
+        let used = layoutManager.usedRect(for: container).height
+        #expect(used > viewport.height * 3, "the fixture is too short to prove anything")
+        #expect(
+            textView.frame.height >= used,
+            """
+            the document view came out \(textView.frame.height)pt tall for \(used)pt of text \
+            (viewport \(viewport.height)pt) — everything past the first screen is unreachable
+            """
+        )
+    }
+
     // MARK: - Decoration must not strangle the text it decorates
 
     /// How many line fragments a stretch of text was broken into, and how
