@@ -113,6 +113,12 @@ struct CodeTextView: NSViewRepresentable {
 
     /// Keyboard commands the host owns. Passed in rather than assumed, so
     /// the engine never decides what saving means.
+    /// The reader's configured shortcuts, keyed by the app's action id.
+    ///
+    /// Passed through as values: the engine may not name the app's store, and
+    /// a map is what "one command, several shortcuts" looks like from here.
+    var commandShortcuts: [String: [EditorShortcut]] = [:]
+
     var onSave: () -> Void = {}
     var onSaveAll: () -> Void = {}
     var onCloseTab: () -> Void = {}
@@ -252,6 +258,7 @@ struct CodeTextView: NSViewRepresentable {
         textView.onRename = onRename
         textView.onFindReferences = onFindReferences
         textView.onFormat = onFormat
+        textView.commandShortcuts = commandShortcuts
         textView.onJumpToDefinition = onJumpToDefinition
         textView.hoverProvider = hoverProvider
         textView.completionProvider = completionProvider
@@ -297,6 +304,7 @@ struct CodeTextView: NSViewRepresentable {
             code.onRename = onRename
             code.onFindReferences = onFindReferences
             code.onFormat = onFormat
+            code.commandShortcuts = commandShortcuts
             code.onJumpToDefinition = onJumpToDefinition
             code.hoverProvider = hoverProvider
             code.completionProvider = completionProvider
@@ -1240,6 +1248,14 @@ final class CodeNSTextView: NSTextView {
     var onRename: ((Int) -> Void)?
     var onFindReferences: ((Int) -> Void)?
     var onFormat: (() -> Void)?
+
+    /// The shortcuts the reader configured, keyed by the app's action id.
+    ///
+    /// Handed in as values rather than read from a store, because this view
+    /// lives inside the engine and may not name the app. Empty means "nothing
+    /// configured", and every command falls back to the combination it has
+    /// always had — so an editor with no host wiring still works.
+    var commandShortcuts: [String: [EditorShortcut]] = [:]
     var onJumpToDefinition: ((Int) -> Void)?
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
     var completionProvider: ((Int) async -> CodeCompletionAnswer)?
@@ -1614,43 +1630,113 @@ final class CodeNSTextView: NSTextView {
         ))
     }
 
-    /// Adds the language commands to the right-click menu.
+    /// The right-click menu, built here rather than taken from `NSTextView`.
     ///
-    /// A shortcut nobody can find is a shortcut nobody uses, and this is
-    /// the one place to put them that doesn't mean touching the
-    /// application's menu bar — which belongs to the terminal.
+    /// The stock menu is written for a word processor: spelling and grammar,
+    /// substitutions, transformations, speech, layout orientation, font and
+    /// writing direction. In a code editor every one of those is either
+    /// useless or actively unwanted — substitutions turn quotes into curly
+    /// quotes in source — and they buried the four commands worth having
+    /// under submenus nobody opens.
+    ///
+    /// Cut, copy, paste and select-all keep the standard selectors instead of
+    /// closures, so `NSTextView` goes on validating them: copy greys itself
+    /// over an empty selection, which is the honest state of a caret sitting
+    /// in a file, and reimplementing that judgement would be reimplementing
+    /// it worse.
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard let menu = super.menu(for: event) else { return nil }
-
         // Anchored to where the pointer is, not to the selection: the whole
         // point of right-clicking a symbol is to ask about *that* one.
         let point = convert(event.locationInWindow, from: nil)
         let offset = characterIndexForInsertion(at: point)
 
-        var items: [NSMenuItem] = []
-        if let onJumpToDefinition {
-            items.append(item("Go to Definition", key: "") { onJumpToDefinition(offset) })
-        }
-        if let onFindReferences {
-            items.append(item("Find All References", key: "g", [.command, .control]) {
-                onFindReferences(offset)
-            })
-        }
-        if let onRename {
-            items.append(item("Rename Symbol…", key: "r", [.command, .control]) {
-                onRename(offset)
-            })
-        }
-        if let onFormat {
-            items.append(item("Format Document", key: "f", [.command, .option]) { onFormat() })
+        let menu = NSMenu()
+        var lastGroup: Int?
+
+        for command in Self.contextMenuCommands(
+            hasDefinition: onJumpToDefinition != nil,
+            hasReferences: onFindReferences != nil,
+            hasRename: onRename != nil,
+            hasFormat: onFormat != nil
+        ) {
+            if let lastGroup, lastGroup != command.group {
+                menu.addItem(.separator())
+            }
+            lastGroup = command.group
+
+            let shown = displayedShortcut(for: command)
+
+            switch command {
+            case .goToDefinition:
+                menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
+                    self.onJumpToDefinition?(offset)
+                })
+            case .findReferences:
+                menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
+                    self.onFindReferences?(offset)
+                })
+            case .rename:
+                menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
+                    self.onRename?(offset)
+                })
+            case .format:
+                menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
+                    self.onFormat?()
+                })
+            case .cut, .copy, .paste, .selectAll:
+                let entry = NSMenuItem(
+                    title: command.title,
+                    action: command.selector,
+                    keyEquivalent: shown.key
+                )
+                entry.keyEquivalentModifierMask = shown.modifiers
+                menu.addItem(entry)
+            }
         }
 
-        guard !items.isEmpty else { return menu }
-        menu.insertItem(NSMenuItem.separator(), at: 0)
-        for (index, entry) in items.enumerated() {
-            menu.insertItem(entry, at: index)
+        return menu.numberOfItems > 0 ? menu : nil
+    }
+
+    /// The combination to draw beside a command.
+    ///
+    /// What the reader bound, and the shipped default only when they bound
+    /// nothing at all. An id present with an **empty** list is a command they
+    /// deliberately unbound, and it draws no key — showing the default there
+    /// would advertise a shortcut that does nothing, which is worse than a
+    /// menu item with no shortcut at all.
+    private func displayedShortcut(
+        for command: EditorContextCommand
+    ) -> (key: String, modifiers: NSEvent.ModifierFlags) {
+        guard let id = command.actionID, let bound = commandShortcuts[id] else {
+            return (command.key, command.modifiers)
         }
-        return menu
+        guard let primary = bound.first else { return ("", []) }
+        return (primary.key, primary.modifiers)
+    }
+
+    /// What the editor's right-click menu offers, in order, and where the
+    /// separators fall.
+    ///
+    /// A value rather than the menu building itself, so the rule — which
+    /// commands exist, and which of them the host actually wired — can be
+    /// stated and checked without an `NSEvent` to hand. The language commands
+    /// come first because they are the reason somebody right-clicked a word;
+    /// the clipboard is what they came for when they right-clicked a
+    /// selection, and it is where every other app keeps it.
+    static func contextMenuCommands(
+        hasDefinition: Bool,
+        hasReferences: Bool,
+        hasRename: Bool,
+        hasFormat: Bool
+    ) -> [EditorContextCommand] {
+        var commands: [EditorContextCommand] = []
+        if hasDefinition { commands.append(.goToDefinition) }
+        if hasReferences { commands.append(.findReferences) }
+        if hasRename { commands.append(.rename) }
+        if hasFormat { commands.append(.format) }
+
+        commands.append(contentsOf: [.cut, .copy, .paste, .selectAll])
+        return commands
     }
 
     private func item(
@@ -2628,7 +2714,66 @@ final class CodeNSTextView: NSTextView {
         super.deleteBackward(sender)
     }
 
+    /// The command the reader bound to this event, if any.
+    ///
+    /// Ids are sorted so two commands sharing a combination resolve the same
+    /// way every time. The app refuses to store a collision, but a
+    /// dictionary's order is not a promise, and "works until you restart" is
+    /// the worst shape a shortcut bug takes.
+    private func boundCommand(for event: NSEvent) -> String? {
+        for id in commandShortcuts.keys.sorted() {
+            if commandShortcuts[id]?.contains(where: { $0.matches(event) }) == true { return id }
+        }
+        return nil
+    }
+
+    /// Runs a command by id, answering whether it was this view's to run.
+    ///
+    /// The caret is read here rather than passed in because the symbol
+    /// commands mean "the one I am on", and a shortcut has no pointer to
+    /// speak of — unlike the context menu, which anchors to where you
+    /// right-clicked.
+    private func runCommand(_ id: String) -> Bool {
+        let caret = selectedRange().location
+
+        switch id {
+        case "save": onSave?()
+        case "saveAll": onSaveAll?()
+        case "closeTab":
+            guard let onCloseTab else { return false }
+            onCloseTab()
+        case "searchWorkspace":
+            guard let onSearchWorkspace else { return false }
+            onSearchWorkspace()
+        case "findInFile":
+            let sender = NSMenuItem()
+            sender.tag = NSTextFinder.Action.showFindInterface.rawValue
+            performTextFinderAction(sender)
+        case "goToDefinition":
+            guard let onJumpToDefinition else { return false }
+            onJumpToDefinition(caret)
+        case "findReferences":
+            guard let onFindReferences else { return false }
+            onFindReferences(caret)
+        case "renameSymbol":
+            guard let onRename else { return false }
+            onRename(caret)
+        case "formatDocument":
+            guard let onFormat else { return false }
+            onFormat()
+        default:
+            return false
+        }
+        return true
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        /// The reader's own bindings first, so a remapped command wins over
+        /// the combination this app happens to ship with. Falling through
+        /// when nothing matches is what keeps the defaults working before
+        /// anybody has configured anything.
+        if let id = boundCommand(for: event), runCommand(id) { return true }
+
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard modifiers.contains(.command) else {
             return super.performKeyEquivalent(with: event)
@@ -2638,9 +2783,13 @@ final class CodeNSTextView: NSTextView {
         case "s":
             if modifiers.contains(.shift) { onSaveAll?() } else { onSave?() }
             return true
+        /// ⇧⌘F, asked for by name. Workspace search had it and moved to ⌥⌘F,
+        /// which is the pair VS Code uses the other way round — so the two
+        /// swapped rather than one of them losing a shortcut. Both are
+        /// remappable, and the menu shows whichever is bound.
         case "f" where modifiers.contains(.shift):
-            guard let onSearchWorkspace else { break }
-            onSearchWorkspace()
+            guard let onFormat else { break }
+            onFormat()
             return true
         case "f" where modifiers == .command:
             // Plain ⌘F is the in-file find bar. Claimed explicitly because
@@ -2661,8 +2810,8 @@ final class CodeNSTextView: NSTextView {
             onRename(selectedRange().location)
             return true
         case "f" where modifiers.contains(.option):
-            guard let onFormat else { break }
-            onFormat()
+            guard let onSearchWorkspace else { break }
+            onSearchWorkspace()
             return true
         case "g" where modifiers.contains(.control):
             guard let onFindReferences else { break }
