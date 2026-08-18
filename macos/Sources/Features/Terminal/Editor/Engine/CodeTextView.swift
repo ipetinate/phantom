@@ -2396,7 +2396,20 @@ final class CodeNSTextView: NSTextView {
                let after = Self.character(in: content, at: caret),
                Self.autoClosingPairs[before] == after,
                closes(before) {
-                super.replaceCharacters(in: NSRange(location: caret - 1, length: 2), with: "")
+                /// Through the delegate, for the reason the tag path above
+                /// gives: a raw `replaceCharacters` registers no undo step
+                /// and tells nobody the buffer moved. Deleting the pair was
+                /// therefore unundoable, and left the language server
+                /// describing two characters that are no longer there.
+                /// `textStorage`, not `super.replaceCharacters`: the latter
+                /// is `NSText`'s and does not go through the machinery
+                /// `shouldChangeText` primes, so the pair came back deleted
+                /// with nothing on the undo stack. Measured — the test below
+                /// fails on the other spelling.
+                let pair = NSRange(location: caret - 1, length: 2)
+                guard shouldChangeText(in: pair, replacementString: "") else { return }
+                textStorage?.replaceCharacters(in: pair, with: "")
+                didChangeText()
                 return
             }
         }
