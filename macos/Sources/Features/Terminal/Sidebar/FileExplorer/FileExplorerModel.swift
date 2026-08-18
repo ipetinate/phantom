@@ -112,7 +112,13 @@ final class FileExplorerModel: ObservableObject {
 
     /// A search walks the tree on disk, so it is bounded: enough results to
     /// find what you meant, few enough that the list stays a list.
-    private static let matchLimit = 300
+    ///
+    /// `nonisolated` because the search that reads it is: this type is
+    /// `@MainActor`, so the constant was too, and reading it from the
+    /// off-main search was a warning today and an error under Swift 6. An
+    /// immutable `Int` needs no isolation to be read safely, and saying so is
+    /// what keeps the search off the main thread where it belongs.
+    private nonisolated static let matchLimit = 300
 
     @Published var showHiddenFiles: Bool = storedShowHidden {
         didSet {
