@@ -2485,6 +2485,62 @@ final class CodeNSTextView: NSTextView {
 
     override var undoManager: UndoManager? { textUndoManager }
 
+    /// ⌘Z, answered by the view that holds the text.
+    ///
+    /// The Undo item is wired to `undo:` on the first responder, and nothing
+    /// in the editor's chain answered it. The search walked past this view
+    /// and past the window — whose delegate hands back the *application's*
+    /// manager, the one that takes back closing a tab — so the item was
+    /// validated against a stack that typing never touches. It stayed grey,
+    /// and a disabled item does not consume its key equivalent: ⌘Z fell
+    /// through to `keyDown`, where nothing maps it, and the beep was macOS
+    /// saying exactly that — over a perfectly good undo stack that had been
+    /// sitting on this view the whole time.
+    ///
+    /// Answering here puts the question where the text is. Window undo is
+    /// untouched, because this view is in the responder chain only while it
+    /// holds focus, which is precisely when ⌘Z means "take back what I
+    /// typed".
+    @objc func undo(_ sender: Any?) {
+        guard textUndoManager.canUndo else { return }
+        textUndoManager.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard textUndoManager.canRedo else { return }
+        textUndoManager.redo()
+    }
+
+    /// Validated against the same manager the action uses.
+    ///
+    /// The two disagreeing is its own bug: enabled over an empty stack reads
+    /// as a dead key, and grey over a full one reads as lost work.
+    ///
+    /// The title is written here rather than left alone because the item is
+    /// shared with the window's undo, and whoever validated last owns what it
+    /// says — so leaving it would mean editing text under a menu still
+    /// offering to undo closing a tab.
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)):
+            item.title = Self.undoTitle("Undo", actionName: textUndoManager.undoActionName)
+            return textUndoManager.canUndo
+
+        case #selector(redo(_:)):
+            item.title = Self.undoTitle("Redo", actionName: textUndoManager.redoActionName)
+            return textUndoManager.canRedo
+
+        default:
+            return super.validateMenuItem(item)
+        }
+    }
+
+    /// AppKit's convention for these two items: the verb alone when the stack
+    /// cannot name what it holds, and the verb plus that name when it can.
+    private static func undoTitle(_ verb: String, actionName: String) -> String {
+        actionName.isEmpty ? verb : "\(verb) \(actionName)"
+    }
+
     /// True when this view is laying out through TextKit 2.
     ///
     /// Exists for the test. The failure it guards against is invisible at
