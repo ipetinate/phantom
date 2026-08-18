@@ -114,8 +114,9 @@ struct SidebarGroup: Identifiable, Codable, Equatable {
     }
 }
 
-/// Resolves a group icon string into a SwiftUI view: a single-grapheme
-/// non-ASCII string renders as emoji text, anything else as an SF Symbol.
+/// Resolves a group icon string into a SwiftUI view: an agent's own mark, a
+/// single-grapheme non-ASCII string as emoji text, anything else as an SF
+/// Symbol.
 struct SidebarGroupIcon: View {
     let icon: String
     var size: CGFloat = 12
@@ -125,12 +126,31 @@ struct SidebarGroupIcon: View {
     }
 
     var body: some View {
-        if isEmoji {
+        if let agent = SidebarIconID.agent(for: icon) {
+            agentMark(agent)
+        } else if isEmoji {
             Text(icon)
                 .font(.system(size: size))
         } else {
             Image(systemName: icon.isEmpty ? "folder" : icon)
                 .font(.system(size: size - 1, weight: .medium))
+        }
+    }
+
+    /// Drawn in the agents' own colours rather than tinted with everything
+    /// else on the row.
+    ///
+    /// The point of choosing one of these is to recognise it at a glance in a
+    /// list of twenty tabs, and a brand mark flattened to the secondary label
+    /// colour is three grey shapes that look alike. It is the same call the
+    /// Settings rows already make, where each agent's toggle carries its mark
+    /// in colour.
+    @ViewBuilder
+    private func agentMark(_ agent: CodingAgent) -> some View {
+        switch agent {
+        case .claude: ClaudeIcon(size: size, tint: .original)
+        case .codex: CodexIcon(size: size, originalColors: true)
+        case .opencode: OpenCodeIcon(size: size, originalColors: true)
         }
     }
 }
