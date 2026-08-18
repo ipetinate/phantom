@@ -1863,6 +1863,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         )
     }
 
+    /// Opens a file in this window's editor.
+    ///
+    /// Exposed for the app delegate, which receives files from outside — the
+    /// Finder, a Dock drop, `open -a` — and has no editor of its own to hand
+    /// them to.
+    func openFileInEditor(_ url: URL) {
+        openInEditor(url)
+    }
+
     private func openInEditor(
         _ url: URL,
         line: Int? = nil,

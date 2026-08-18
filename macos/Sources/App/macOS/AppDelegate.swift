@@ -544,8 +544,24 @@ class AppDelegate: NSObject,
         // surface by doing our own validation here. We can also show a useful error
         // this way.
 
-        var isDirectory = ObjCBool(true)
-        guard FileManager.default.fileExists(atPath: filename, isDirectory: &isDirectory) else { return false }
+        guard let intent = ExternalOpenIntent.decide(forPath: filename) else { return false }
+
+        /// A file without the executable bit goes to the editor rather than
+        /// down the terminal's path, which runs it. Upstream's answer — run
+        /// it, as Terminal and iTerm2 do — is right for a terminal emulator
+        /// and wrong for this, where opening `config.ts` from the Finder fed
+        /// a source file to a login shell.
+        ///
+        /// Before any window exists, so it may have to make one: this is
+        /// called during launch, ahead of `applicationDidBecomeActive`.
+        if intent == .edit {
+            let controller = TerminalController.preferredParent
+                ?? TerminalController.newWindow(ghostty)
+            controller.openFileInEditor(URL(fileURLWithPath: filename))
+            return true
+        }
+
+        var isDirectory = ObjCBool(intent == .workingDirectory)
 
         // Set to true if confirmation is required before starting up the
         // new terminal.
