@@ -226,6 +226,10 @@ private struct DocumentView: View {
 
     /// Where a rename or a jump reports it found nothing, since silence
     /// reads as the feature being broken.
+    /// Observed so a remap reaches an editor that is already open, rather
+    /// than only the next file to be opened.
+    @ObservedObject private var shortcutStore: PhantomShortcutStore = .shared
+
     @AppStorage(EditorSettings.usesPrettierKey) private var usesPrettier = true
     @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
 
@@ -494,6 +498,7 @@ private struct DocumentView: View {
             onFindReferences: { offset in findReferences(from: offset) },
             onFormat: { format() },
             onScrollViewReady: { linkSourcePane($0) },
+            commandShortcuts: editorShortcuts,
             onSave: { saveWithFormatting() },
             onSaveAll: onSaveAll,
             onCloseTab: onCloseTab,
@@ -721,6 +726,30 @@ private struct DocumentView: View {
         )
 
         return completionBridge.items(from: outcome, in: document.currentText as NSString)
+    }
+
+    /// The editor's shortcuts, translated into what the engine takes.
+    ///
+    /// Only the editor's own commands: the explorer's live on the explorer,
+    /// and handing the text view a binding for New Folder would let a
+    /// keystroke meant for a tree act on a buffer.
+    ///
+    /// An action the reader unbound arrives as an empty list rather than
+    /// being left out, because the engine reads a missing id as "use the
+    /// default" and an empty one as "no shortcut" — which is the difference
+    /// between a command they never touched and one they deliberately
+    /// silenced.
+    private var editorShortcuts: [String: [EditorShortcut]] {
+        Dictionary(
+            uniqueKeysWithValues: PhantomShortcutAction.actions(in: .editor).map { action in
+                (
+                    action.rawValue,
+                    shortcutStore.shortcuts(for: action).map {
+                        EditorShortcut(key: $0.key, modifiers: $0.eventModifierFlags)
+                    }
+                )
+            }
+        )
     }
 
     /// The Markdown catalogue's rows, when the caret is on a `/` trigger.
