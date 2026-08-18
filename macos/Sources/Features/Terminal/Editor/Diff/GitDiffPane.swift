@@ -54,6 +54,21 @@ struct GitDiffPane: View {
         return gutterWidth + 8 + CGFloat(longest) * font.maximumAdvancement.width + 24
     }
 
+    /// Paints no base colour of its own, deliberately.
+    ///
+    /// The pane joins the editor's arrangement instead of repeating it: the
+    /// source's text view and its scroll view both draw no background, and
+    /// the host puts a single layer behind the whole pane, so a solid theme
+    /// colour and a window blurred through to the desktop each reach a diff
+    /// exactly as they reach code. Filling `theme.background` here could
+    /// only ever be wrong in one of the two — the theme's colour is opaque,
+    /// because the window's opacity lives in the host layer's alpha and not
+    /// in the theme, so a translucent window got a solid slab where the diff
+    /// was and a seam where it met the source beside it.
+    ///
+    /// The per-line tints are unaffected: every one of them is an alpha wash
+    /// over whatever is behind, which is now the same thing the source pane
+    /// sits on.
     var body: some View {
         GeometryReader { viewport in
             ScrollView([.vertical, .horizontal]) {
@@ -78,7 +93,6 @@ struct GitDiffPane: View {
                 .frame(minHeight: viewport.size.height, alignment: .top)
                 .synchronizedScroll(scrollSync, as: syncSide)
             }
-            .background(Color(nsColor: theme.background))
         }
     }
 

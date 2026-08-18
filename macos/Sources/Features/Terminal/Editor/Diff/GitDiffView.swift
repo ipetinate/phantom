@@ -49,7 +49,12 @@ struct GitDiffView<Accessory: View>: View {
             /// returns faster than a spinner takes to stop looking like a
             /// glitch; a flash of empty background reads as "about to draw"
             /// where a flashing spinner reads as "something is wrong".
-            Color(nsColor: theme.background)
+            ///
+            /// Clear rather than the theme's background, for the reason
+            /// spelled out on `GitDiffPane.body`: the layer behind this
+            /// whole pane is already painting, and a colour of our own is a
+            /// slab in a translucent window.
+            Color.clear
                 .overlay(alignment: .topTrailing) { accessory() }
 
         case .diff(let document):
@@ -144,7 +149,6 @@ struct GitDiffView<Accessory: View>: View {
                 .padding(24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: theme.background))
         .overlay(alignment: .topTrailing) { accessory() }
     }
 

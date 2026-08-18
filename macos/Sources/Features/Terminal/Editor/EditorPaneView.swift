@@ -390,7 +390,9 @@ private struct DocumentView: View {
             /// Reachable for an instant: the control was drawn from a status
             /// that has since been replaced by one with no entry for this
             /// file. The next body evaluation moves off `.diff` entirely.
-            Color(nsColor: theme.background)
+            /// Clear, like the diff it stands in for, so the host's layer is
+            /// what shows for that instant.
+            Color.clear
         }
     }
 
