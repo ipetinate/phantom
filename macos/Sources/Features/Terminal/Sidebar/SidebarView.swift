@@ -1168,13 +1168,43 @@ private struct SidebarTabRow: View {
     @AppStorage("SidebarShowGitStatus") private var showGitStatus = true
     @AppStorage("SidebarShowPullRequest") private var showPullRequest = true
     @AppStorage("SidebarShowDevServer") private var showDevServer = true
+    @AppStorage("SidebarShowPlan") private var showPlan = true
     @AppStorage("SidebarTabDensity") private var density = "default"
+
+    /// Which agents this row offers to start, mirroring the keys the sidebar
+    /// header and the group header already use for their own buttons.
+    @AppStorage("SidebarTabShowClaude") private var showClaudeAction = true
+    @AppStorage("SidebarTabShowCodex") private var showCodexAction = true
+    @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = true
+    @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
     private var isCompact: Bool { density == "compact" }
 
     private var insertAfter: Bool? {
         guard dragState.target?.row == tab.id else { return nil }
         return dragState.target?.after
+    }
+
+    /// The agent buttons this row draws, decided by `TabRowAgentActions` — a
+    /// tab already running one gets none, because these type into its shell.
+    private var agentActions: [CodingAgent] {
+        var shown: Set<CodingAgent> = []
+        if showClaudeAction { shown.insert(.claude) }
+        if showCodexAction { shown.insert(.codex) }
+        if showOpenCodeAction { shown.insert(.opencode) }
+
+        return TabRowAgentActions.agents(shown: shown, liveAgent: tab.liveAgent)
+    }
+
+    /// Each agent's own mark, at the size the group header uses. Separate
+    /// types rather than one image name, so this is a switch and not a lookup.
+    @ViewBuilder
+    private func agentIcon(_ agent: CodingAgent) -> some View {
+        switch agent {
+        case .claude: ClaudeIcon(size: 11)
+        case .codex: CodexIcon(size: 11)
+        case .opencode: OpenCodeIcon(size: 11)
+        }
     }
 
     private var override: SidebarGroupStore.TabOverride? {
@@ -1252,7 +1282,8 @@ private struct SidebarTabRow: View {
                         devServerChip(port: port)
                     }
 
-                    if ClaudePlanIndex.tagIsVisible(liveAgent: tab.liveAgent),
+                    if showPlan,
+                       ClaudePlanIndex.tagIsVisible(liveAgent: tab.liveAgent),
                        let plan = planCenter.plan(forTerminalAt: tab.pwd) {
                         planChip(plan: plan)
                     }
@@ -1267,6 +1298,17 @@ private struct SidebarTabRow: View {
             }
 
             Spacer(minLength: 0)
+
+            ForEach(agentActions, id: \.self) { agent in
+                SidebarIconButton(help: "Start \(agent.displayName) in This Tab") {
+                    tabManager.select(tab)
+                    AgentLauncher.start(agent, in: tab)
+                } label: {
+                    agentIcon(agent)
+                }
+                .opacity(alwaysShowActions || isHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHovered)
+            }
 
             ZStack {
                 statusIndicator

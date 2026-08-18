@@ -15,10 +15,23 @@ import Foundation
 /// a `ses_`-prefixed token from OpenCode. Those are the shapes
 /// `AgentTabRecord.sanitized(sessionID:)` has to pass through untouched, and
 /// the ones `AgentSessionStore` reads back when no hook reported an id.
-enum CodingAgent: String, Sendable {
+enum CodingAgent: String, Sendable, CaseIterable {
     case claude
     case codex
     case opencode
+
+    /// What to call this agent in the interface.
+    ///
+    /// Here beside `launchCommand` because the two are the same fact read two
+    /// ways — what the reader calls it and what the shell calls it — and a
+    /// fourth agent should have to answer both in one place.
+    var displayName: String {
+        switch self {
+        case .claude: "Claude Code"
+        case .codex: "Codex"
+        case .opencode: "OpenCode"
+        }
+    }
 
     /// What starts a fresh session with this agent.
     ///

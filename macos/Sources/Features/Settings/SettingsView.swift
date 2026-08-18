@@ -136,6 +136,8 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarShowGitStatus") private var showGitStatus = true
     @AppStorage("SidebarShowPullRequest") private var showPullRequest = true
     @AppStorage("SidebarShowDevServer") private var showDevServer = true
+    @AppStorage("SidebarShowPlan") private var showPlan = true
+    @AppStorage("SidebarTabAlwaysShowActions") private var tabAlwaysShowActions = false
 
     @AppStorage("SidebarGroupShowPullRequests") private var groupShowPullRequests = true
     @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = true
@@ -185,7 +187,7 @@ struct SidebarSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Tab Info") {
+            Section {
                 Toggle("Show Working Directory", isOn: $showDirectory)
                     .toggleStyle(.switch)
                 Toggle("Show Git Branch", isOn: $showGitBranch)
@@ -196,6 +198,16 @@ struct SidebarSettingsView: View {
                     .toggleStyle(.switch)
                 Toggle("Show Dev Server Port", isOn: $showDevServer)
                     .toggleStyle(.switch)
+                Toggle("Show Plan Tag", isOn: $showPlan)
+                    .toggleStyle(.switch)
+                Toggle("Always Show Tab Actions", isOn: $tabAlwaysShowActions)
+                    .toggleStyle(.switch)
+            } header: {
+                Text("Tab Info")
+            } footer: {
+                Text("A tab's agent buttons appear on hover — turn the last one on to keep them visible. Which agents they offer is in Agents. The plan tag only ever shows while the Claude session that wrote the plan is running in that tab.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -321,6 +333,9 @@ struct AgentsSettingsView: View {
     @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = true
     @AppStorage("SidebarShowOpenCode") private var sidebarShowOpenCode = true
     @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = true
+    @AppStorage("SidebarTabShowClaude") private var tabShowClaude = true
+    @AppStorage("SidebarTabShowCodex") private var tabShowCodex = true
+    @AppStorage("SidebarTabShowOpenCode") private var tabShowOpenCode = true
 
     var body: some View {
         Form {
@@ -356,6 +371,27 @@ struct AgentsSettingsView: View {
                 Text("Groups")
             } footer: {
                 Text("Control the new-agent buttons independently in the main sidebar and in each group header.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle(isOn: $tabShowClaude) {
+                    HStack(spacing: 6) { ClaudeIcon(size: 14, tint: .original); Text("Claude Code") }
+                }
+                .toggleStyle(.switch)
+                Toggle(isOn: $tabShowCodex) {
+                    HStack(spacing: 6) { CodexIcon(size: 14, originalColors: true); Text("Codex") }
+                }
+                .toggleStyle(.switch)
+                Toggle(isOn: $tabShowOpenCode) {
+                    HStack(spacing: 6) { OpenCodeIcon(size: 14, originalColors: true); Text("OpenCode") }
+                }
+                .toggleStyle(.switch)
+            } header: {
+                Text("Tabs")
+            } footer: {
+                Text("These start the agent in the tab you hovered, rather than in a new one — so they are hidden while that tab already has a session running, where the command would land in the agent's prompt as a question instead.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
