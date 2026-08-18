@@ -383,6 +383,11 @@ struct CodeTextView: NSViewRepresentable {
         /// The bracket spans currently coloured, guarded the same way.
         private var appliedBrackets: [BracketDepth.Span] = []
 
+        /// The pair currently washed, guarded the same way again — a caret
+        /// crossing a word moves through a dozen offsets that are on no
+        /// bracket at all, and none of them should rewrite an attribute.
+        private var appliedBracketMatch: BracketMatch.Pair?
+
         /// The look currently applied, so an update that changed something
         /// else doesn't rewrite every attribute in the document.
         private var appliedTheme: CodeTheme?
@@ -501,7 +506,17 @@ struct CodeTextView: NSViewRepresentable {
         /// single regex cannot count. Runs after the syntax colours so it
         /// paints over them — a bracket is punctuation, and whatever rule
         /// happened to claim it has nothing to say about which pair it is.
+        ///
+        /// The `defer` repaints the caret's pair, whose wash is one of the
+        /// attributes a colouring pass resets. It covers every exit below,
+        /// including the one that finds the depths unchanged — the depths
+        /// surviving a recolour says nothing about whether the wash did.
         func colorBrackets(in region: NSRange) {
+            defer {
+                clearBracketMatch()
+                highlightBracketMatch()
+            }
+
             guard let textView, let textStorage = textView.textStorage else { return }
             guard storage.configuration.colorsBracketPairs else {
                 if !appliedBrackets.isEmpty {
@@ -540,6 +555,108 @@ struct CodeTextView: NSViewRepresentable {
             }
             textStorage.endEditing()
             requestRedraw(of: textView)
+        }
+
+        /// Washes the bracket under the caret and the one that closes it.
+        ///
+        /// The depth colours say how deeply a bracket is nested; this says
+        /// *which other one it is*, which is the question a block running off
+        /// the bottom of the screen actually raises. The rule itself is
+        /// `BracketMatch` and is pure — everything here is the part that has
+        /// a text storage in it.
+        ///
+        /// Gated on the same switch as the depth colours: both are the
+        /// editor drawing on brackets, and somebody who turned that off did
+        /// not ask for half of it back.
+        func highlightBracketMatch() {
+            guard let textView, let textStorage = textView.textStorage else { return }
+
+            let found = matchedPair(in: textStorage, of: textView)
+            guard found != appliedBracketMatch else { return }
+
+            clearBracketMatch()
+            guard let found else {
+                requestRedraw(of: textView)
+                return
+            }
+
+            textStorage.beginEditing()
+            for range in found.ranges {
+                let clipped = NSIntersectionRange(
+                    range,
+                    NSRange(location: 0, length: textStorage.length)
+                )
+                guard clipped.length > 0 else { continue }
+                textStorage.addAttribute(
+                    .backgroundColor,
+                    value: storage.theme.bracketMatchBackground,
+                    range: clipped
+                )
+            }
+            textStorage.endEditing()
+
+            appliedBracketMatch = found
+            requestRedraw(of: textView)
+        }
+
+        /// Lifts the wash currently painted, wherever it is.
+        ///
+        /// By remembered range rather than over the region being redrawn: the
+        /// partner of a bracket is routinely off screen, so a pass that only
+        /// cleared what it was recolouring would leave a wash behind on a
+        /// bracket the caret left a scroll ago.
+        private func clearBracketMatch() {
+            guard let applied = appliedBracketMatch else { return }
+            appliedBracketMatch = nil
+
+            guard let textStorage = textView?.textStorage else { return }
+            textStorage.beginEditing()
+            for range in applied.ranges {
+                let clipped = NSIntersectionRange(
+                    range,
+                    NSRange(location: 0, length: textStorage.length)
+                )
+                guard clipped.length > 0 else { continue }
+                textStorage.removeAttribute(.backgroundColor, range: clipped)
+            }
+            textStorage.endEditing()
+        }
+
+        /// The pair to wash, or `nil` when there is nothing to say.
+        ///
+        /// Only a window around the caret is lexed, and the search is bounded
+        /// to the same window: this runs on every caret move, and lexing a
+        /// megabyte per arrow key is exactly the cost `BracketMatch`'s bound
+        /// exists to avoid. The window inherits the limitation the viewport
+        /// pass already documents — one that opens inside a multi-line string
+        /// cannot know it, so a brace in there may still be counted — which is
+        /// the same trade the depth colours have always made.
+        ///
+        /// A selection rather than a caret means nothing: the reader is
+        /// choosing text, not standing on a bracket, and two washed characters
+        /// inside a highlighted range read as a rendering fault.
+        private func matchedPair(
+            in textStorage: NSTextStorage,
+            of textView: NSTextView
+        ) -> BracketMatch.Pair? {
+            guard storage.configuration.colorsBracketPairs else { return nil }
+
+            let selection = textView.selectedRange()
+            guard selection.length == 0 else { return nil }
+
+            let text = textStorage.string as NSString
+            let caret = min(selection.location, text.length)
+            let window = CodeTextStorage.invalidationRange(
+                for: NSRange(location: caret, length: 0),
+                in: text,
+                padding: BracketMatch.searchLimit
+            )
+            let skipped = SyntaxHighlighter(syntax: storage.syntax)
+                .tokens(in: textStorage.string, range: window)
+                .filter { $0.kind == .string || $0.kind == .comment }
+                .map(\.range)
+
+            return BracketMatch.pair(in: text, caret: caret, skipping: skipped)
         }
 
         /// Asks for a redraw after attributes changed in bulk.
@@ -883,6 +1000,7 @@ struct CodeTextView: NSViewRepresentable {
             // in the gutter — both are the same fact drawn in two places.
             gutter?.setCurrentLine(currentLineNumber(in: textView))
             updateCurrentLineBand()
+            highlightBracketMatch()
         }
 
         /// Moves the band to the line the insertion point is on.
@@ -1222,6 +1340,32 @@ final class CodeNSTextView: NSTextView {
     /// knows what ratio it needs.
     var hoverFetchDelay: Duration = .milliseconds(450)
 
+    /// How long a card lingers once the pointer is no longer on what it
+    /// describes.
+    ///
+    /// The grace exists because the card is a **separate window**, sitting a
+    /// few points clear of the line: the pointer travelling towards it is off
+    /// the word and not yet on the card, and both paths that notice —
+    /// crossing other characters, and leaving the view entirely — used to
+    /// mean "gone". Every card anybody reached for was dismissed on the way.
+    /// Each move restarts the clock, so a card survives a pointer heading for
+    /// it and closes shortly after the pointer settles somewhere else.
+    ///
+    /// A `var` for the same reason `hoverFetchDelay` is one: what is worth
+    /// testing here is *when* the close happens, and a test that has to sleep
+    /// past a shipped 400ms to find out is betting on the host being fast
+    /// rather than asserting anything about this code.
+    var hoverDismissDelay: Duration = .milliseconds(400)
+
+    /// Called when the card is asked to close, whether or not one is up.
+    ///
+    /// An observation seam, and it is here for the same reason
+    /// `CodeHoverPanel.pointerLocationProvider` is: the fact worth pinning
+    /// down is the *timing* of a close, and no test can watch a real card to
+    /// learn it — putting one on screen reaches `orderFront`, which from a
+    /// test host with no event loop never returns. Production leaves it nil.
+    var onHoverDismiss: (() -> Void)?
+
     /// The pending close. Separate from `hoverTask` because the two run at
     /// once: one card is on its way out while the next one is being fetched.
     private var dismissTask: Task<Void, Never>?
@@ -1332,7 +1476,7 @@ final class CodeNSTextView: NSTextView {
 
         // Closed on a delay, not at once. Closing immediately is correct in
         // the abstract — the card describes the offset it was opened for — and
-        // wrong in the hand: the card sits above the word, so *reaching* for it
+        // wrong in the hand: the card sits beside the word, so *reaching* for it
         // means crossing other characters, and every one of them dismissed it
         // before the pointer arrived. There was no way to scroll a long
         // description or select a line out of it. Each move restarts the clock,
@@ -1390,17 +1534,18 @@ final class CodeNSTextView: NSTextView {
     /// Closes the card unless the pointer reached it in the meantime.
     ///
     /// Closes the *window* and nothing else — deliberately not `hideHover`,
-    /// which also cancels the pending look-up. The close is scheduled 400ms out
-    /// and the look-up answers at 450ms, so a dismissal that cancelled the task
-    /// killed every fetch 50ms before it ran and no card could ever appear.
+    /// which also cancels the pending look-up. `hoverDismissDelay` is shorter
+    /// than `hoverFetchDelay`, so a dismissal that cancelled the task killed
+    /// every fetch before it ran and no card could ever appear.
     private func scheduleHoverDismissal() {
         dismissTask?.cancel()
-        dismissTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
+        dismissTask = Task { @MainActor [weak self, hoverDismissDelay] in
+            try? await Task.sleep(for: hoverDismissDelay)
             guard !Task.isCancelled, let self,
                   self.hoverPanel?.containsPointer != true
             else { return }
             self.hoverPanel?.dismiss()
+            self.onHoverDismiss?()
         }
     }
 
@@ -1409,17 +1554,31 @@ final class CodeNSTextView: NSTextView {
         hoverTask?.cancel()
         dismissTask?.cancel()
         hoverPanel?.dismiss()
+        onHoverDismiss?()
     }
 
-    /// Leaving the text view puts the card away — unless the pointer went
-    /// *into* the card, which is the one direction that must not dismiss it.
-    /// The card takes mouse events so that a long description can be
-    /// scrolled, and reaching for its scroller means leaving the text.
+    /// Leaving the text view puts the card away on the same delay a pointer
+    /// moving *within* the text gets — the same reason, turned inside out.
+    ///
+    /// The card is a window of its own, `PanelPlacement.gap` clear of the line
+    /// it describes, and it takes mouse events so a long description can be
+    /// scrolled or a line selected out of it. Reaching for it therefore means
+    /// leaving this view, and for the few points of the crossing the pointer
+    /// is on neither: `containsPointer` catches the pointer that has already
+    /// arrived, and closing at once dismissed every card that was still on its
+    /// way to being reached. The delay covers the gap; a pointer that
+    /// genuinely left is rid of the card a moment later either way.
+    ///
+    /// The look-up is abandoned immediately even though the window is not.
+    /// They are separate on purpose — see `scheduleHoverDismissal` — and the
+    /// pointer being off the text means an answer arriving now would describe
+    /// a word nobody is pointing at.
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         guard hoverPanel?.containsPointer != true else { return }
         hoverOffset = nil
-        hideHover()
+        hoverTask?.cancel()
+        scheduleHoverDismissal()
     }
 
     /// A card is a window, and a window outlives the view that opened it. Left

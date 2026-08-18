@@ -22,8 +22,24 @@ enum BracketDepth {
         let depth: Int
     }
 
-    private static let openers: Set<Character> = ["{", "[", "("]
-    private static let closers: [Character: Character] = ["}": "{", "]": "[", ")": "("]
+    /// A closer, and the opener it belongs to.
+    ///
+    /// Not private, because `BracketMatch` walks the same characters when it
+    /// pairs the bracket under the caret with its partner. One list, so the
+    /// depth colours and the pair highlight can never disagree about what
+    /// counts as a bracket — two would drift the first time somebody added
+    /// `<` to one of them.
+    static let closers: [Character: Character] = ["}": "{", "]": "[", ")": "("]
+
+    /// The openers, derived from `closers` rather than written out again so
+    /// the two cannot fall out of step.
+    static let openers: Set<Character> = Set(closers.values)
+
+    /// An opener, and the closer it is waiting for: the inverse of
+    /// `closers`, derived for the same reason.
+    static let closing: [Character: Character] = Dictionary(
+        uniqueKeysWithValues: closers.map { ($0.value, $0.key) }
+    )
 
     /// How many colours the cycle has before it repeats.
     ///
