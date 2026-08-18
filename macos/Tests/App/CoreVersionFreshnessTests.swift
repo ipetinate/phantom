@@ -18,7 +18,7 @@ import Testing
 /// When this fails, the fix is not here: run `zig build` and the core is
 /// rebuilt from the current checkout.
 struct CoreVersionFreshnessTests {
-    /// `.version = "0.6.0-dev"` out of `build.zig.zon`.
+    /// `.version = "0.7.0-dev"` out of `build.zig.zon`.
     ///
     /// Read from the repository rather than from the bundle, because the
     /// bundle's version is written by the same build that could be stale —
