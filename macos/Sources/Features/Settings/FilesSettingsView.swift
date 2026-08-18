@@ -20,6 +20,8 @@ struct FilesSettingsView: View {
     @AppStorage(EditorSettings.closesBracketsKey) private var closesBrackets = true
     @AppStorage(EditorSettings.closesQuotesKey) private var closesQuotes = true
     @AppStorage(EditorSettings.closesTagsKey) private var closesTags = true
+    @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
+    @AppStorage(EditorSettings.usesPrettierKey) private var usesPrettier = true
 
     @State private var isChoosingFont = false
 
@@ -96,6 +98,33 @@ struct FilesSettingsView: View {
                 Text("Typing")
             } footer: {
                 Text("Tags close in HTML, Vue and JSX. They deliberately do not in .ts, where a `<` is always a generic and closing it would always be wrong.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Format on Save", isOn: $formatOnSave)
+                    .toggleStyle(.switch)
+                Toggle("Use the Project's Prettier", isOn: $usesPrettier)
+                    .toggleStyle(.switch)
+            } header: {
+                Text("Formatting")
+            } footer: {
+                Text("""
+                A project carrying a Prettier config has already decided how its \
+                files are written, so Prettier formats the ones it handles and the \
+                language server keeps the rest. Its own config is honoured whatever \
+                the format — including `prettier.config.mjs`, which only Prettier \
+                itself can read.
+
+                Honouring the project's version and plugins means running the \
+                `prettier` inside its `node_modules`, which is code from the folder \
+                you opened rather than from this app. Turn this off to keep \
+                formatting on the language server.
+
+                Formatting never blocks a save: if Prettier is missing, slow or \
+                unhappy, the file is still written.
+                """)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

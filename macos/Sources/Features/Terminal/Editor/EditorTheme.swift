@@ -103,6 +103,27 @@ enum EditorSettings {
     static let closesQuotesKey = "EditorClosesQuotes"
     static let closesTagsKey = "EditorClosesTags"
 
+    /// Tidy the file with the project's formatter when it is saved.
+    ///
+    /// Off by default. Formatting on save is a preference people hold
+    /// strongly in both directions, and the direction that surprises nobody
+    /// is the one where saving writes exactly what is on screen.
+    static let formatOnSaveKey = "EditorFormatOnSave"
+
+    /// Let a project's own Prettier format the files it handles, in place of
+    /// the language server.
+    ///
+    /// On by default, because a repository that carries a Prettier config has
+    /// already decided how its files are written, and a language server
+    /// formatting them another way is the wrong answer arriving faster.
+    ///
+    /// Worth a switch at all because honouring that decision means running
+    /// `node_modules/.bin/prettier` **from the repository that was opened** —
+    /// the only way the project's own version and plugins apply, and the same
+    /// thing every editor does, but still code from a folder rather than from
+    /// this app. Turning this off keeps formatting on the language server.
+    static let usesPrettierKey = "EditorUsesPrettier"
+
     static let defaultFontSize = 12.0
     static let defaultTabWidth = 4
 
