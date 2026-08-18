@@ -323,6 +323,41 @@ class TerminalWindow: NSWindow {
         super.close()
     }
 
+    /// The appearance pass `showWindow` performs, for the paths that never call it.
+    ///
+    /// `PhantomSessionStore.restoreWindows` puts every restored window on screen
+    /// with `orderFrontRegardless`, so the sync at the end of
+    /// `TerminalController.showWindow` never runs for it. The colour is already
+    /// right — ``syncAppearance(_:)`` no longer waits for visibility — but the
+    /// background blur does need the window to be showing, and without this it
+    /// arrived only when the restored surface finally took focus, which is tens
+    /// of milliseconds and several frames later.
+    ///
+    /// Only a transition into visibility syncs: raising a window that was already
+    /// on screen has nothing to correct.
+    private func syncAppearanceOnReveal(wasVisible: Bool) {
+        guard !wasVisible, isVisible else { return }
+        terminalController?.syncAppearance()
+    }
+
+    override func orderFront(_ sender: Any?) {
+        let wasVisible = isVisible
+        super.orderFront(sender)
+        syncAppearanceOnReveal(wasVisible: wasVisible)
+    }
+
+    override func orderFrontRegardless() {
+        let wasVisible = isVisible
+        super.orderFrontRegardless()
+        syncAppearanceOnReveal(wasVisible: wasVisible)
+    }
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        let wasVisible = isVisible
+        super.makeKeyAndOrderFront(sender)
+        syncAppearanceOnReveal(wasVisible: wasVisible)
+    }
+
     override func becomeKey() {
         super.becomeKey()
         resetZoomTabButton.contentTintColor = .controlAccentColor
@@ -592,12 +627,49 @@ class TerminalWindow: NSWindow {
 
     // MARK: Positioning And Styling
 
+    /// How the window paints itself for a given configuration.
+    ///
+    /// Split out of ``syncAppearance(_:)`` so the decision can be read — and
+    /// tested — on its own. Only one part of it depends on the window being on
+    /// screen, and that part is the blur.
+    enum BackgroundTreatment: Equatable {
+        /// The window paints all but nothing of its own and the surface's alpha
+        /// lets the desktop through. `blur` is the window-server blur behind it,
+        /// which is only worth asking for once the window is being shown.
+        case transparent(blur: Bool)
+
+        /// The window paints the theme background at full alpha.
+        case opaque
+    }
+
+    /// The treatment ``syncAppearance(_:)`` applies for the given state.
+    ///
+    /// A hidden window resolves to the same treatment a shown one does, minus
+    /// the blur: the colour has to be right before the first frame, and the
+    /// blur can only be right after it.
+    static func backgroundTreatment(
+        backgroundOpacity: Double,
+        isGlassStyle: Bool,
+        isFullscreen: Bool,
+        forceOpaque: Bool,
+        isVisible: Bool
+    ) -> BackgroundTreatment {
+        guard !isFullscreen, !forceOpaque else { return .opaque }
+        guard backgroundOpacity < 1 || isGlassStyle else { return .opaque }
+        return .transparent(blur: isVisible && !isGlassStyle)
+    }
+
     /// This is called by the controller when there is a need to reset the window appearance.
+    ///
+    /// Colour, opacity and appearance are applied whether or not the window is on
+    /// screen. A window is composited the moment it is ordered front, and a
+    /// restored window is ordered front directly — never through `showWindow`,
+    /// which is where the appearance pass a new window gets happens — so a pass
+    /// declined here while the window was still hidden is a frame or two of
+    /// AppKit's own `windowBackgroundColor` before the theme arrives. That is the
+    /// blink on restart. Only the blur waits for the window to be showing, and
+    /// the reveal asks for it again.
     func syncAppearance(_ surfaceConfig: Ghostty.SurfaceView.DerivedConfig) {
-        // If our window is not visible, then we do nothing. Some things such as blurring
-        // have no effect if the window is not visible. Ultimately, we'll have this called
-        // at some point when a surface becomes focused.
-        guard isVisible else { return }
         defer { updateColorSchemeForSurfaceTree() }
 
         // Basic properties
@@ -609,10 +681,14 @@ class TerminalWindow: NSWindow {
         // becomes gray and widgets show through.
         //
         // Also check if the user has overridden transparency to be fully opaque.
-        let forceOpaque = terminalController?.isBackgroundOpaque ?? false
-        if !styleMask.contains(.fullScreen) &&
-            !forceOpaque &&
-            (surfaceConfig.backgroundOpacity < 1 || surfaceConfig.backgroundBlur.isGlassStyle) {
+        switch Self.backgroundTreatment(
+            backgroundOpacity: surfaceConfig.backgroundOpacity,
+            isGlassStyle: surfaceConfig.backgroundBlur.isGlassStyle,
+            isFullscreen: styleMask.contains(.fullScreen),
+            forceOpaque: terminalController?.isBackgroundOpaque ?? false,
+            isVisible: isVisible
+        ) {
+        case .transparent(let blur):
             isOpaque = false
 
             // This is weird, but we don't use ".clear" because this creates a look that
@@ -621,12 +697,13 @@ class TerminalWindow: NSWindow {
             backgroundColor = .white.withAlphaComponent(0.001)
 
             // We don't need to set blur when using glass
-            if !surfaceConfig.backgroundBlur.isGlassStyle, let appDelegate = NSApp.delegate as? AppDelegate {
+            if blur, let appDelegate = NSApp.delegate as? AppDelegate {
                 ghostty_set_window_background_blur(
                     appDelegate.ghostty.app,
                     Unmanaged.passUnretained(self).toOpaque())
             }
-        } else {
+
+        case .opaque:
             isOpaque = true
 
             let backgroundColor = preferredBackgroundColor ?? NSColor(surfaceConfig.backgroundColor)
