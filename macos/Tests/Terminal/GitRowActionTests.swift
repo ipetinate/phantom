@@ -4,11 +4,16 @@ import Testing
 /// What a git panel row offers, and to which files.
 ///
 /// Written after the menu was reported missing an item that was there: "Add to
-/// .gitignore" only ever appeared on untracked files, correctly, but it was the
-/// *only* thing besides Copy Path that ever appeared at all — so right-clicking
-/// a modified file produced a one-item menu that read as a broken feature. The
-/// rules below are the ones that decide it, and they are asserted here so the
-/// next person to widen this menu can see which absences are deliberate.
+/// .gitignore" appeared only on untracked files, and it was the *only* thing
+/// besides Copy Path that ever appeared at all — so right-clicking a modified
+/// file produced a one-item menu that read as a broken feature.
+///
+/// Both halves of that turned out to be wrong. The menu is now everything a row
+/// can do, and the ignore item is offered on tracked files too, matching the
+/// `when` clauses VS Code's git extension declares. The rules below are the ones
+/// that decide the menu, asserted here so the next person can tell which
+/// absences are deliberate — the deletion's missing file items, the conflict's
+/// missing discard — from an item that simply has not been wired up.
 struct GitRowActionTests {
     private func change(
         path: String = "src/main.swift",
@@ -51,18 +56,36 @@ struct GitRowActionTests {
             .openFile,
             .stage,
             .discardChanges,
+            .addToGitignore,
             .revealInFinder,
             .copyPath,
             .copyRelativePath,
         ])
     }
 
-    /// And the absence that is deliberate, kept next to the case above so the
-    /// two are read together: ignore rules do not apply to a tracked path, so
-    /// the item would achieve nothing.
-    @Test func aTrackedFileIsNotOfferedGitignore() {
-        #expect(!actions(for: change()).contains(.addToGitignore))
-        #expect(actions(for: change(isUntracked: true)).contains(.addToGitignore))
+    /// A tracked file is offered the ignore rule too, which is where this
+    /// started: it was gated on being untracked, on the grounds that a rule
+    /// against a tracked path has no visible effect. It still has none — git
+    /// carries on reporting the file and nothing untracks it — but VS Code
+    /// exposes `git.ignore` for its `workingTree` group as well as `untracked`,
+    /// and writing the rule down is what was asked for either way.
+    @Test func bothTrackedAndUntrackedFilesAreOfferedGitignore() {
+        #expect(actions(for: change()).contains(.addToGitignore))
+        #expect(actions(for: change(worktree: "?", isUntracked: true)).contains(.addToGitignore))
+    }
+
+    /// The two groups VS Code leaves it out of, for the same reason it does:
+    /// `index` and `merge` get no ignore item. A staged row is the index; a
+    /// host signals a conflict by wiring neither callback.
+    @Test func aStagedOrConflictedRowIsNotOfferedGitignore() {
+        #expect(!actions(for: change(index: "M", worktree: "."), staged: true)
+            .contains(.addToGitignore))
+
+        #expect(!actions(
+            for: change(index: "U", worktree: "U", isUnmerged: true),
+            canDiscard: false,
+            canIgnore: false
+        ).contains(.addToGitignore))
     }
 
     /// An untracked file has no change to throw away — discarding it removes
@@ -101,7 +124,8 @@ struct GitRowActionTests {
     @Test func aConflictedFileLosesOnlyTheDiscard() {
         let items = actions(
             for: change(index: "U", worktree: "U", isUnmerged: true),
-            canDiscard: false
+            canDiscard: false,
+            canIgnore: false
         )
 
         #expect(!items.contains(.discardChanges))

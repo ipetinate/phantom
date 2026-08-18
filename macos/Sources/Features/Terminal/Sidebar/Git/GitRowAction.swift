@@ -93,11 +93,23 @@ enum GitRowAction: Hashable, CaseIterable {
             modify.append(change.isUntracked ? .deleteUntrackedFile : .discardChanges)
         }
 
-        /// Only for a file git is not already tracking. Adding a tracked path
-        /// to `.gitignore` does nothing — ignore rules apply to untracked
-        /// paths, so git carries on reporting it — and an item that quietly
-        /// achieves nothing is worse than an absent one.
-        let ignore: [GitRowAction] = canIgnore && change.isUntracked ? [.addToGitignore] : []
+        /// Offered whether or not git already tracks the path, which is what
+        /// VS Code does: its git extension exposes `git.ignore` for both the
+        /// `workingTree` and `untracked` resource groups.
+        ///
+        /// A rule against a tracked path has no visible effect — ignore rules
+        /// apply to untracked ones, so git carries on reporting the file, and
+        /// nothing here quietly untracks it to force the issue. It was gated
+        /// on that reasoning and the gate was the wrong call: writing the rule
+        /// down is still what the reader asked for, it takes effect the day the
+        /// path stops being tracked, and an item that vanishes on some rows
+        /// reads as a broken menu long before anyone suspects a deliberate
+        /// rule.
+        ///
+        /// Not on a staged row, and not on a conflicted one, matching the same
+        /// two `when` clauses: neither the `index` nor the `merge` group gets
+        /// this item, and a host signals the second by wiring no callback.
+        let ignore: [GitRowAction] = canIgnore && !staged ? [.addToGitignore] : []
 
         var locate: [GitRowAction] = []
         if change.isPresentOnDisk { locate.append(.revealInFinder) }

@@ -478,7 +478,7 @@ struct GitRepoView: View {
                     onDiscard: merge ? nil : { discarding = [row.change] },
                     onOpenDiff: { openDiff(row.change) },
                     onOpenSource: { openSource(row.change) },
-                    onIgnore: { ignore(row.change) }
+                    onIgnore: merge ? nil : { ignore(row.change) }
                 )
             }
         }
