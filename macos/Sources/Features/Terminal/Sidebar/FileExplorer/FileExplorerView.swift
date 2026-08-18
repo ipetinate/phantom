@@ -427,14 +427,20 @@ struct FileExplorerView: View {
         guard model.editing == nil else { return .ignored }
         let modifiers = PhantomShortcut.modifiers(from: press.modifiers)
 
-        if shortcuts.newFile.matches(modifiers: modifiers, key: press.key) {
+        /// Resolved against the whole map rather than the two explorer
+        /// commands, so a combination the reader gave to an editor command
+        /// falls through to the editor instead of being swallowed here.
+        switch shortcuts.map.action(key: press.key, modifiers: modifiers) {
+        case .newFile:
             model.beginCreateDefault(isFolder: false)
             return .handled
-        }
-        if shortcuts.newFolder.matches(modifiers: modifiers, key: press.key) {
+        case .newFolder:
             model.beginCreateDefault(isFolder: true)
             return .handled
+        default:
+            break
         }
+
         if press.key == KeyEquivalent.return.character {
             guard let selection = model.selection else { return .ignored }
             model.beginRename(path: selection)
