@@ -561,7 +561,7 @@ class AppDelegate: NSObject,
             return true
         }
 
-        var isDirectory = ObjCBool(intent == .workingDirectory)
+        let isDirectory = ObjCBool(intent == .workingDirectory)
 
         // Set to true if confirmation is required before starting up the
         // new terminal.
