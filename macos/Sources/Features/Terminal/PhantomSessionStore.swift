@@ -74,7 +74,11 @@ final class PhantomSessionStore {
     /// or the quit is called off. Should a cancelled quit ever fail to clear
     /// it, the cost is a session that stops shrinking — closed windows come
     /// back — which is the direction to be wrong in.
-    private var isQuitting = false
+    /// Readable, because it answers a second question too: `TabStateCenter`
+    /// asks it to tell an agent the reader quit apart from one this quit is
+    /// about to kill. Both are `ended` on disk and only the app knows which is
+    /// which — the same reason this flag exists at all.
+    private(set) var isQuitting = false
 
     /// The app has been asked to quit. Until it dies or `quitWasCancelled` is
     /// called, no save may record fewer terminals than the session already has.

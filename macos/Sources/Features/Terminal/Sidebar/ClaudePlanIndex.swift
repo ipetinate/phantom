@@ -47,6 +47,24 @@ enum ClaudePlanIndex {
         return encoded.hasPrefix(encodedProject + "-")
     }
 
+    /// Whether a row that has a matching plan should actually wear its tag,
+    /// given the agent session live in that tab.
+    ///
+    /// The tag was drawn whenever the directory matched, which made it a claim
+    /// about the *folder* — and folders do not end. It read as "a plan is being
+    /// worked on here" long after the session that wrote the plan was gone, on
+    /// tabs that had never run an agent at all, which is a tag with nothing
+    /// behind it.
+    ///
+    /// Claude only, because a plan is Claude Code's: a tab running Codex or
+    /// OpenCode in the same repo is not working that plan. The liveness comes
+    /// from `AgentTabRecord.liveAgent` — the same fact that decides whether a
+    /// restore brings the session back, so the tag and the restore cannot come
+    /// to disagree about whether a session exists.
+    static func tagIsVisible(liveAgent: CodingAgent?) -> Bool {
+        liveAgent == .claude
+    }
+
     /// One plan on disk.
     struct Plan: Equatable, Identifiable {
         let path: String

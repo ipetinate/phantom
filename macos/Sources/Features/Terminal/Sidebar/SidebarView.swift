@@ -1252,7 +1252,8 @@ private struct SidebarTabRow: View {
                         devServerChip(port: port)
                     }
 
-                    if let plan = planCenter.plan(forTerminalAt: tab.pwd) {
+                    if ClaudePlanIndex.tagIsVisible(liveAgent: tab.liveAgent),
+                       let plan = planCenter.plan(forTerminalAt: tab.pwd) {
                         planChip(plan: plan)
                     }
 

@@ -21,8 +21,10 @@ enum AgentTabState: String {
     /// A tool use was denied (orange stop sign).
     case denied
 
-    /// The agent session ended cleanly; shows nothing, but the file's
-    /// presence tells session restore not to resume it.
+    /// The agent session ended. Shows nothing — and on its own says nothing
+    /// about whether the session should come back, because both the reader
+    /// quitting the agent and Phantom quitting and killing it write this word.
+    /// What separates them is `AgentTabRecord.endedByUser`.
     case ended
 }
 
@@ -45,7 +47,21 @@ final class TabStateCenter: ObservableObject {
     /// class makes back to a state file — consuming an attention marker,
     /// clearing a seen `done` — can put the agent and session id back rather
     /// than truncating the file to the one word they needed.
-    private(set) var records: [UUID: AgentTabRecord] = [:]
+    ///
+    /// Published, unlike when it was only ever read at restore time, because
+    /// the sidebar now asks it a live question: `AgentTabRecord.liveAgent`, the
+    /// one behind the plan tag. `states` cannot carry that — it drops `ended`
+    /// entirely and holds nothing at all for an idle agent — so a row watching
+    /// only `states` had no way to notice a session ending.
+    @Published private(set) var records: [UUID: AgentTabRecord] = [:]
+
+    /// When this process started watching the directory.
+    ///
+    /// The line between an ending Phantom saw and one it did not. Everything
+    /// already in the directory at this moment was written by some earlier run —
+    /// most of it as that run was dying — and none of it may be read as the
+    /// reader having quit an agent. See `endMarking`.
+    private let watchingSince = Date()
 
     static let stateDir: URL = FileManager.default
         .homeDirectoryForCurrentUser
@@ -132,8 +148,14 @@ final class TabStateCenter: ObservableObject {
     private func refresh() {
         let entries = (try? FileManager.default.contentsOfDirectory(
             at: Self.stateDir,
-            includingPropertiesForKeys: nil
+            includingPropertiesForKeys: [.contentModificationDateKey]
         )) ?? []
+
+        /// Asked once for the whole pass, and asked of the session store
+        /// because that is where the app's own intent to quit is already
+        /// recorded — from the moment it is asked whether it may quit, which is
+        /// early enough to cover the review that closes windows one at a time.
+        let isQuitting = PhantomSessionStore.shared.isQuitting
 
         var result: [UUID: AgentTabState] = [:]
         var parsed: [UUID: AgentTabRecord] = [:]
@@ -142,7 +164,20 @@ final class TabStateCenter: ObservableObject {
                   let raw = try? String(contentsOf: url, encoding: .utf8)
             else { continue }
 
-            let record = AgentTabRecord(fileContents: raw)
+            var record = AgentTabRecord(fileContents: raw)
+            let modified = (try? url.resourceValues(
+                forKeys: [.contentModificationDateKey]
+            ))?.contentModificationDate ?? .distantPast
+
+            if let marked = Self.endMarking(
+                record,
+                modified: modified,
+                watchingSince: watchingSince,
+                isQuitting: isQuitting
+            ) {
+                try? marked.fileContents.write(to: url, atomically: true, encoding: .utf8)
+                record = marked
+            }
             parsed[id] = record
 
             // The Notification hook's attention marker: fire the system
@@ -161,8 +196,50 @@ final class TabStateCenter: ObservableObject {
         }
 
         notifyTransitions(from: states, to: result)
-        records = parsed
+        if parsed != records { records = parsed }
         if result != states { states = result }
+    }
+
+    /// How to rewrite an `ended` record the directory watch just handed us, or
+    /// nil to leave the file exactly as it is.
+    ///
+    /// This is the whole of the distinction a restore could not make. Both
+    /// endings write `ended`, so the word is asked *when* rather than *what*:
+    ///
+    /// - **Written since we started watching, with the app not quitting.** The
+    ///   reader ended the agent. Phantom was up, nothing was being torn down,
+    ///   and a session stopped anyway. Marked, and `AgentTabRecord.resumeCommand`
+    ///   then declines it.
+    /// - **Written while the app is quitting.** Phantom's own exit is killing
+    ///   these agents; every live session says `ended` on the way out. Left
+    ///   alone, which is the behaviour that resumes them.
+    /// - **Older than this run.** Not witnessed, so not attributable. This is
+    ///   the case that runs at every launch — the whole directory, as the last
+    ///   quit left it — and reading it as reader-ended would silently stop
+    ///   restoring anything at all.
+    ///
+    /// A file whose timestamp cannot be read arrives here as `.distantPast` and
+    /// so falls in the last group: unreadable degrades to resuming, never to
+    /// discarding a conversation.
+    ///
+    /// Pure, and given both dates rather than reading a clock, because "does
+    /// restore keep this session?" is worth being able to ask without a running
+    /// app in the room.
+    static func endMarking(
+        _ record: AgentTabRecord,
+        modified: Date,
+        watchingSince: Date,
+        isQuitting: Bool
+    ) -> AgentTabRecord? {
+        guard record.state == .ended, !record.endedByUser, !isQuitting else { return nil }
+        guard modified > watchingSince else { return nil }
+
+        return AgentTabRecord(
+            stateWord: record.stateWord,
+            agent: record.agent,
+            sessionID: record.sessionID,
+            endedByUser: true
+        )
     }
 
     /// Records that a tab was started with an agent, before that agent has
@@ -183,7 +260,7 @@ final class TabStateCenter: ObservableObject {
     func recordAgentStart(surfaceId: UUID, agent: CodingAgent) {
         let existing = records[surfaceId]
         let record = AgentTabRecord(
-            stateWord: existing?.stateWord ?? "",
+            stateWord: Self.startWord(carriedOver: existing),
             agent: agent,
             sessionID: existing?.sessionID
         )
@@ -195,6 +272,24 @@ final class TabStateCenter: ObservableObject {
         )
         try? record.fileContents.write(to: url, atomically: true, encoding: .utf8)
         records[surfaceId] = record
+    }
+
+    /// The state word a start record carries over from whatever the tab had.
+    ///
+    /// Whatever was there — except a word saying the last session finished. A
+    /// session that is *starting* has not ended, and a tab that starts its
+    /// second agent still looking finished is wrong twice over: the plan tag
+    /// stays hidden for a live Claude session, and the restore reads it as a
+    /// conversation the reader closed. The `end=user` mark goes the same way,
+    /// dropped by construction, because the record it belonged to is over.
+    ///
+    /// Not simply always empty, because the word is usually live news — an agent
+    /// started in a tab that is already `working` is one Phantom is about to
+    /// hand a second agent, and blanking that would drop the indicator for the
+    /// one still running.
+    static func startWord(carriedOver record: AgentTabRecord?) -> String {
+        guard let record, !record.endedByUser, record.state != .ended else { return "" }
+        return record.stateWord
     }
 
     /// Clears a `done` marker once its tab has been seen (selected).

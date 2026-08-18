@@ -20,6 +20,13 @@ final class SidebarTabModel: ObservableObject, Identifiable {
     @Published private(set) var gitBranch: String?
     @Published private(set) var repoRoot: String?
     @Published private(set) var agentState: AgentTabState?
+
+    /// The agent whose session is up in this tab, which `agentState` cannot
+    /// say: that is nil both for a tab with no agent and for one whose agent is
+    /// idle. Rows that show something *about* a session — the plan tag — need
+    /// the difference.
+    @Published private(set) var liveAgent: CodingAgent?
+
     @Published private(set) var isDirty: Bool?
     @Published private(set) var prNumber: Int?
     @Published private(set) var prURL: String?
@@ -77,6 +84,10 @@ final class SidebarTabModel: ObservableObject, Identifiable {
 
     func setAgentState(_ value: AgentTabState?) {
         if agentState != value { agentState = value }
+    }
+
+    func setLiveAgent(_ value: CodingAgent?) {
+        if liveAgent != value { liveAgent = value }
     }
 
     func setRepoStatus(isDirty: Bool?, prNumber: Int?, prURL: String?) {
