@@ -1699,14 +1699,14 @@ final class CodeNSTextView: NSTextView {
 
     /// One open completion list.
     ///
-    /// `prefix` is the range the list was built for, and it is what makes
-    /// deleting a character a *refilter* rather than a close: the list stays
-    /// while the caret is still inside the word it opened on, and closes when
-    /// the word empties or the caret leaves. `CodeCompletionTrigger.decide`
-    /// deliberately cannot make that call — a single typed character does not
-    /// say which range the list on screen belongs to.
+    /// It used to carry the range the list was built for, and accepting used
+    /// to insert over that range. **Both are gone on purpose.** A range
+    /// recorded when the answer arrived is a range the reader can type past
+    /// while the refilter for their next keystroke is still in flight, and
+    /// inserting over it strands the characters they typed last — the range
+    /// to replace is worked out at accept time by `replacementRange`, out of
+    /// the buffer as it is and the range the row itself asked for.
     struct CompletionSession {
-        var prefix: NSRange
         var items: [CodeCompletionItem]
         var selection: Int
     }
@@ -1869,7 +1869,7 @@ final class CodeNSTextView: NSTextView {
             return
         }
 
-        completionSession = CompletionSession(prefix: prefix, items: ranked, selection: 0)
+        completionSession = CompletionSession(items: ranked, selection: 0)
 
         /// Anchored on the **start of the word**, not the caret, so the list
         /// lines up under what is being completed rather than drifting right
@@ -2163,17 +2163,70 @@ final class CodeNSTextView: NSTextView {
         documentationPanel?.dismiss()
     }
 
-    /// Replaces the word being completed with the item's text.
+    private func acceptCompletion(_ item: CodeCompletionItem) {
+        guard completionSession != nil else { return }
+        dismissCompletions()
+        applyCompletion(item)
+    }
+
+    /// The span an accepted row replaces.
+    ///
+    /// The word under the caret is recomputed here rather than taken from the
+    /// session that opened the list, and that is a repair rather than
+    /// tidying: the session's range is the one the *answer* was drawn for, so
+    /// a reader who keeps typing while a refilter is still in flight accepts
+    /// against a range a character or two short. Replacing it strands what
+    /// they typed last after the insertion — `conn` accepting `connect`
+    /// becomes `connectn`, caret in the middle of it.
+    ///
+    /// `asked` — the range the row's producer named — wins where the two
+    /// disagree, but by **union** rather than by replacement, for that same
+    /// reason: it was measured against the document as it was, so honouring
+    /// it alone re-strands anything typed since. The union covers both what
+    /// the server meant to erase and what the reader has since added.
+    ///
+    /// Two guards, and both are about a range that no longer describes this
+    /// document. It has to lie on the caret's line, which is the restriction
+    /// VS Code puts on a completion's `textEdit` and which bounds the damage
+    /// of a stale one to a line rather than to a file; and it has to touch
+    /// the word, so a range pointing somewhere else entirely is refused
+    /// rather than unioned into a deletion of everything in between. A
+    /// refused range leaves the word — which is what a row carrying no range
+    /// gets anyway, so the worst case is the old behaviour rather than a new
+    /// one.
+    static func replacementRange(asked: NSRange?, caret: Int, in content: NSString) -> NSRange {
+        let caret = min(max(caret, 0), content.length)
+        let word = identifierRange(in: content, endingAt: caret)
+        guard let asked, asked.length >= 0 else { return word }
+
+        let line = content.lineRange(for: NSRange(location: caret, length: 0))
+        guard asked.location >= line.location, NSMaxRange(asked) <= NSMaxRange(line)
+        else { return word }
+
+        guard asked.location <= NSMaxRange(word), word.location <= NSMaxRange(asked)
+        else { return word }
+
+        return NSUnionRange(asked, word)
+    }
+
+    /// Replaces what the row says it replaces with the row's text.
     ///
     /// Through `shouldChangeText` and `didChangeText` rather than a bare
     /// `replaceCharacters`, so undo registers it as one step and the
     /// delegate fires — which is what tells the language server the buffer
     /// moved. A raw replacement desynchronises the server silently.
-    private func acceptCompletion(_ item: CodeCompletionItem) {
-        guard let session = completionSession else { return }
-        let range = session.prefix
-        dismissCompletions()
+    ///
+    /// Split from `acceptCompletion` — which is the list's half, and needs a
+    /// session to have been open — so the buffer half can be driven without a
+    /// panel, a window or an event loop.
+    func applyCompletion(_ item: CodeCompletionItem) {
         endSnippet()
+
+        let range = Self.replacementRange(
+            asked: item.replaceRange,
+            caret: selectedRange().location,
+            in: string as NSString
+        )
 
         /// Everything lands inside one undo group, so a single ⌘Z takes back
         /// the completion *and* the import it dragged in. Two steps would

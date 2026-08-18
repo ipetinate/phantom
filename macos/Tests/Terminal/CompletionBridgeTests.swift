@@ -136,6 +136,78 @@ struct CompletionBridgeTests {
         #expect(CompletionBridge.detail(of: item) == "(options: Options) => Client")
     }
 
+    // MARK: The range the item replaces
+
+    /// The regression this pair exists for: the range used to be parsed with
+    /// care and then dropped **here**, so the accept path had nothing left to
+    /// do but guess it from the word being typed. Measured — a
+    /// `typescript-language-server` dot-accessor covers the `.` and repeats it
+    /// in `newText`, and guessing writes `foo..bar`.
+    @Test func aServersRangeReachesTheRowItBelongsTo() throws {
+        let bridge = CompletionBridge()
+        guard case .items(let items) = bridge.items(
+            from: list([[
+                "label": .string("bar"),
+                "filterText": .string(".bar"),
+                "textEdit": ["range": range(3, 4), "newText": .string(".bar")],
+            ]]),
+            in: text
+        ) else {
+            Issue.record("expected a list")
+            return
+        }
+
+        #expect(items.first?.insertText == ".bar")
+        #expect(items.first?.replaceRange == NSRange(location: 3, length: 1))
+    }
+
+    /// No range from the server is `nil` rather than something invented, so
+    /// the view can tell "the server said nothing" from "the server said
+    /// here" and fall back only in the first case.
+    @Test func anItemWithoutATextEditCarriesNoRange() throws {
+        let bridge = CompletionBridge()
+        guard case .items(let items) = bridge.items(
+            from: list([["label": .string("map"), "insertText": .string("map(")]]),
+            in: text
+        ) else {
+            Issue.record("expected a list")
+            return
+        }
+
+        #expect(items.first?.replaceRange == nil)
+    }
+
+    /// An `InsertReplaceEdit` is honoured at its **insert** range — the
+    /// shorter of the two, ending at the caret. It is VS Code's default and
+    /// the conservative one: the replace range's extra span is text already
+    /// on screen that nobody asked to lose.
+    @Test func anInsertReplaceEditIsTakenAtItsInsertRange() throws {
+        let item = try #require(LSPCompletion([
+            "label": .string("value"),
+            "textEdit": [
+                "insert": range(6, 8),
+                "replace": range(6, 11),
+                "newText": .string("value"),
+            ],
+        ]))
+
+        #expect(CompletionBridge.replaceRange(of: item.edit, using: LSPLineIndex(text))
+            == NSRange(location: 6, length: 2))
+    }
+
+    /// A range that does not resolve is dropped for the same reason an
+    /// unresolvable import edit is — the view then falls back to the word
+    /// under the caret, which is a worse answer than the server's and a far
+    /// better one than an offset that survived arithmetic it should not have.
+    @Test func aRangePastTheEndOfTheDocumentBecomesNoRangeAtAll() throws {
+        let item = try #require(LSPCompletion([
+            "label": .string("bar"),
+            "textEdit": ["range": range(0, 4, line: 900), "newText": .string("bar")],
+        ]))
+
+        #expect(CompletionBridge.replaceRange(of: item.edit, using: LSPLineIndex(text)) == nil)
+    }
+
     // MARK: Additional edits
 
     @Test func anImportEditSurvivesAsABufferRange() throws {

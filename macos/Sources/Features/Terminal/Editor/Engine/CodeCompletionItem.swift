@@ -264,6 +264,24 @@ struct CodeCompletionItem: Equatable, Identifiable, Sendable {
     /// there would write the question mark into the file.
     var insertText: String
 
+    /// The span `insertText` replaces, when whoever produced the row named
+    /// one. Offsets into the document the row was built for.
+    ///
+    /// `nil` is "this row has no opinion", and only then may the view fall
+    /// back to the word the caret sits at the end of — which is the only
+    /// thing a word scraped out of the buffer could ever mean.
+    ///
+    /// It travels on the row rather than being reconstructed at accept time
+    /// because the reconstruction is wrong for real servers, and wrong in the
+    /// direction that damages the file. A range routinely starts **before**
+    /// the caret: TypeScript builds dot-accessor rows whose range covers the
+    /// `.` and whose text includes it again, so replacing only the typed word
+    /// writes `foo..bar`. And a range routinely ends **after** the caret,
+    /// which is how a server says "and the rest of this identifier too".
+    /// Neither is expressible as "the prefix being typed", so the prefix
+    /// cannot stand in for it.
+    var replaceRange: NSRange?
+
     /// Whether `insertText` is a `CodeSnippet` body rather than literal text.
     var isSnippet: Bool
 
@@ -318,6 +336,7 @@ struct CodeCompletionItem: Equatable, Identifiable, Sendable {
         label: String,
         detail: String? = nil,
         insertText: String? = nil,
+        replaceRange: NSRange? = nil,
         isSnippet: Bool = false,
         filterText: String? = nil,
         sortText: String? = nil,
@@ -331,6 +350,7 @@ struct CodeCompletionItem: Equatable, Identifiable, Sendable {
         self.label = label
         self.detail = detail
         self.insertText = insertText ?? label
+        self.replaceRange = replaceRange
         self.isSnippet = isSnippet
         self.filterText = filterText
         self.sortText = sortText
