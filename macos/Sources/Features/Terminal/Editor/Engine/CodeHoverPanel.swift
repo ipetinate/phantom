@@ -28,6 +28,27 @@ final class CodeHoverPanel: NSPanel {
     /// beginning, which is the part you were reading.
     static let maximumHeight: CGFloat = 320
 
+    /// Which side of the hovered line the card would rather be on.
+    ///
+    /// **Below**, the same side the completion list prefers, and through the
+    /// same `PanelPlacement` — one mechanism, one flip, one clamp.
+    ///
+    /// Above is the answer that sounds right and is wrong in the hand. The
+    /// argument for it is that code continues downwards, so a card over the
+    /// line leaves what comes next uncovered — true, and it costs more than
+    /// it buys: a card above the line sits between the pointer and the word
+    /// it describes, so reaching it means dragging the pointer back *across*
+    /// that word, past everything else the language server has an opinion
+    /// about. Below, the reach is downwards into the gap and nothing else is
+    /// crossed. What gets covered is the line under the one being read, which
+    /// is the cheaper thing to lose.
+    ///
+    /// A named constant rather than a literal at the call site so the
+    /// preference can be asserted without presenting anything: a test that
+    /// presented a card would reach `orderFront`, which from a host with no
+    /// event loop never returns.
+    static let preferredEdge: PanelPlacement.Edge = .below
+
     /// Called when the pointer leaves the card.
     ///
     /// Needed because the text view stops hearing about the pointer the moment
@@ -378,13 +399,13 @@ final class CodeHoverPanel: NSPanel {
 
     // MARK: Geometry
 
-    /// Above the hovered line when there is room, below it otherwise, and
+    /// Below the hovered line when there is room, above it otherwise, and
     /// always wholly on screen.
     ///
     /// The rule itself lives in `PanelPlacement`, which the completion list
-    /// shares — with the opposite preference. It was private here and therefore
-    /// untested; moving it gave it a test and left this method with the only
-    /// part that is actually about this window.
+    /// shares. It was private here and therefore untested; moving it gave it a
+    /// test and left this method with the only part that is actually about
+    /// this window.
     private func position(near anchor: NSRect, on screen: NSScreen?) {
         let size = frame.size
         let visible = screen?.visibleFrame ?? NSRect(origin: .zero, size: size)
@@ -393,7 +414,7 @@ final class CodeHoverPanel: NSPanel {
             anchor: anchor,
             size: size,
             visible: visible,
-            prefers: .above
+            prefers: Self.preferredEdge
         ))
     }
 

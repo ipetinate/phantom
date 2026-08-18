@@ -56,6 +56,24 @@ struct CodeHoverPersistenceTests {
         )!
     }
 
+    /// A pointer leaving the view. Enter and exit events are their own kind —
+    /// `NSEvent.mouseEvent(with:)` will not make one — and the tracking number
+    /// is only meaningful to a live tracking area, which is exactly what these
+    /// tests do without.
+    private func exitEvent() -> NSEvent {
+        NSEvent.enterExitEvent(
+            with: .mouseExited,
+            location: NSPoint(x: -10, y: 190),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        )!
+    }
+
     /// Regresses the actual bug: a dismissal scheduled 400ms out was
     /// cancelling the *lookup* task it was scheduled alongside — not just
     /// the window — and that lookup answers at 450ms. Every hover was
@@ -113,5 +131,36 @@ struct CodeHoverPersistenceTests {
 
         try await Task.sleep(for: .milliseconds(1500))
         #expect(offsets.count == 1, "only the latest hover's fetch should have run")
+    }
+
+    /// The card is a window of its own with a gap between it and the line, so
+    /// the pointer reaching for it is off the text before it is on the card —
+    /// and `mouseExited` closing at once dismissed every card anybody tried to
+    /// scroll or select from. Leaving now gets the grace a pointer moving
+    /// *inside* the text already had.
+    ///
+    /// The first expectation is the regression and it is not a timing bet:
+    /// `mouseExited` returns before any suspension point, so a close that
+    /// happened synchronously — which is what the old `hideHover()` did — is
+    /// already counted by the time it is read. The delay is stated rather than
+    /// taken from the shipped 400ms so the second half waits 12× it instead of
+    /// betting 900ms against a deadline a loaded machine can stretch.
+    @Test func leavingTheTextViewDoesNotCloseTheCardAtOnce() async throws {
+        let (window, textView) = makeHoveredTextView(text: "let x = 1")
+        defer { window.contentView = nil }
+
+        textView.hoverProvider = { _ in CodeHoverInfo() } // empty — see the file comment
+        textView.hoverDismissDelay = .milliseconds(50)
+
+        var closes = 0
+        textView.onHoverDismiss = { closes += 1 }
+
+        textView.mouseMoved(with: moveEvent(x: 10, y: 190))
+        textView.mouseExited(with: exitEvent())
+
+        #expect(closes == 0, "the card must survive the pointer crossing the gap towards it")
+
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(closes >= 1, "and it must still close once the pointer has settled elsewhere")
     }
 }

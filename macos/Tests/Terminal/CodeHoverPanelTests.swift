@@ -41,6 +41,53 @@ struct CodeHoverPanelTests {
         #expect(CodeHoverPanel.contains(point: NSPoint(x: 100, y: 100), in: frame, isVisible: true))
     }
 
+    // MARK: - Which side of the line the card opens on
+
+    /// The card opens **below** the line, like the completion list and through
+    /// the same `PanelPlacement`. Above put the card between the pointer and
+    /// the word it describes, so reaching it meant dragging back across that
+    /// word — and across everything else the language server has an opinion
+    /// about on the way.
+    ///
+    /// Asserted as a value rather than by presenting a card: `present` ends in
+    /// `orderFront`, which from this host never returns.
+    @Test func theCardPrefersToOpenBelowTheLine() {
+        #expect(CodeHoverPanel.preferredEdge == .below)
+    }
+
+    /// And the preference is one the geometry honours: with room under the
+    /// line, the card lands under it and leaves the line itself uncovered.
+    @Test func theCardLandsUnderTheLineWhenThereIsRoom() {
+        let anchor = NSRect(x: 100, y: 400, width: 60, height: 16)
+        let size = NSSize(width: 200, height: 100)
+
+        let origin = PanelPlacement.origin(
+            anchor: anchor,
+            size: size,
+            visible: NSRect(x: 0, y: 0, width: 1000, height: 800),
+            prefers: CodeHoverPanel.preferredEdge
+        )
+
+        #expect(origin.y == anchor.minY - PanelPlacement.gap - size.height)
+        #expect(origin.y + size.height < anchor.minY, "the card must not cover the line it describes")
+    }
+
+    /// The flip has to survive the change: a word near the bottom of the
+    /// display still gets its card above the line rather than off the screen.
+    @Test func theCardStillFlipsAboveWithNoRoomBelow() {
+        let anchor = NSRect(x: 100, y: 20, width: 60, height: 16)
+        let size = NSSize(width: 200, height: 100)
+
+        let origin = PanelPlacement.origin(
+            anchor: anchor,
+            size: size,
+            visible: NSRect(x: 0, y: 0, width: 1000, height: 800),
+            prefers: CodeHoverPanel.preferredEdge
+        )
+
+        #expect(origin.y == anchor.maxY + PanelPlacement.gap)
+    }
+
     // MARK: - Presented labels
 
     /// Regresses two things reported from the same screenshot: a copy

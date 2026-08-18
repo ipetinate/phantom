@@ -37,11 +37,14 @@ struct PanelPlacement {
     /// has to lose its *end*, not its beginning, because the beginning is the
     /// part being read.
     ///
-    /// The hover card prefers `.above`, because the code you are reading
-    /// continues downwards: a card below the line covers what comes next, which
-    /// is usually the thing being explained. The completion list prefers
-    /// `.below`, because there the caret's own line is what must stay visible —
-    /// you are watching the prefix you are typing, not the line under it.
+    /// Both panels that use this prefer `.below` — the completion list because
+    /// the caret's own line is what must stay visible while you watch the
+    /// prefix you are typing, the hover card because a card *above* the line
+    /// sits between the pointer and the word it describes, so reaching it
+    /// means crossing that word. `.above` is still a real preference rather
+    /// than dead weight: it is the side either panel flips to when the bottom
+    /// of the display is in the way, and it is what a third caller with the
+    /// opposite need would ask for.
     static func origin(anchor: NSRect, size: NSSize, visible: NSRect, prefers: Edge) -> NSPoint {
         let above = anchor.maxY + gap
         let below = anchor.minY - gap - size.height
