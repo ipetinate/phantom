@@ -1,0 +1,146 @@
+@testable import Ghostty
+import Testing
+
+/// What a git panel row offers, and to which files.
+///
+/// Written after the menu was reported missing an item that was there: "Add to
+/// .gitignore" only ever appeared on untracked files, correctly, but it was the
+/// *only* thing besides Copy Path that ever appeared at all — so right-clicking
+/// a modified file produced a one-item menu that read as a broken feature. The
+/// rules below are the ones that decide it, and they are asserted here so the
+/// next person to widen this menu can see which absences are deliberate.
+struct GitRowActionTests {
+    private func change(
+        path: String = "src/main.swift",
+        index: Character = ".",
+        worktree: Character = "M",
+        isUntracked: Bool = false,
+        isUnmerged: Bool = false
+    ) -> GitFileChange {
+        GitFileChange(
+            path: path,
+            originalPath: nil,
+            index: index,
+            worktree: worktree,
+            isUntracked: isUntracked,
+            isUnmerged: isUnmerged
+        )
+    }
+
+    private func actions(
+        for change: GitFileChange,
+        staged: Bool = false,
+        canDiscard: Bool = true,
+        canIgnore: Bool = true
+    ) -> [GitRowAction] {
+        GitRowAction.groups(
+            for: change,
+            staged: staged,
+            canDiscard: canDiscard,
+            canIgnore: canIgnore
+        ).flatMap { $0 }
+    }
+
+    /// The report this came from, stated as a test: a tracked file's menu was
+    /// Copy Path and nothing else.
+    @Test func aModifiedFileOffersEverythingItCanDo() {
+        let items = actions(for: change())
+
+        #expect(items == [
+            .openDiff,
+            .openFile,
+            .stage,
+            .discardChanges,
+            .revealInFinder,
+            .copyPath,
+            .copyRelativePath,
+        ])
+    }
+
+    /// And the absence that is deliberate, kept next to the case above so the
+    /// two are read together: ignore rules do not apply to a tracked path, so
+    /// the item would achieve nothing.
+    @Test func aTrackedFileIsNotOfferedGitignore() {
+        #expect(!actions(for: change()).contains(.addToGitignore))
+        #expect(actions(for: change(isUntracked: true)).contains(.addToGitignore))
+    }
+
+    /// An untracked file has no change to throw away — discarding it removes
+    /// the file — so the item says that before the confirmation does.
+    @Test func anUntrackedFileIsOfferedDeletionRatherThanDiscarding() {
+        let items = actions(for: change(worktree: "?", isUntracked: true))
+
+        #expect(items.contains(.deleteUntrackedFile))
+        #expect(!items.contains(.discardChanges))
+    }
+
+    /// A deletion keeps the row, keeps the diff — that is where you go to see
+    /// what left — and loses only the items that need a file to exist.
+    @Test func aDeletedFileKeepsItsDiffAndLosesTheFileItems() {
+        for deletion in [change(worktree: "D"), change(index: "D", worktree: ".")] {
+            let items = actions(for: deletion)
+
+            #expect(items.contains(.openDiff))
+            #expect(items.contains(.discardChanges), "the discard is how it comes back")
+            #expect(!items.contains(.openFile))
+            #expect(!items.contains(.revealInFinder))
+            #expect(items.contains(.copyRelativePath), "the path is still worth copying")
+        }
+    }
+
+    /// A path deleted in the index and written again in the working tree has a
+    /// file, so the worktree column is the one that answers.
+    @Test func aDeletionPutBackCountsAsPresent() {
+        #expect(change(index: "D", worktree: "M").isPresentOnDisk)
+        #expect(change(worktree: "?", isUntracked: true).isPresentOnDisk)
+    }
+
+    /// A conflicted file's host wires no discard, because "discard the change"
+    /// has no single meaning with two sides in play. The rest of the menu is
+    /// unaffected, which is the point of asking rather than assuming.
+    @Test func aConflictedFileLosesOnlyTheDiscard() {
+        let items = actions(
+            for: change(index: "U", worktree: "U", isUnmerged: true),
+            canDiscard: false
+        )
+
+        #expect(!items.contains(.discardChanges))
+        #expect(!items.contains(.deleteUntrackedFile))
+        #expect(items.contains(.openDiff))
+        #expect(items.contains(.stage), "staging is how a resolution is recorded")
+    }
+
+    @Test func aStagedRowOffersToUnstage() {
+        #expect(actions(for: change(index: "M", worktree: "."), staged: true).contains(.unstage))
+        #expect(!actions(for: change(index: "M", worktree: "."), staged: true).contains(.stage))
+    }
+
+    /// Groups exist to place separators, so an empty one must not survive to
+    /// become a rule against nothing.
+    @Test func noGroupIsEverEmpty() {
+        for staged in [true, false] {
+            for canDiscard in [true, false] {
+                for canIgnore in [true, false] {
+                    for file in [change(), change(worktree: "?", isUntracked: true), change(worktree: "D")] {
+                        let groups = GitRowAction.groups(
+                            for: file,
+                            staged: staged,
+                            canDiscard: canDiscard,
+                            canIgnore: canIgnore
+                        )
+                        #expect(groups.allSatisfy { !$0.isEmpty })
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every item has to say something in a menu, and the destructive pair has
+    /// to warn that it will ask.
+    @Test func everyActionIsNamedAndTheDangerousOnesAreMarked() {
+        for action in GitRowAction.allCases {
+            #expect(!action.title.isEmpty)
+            #expect(action.isDestructive == action.title.hasSuffix("…"))
+        }
+    }
+}

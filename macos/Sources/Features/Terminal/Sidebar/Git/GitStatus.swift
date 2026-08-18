@@ -51,6 +51,28 @@ struct GitFileChange: Identifiable, Equatable, Hashable {
     /// Deleting a file that only ever existed in the working tree is a
     /// filesystem operation, not something git can restore.
     var isUntrackedOnly: Bool { isUntracked }
+
+    /// Whether there is still a file at this path to open, reveal or copy.
+    ///
+    /// A deletion is a change like any other and keeps its row, but the row's
+    /// actions divide in two: the diff and the discard still mean something —
+    /// one shows what went, the other brings it back — while everything that
+    /// needs a file on disk has nothing to work with.
+    ///
+    /// Read off the status rather than asked of the filesystem, because a menu
+    /// is built while it opens and a repository mid-rebase can have hundreds of
+    /// changes: `stat` per row per redraw buys a fact git already told us.
+    ///
+    /// Both columns are read. A deletion staged is `D` in the index with a
+    /// clean worktree; one merely made is `D` in the worktree. A path deleted
+    /// in the index and put back in the working tree has something there
+    /// again, which is why the worktree column answers first.
+    var isPresentOnDisk: Bool {
+        if isUntracked { return true }
+        if worktree == "D" { return false }
+        if worktree == "." { return index != "D" }
+        return true
+    }
 }
 
 /// A repository's working state: which branch, how it relates to its
