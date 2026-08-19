@@ -2244,6 +2244,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         cancelPendingInitialPresentation()
         self.relabelTabs()
+        releaseSidebarChrome()
 
         // If we remove a window, we reset the cascade point to the key window so that
         // the next window cascade's from that one.
@@ -2273,6 +2274,67 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             let frame = focusedWindow.frame
             Self.lastCascadePoint = NSPoint(x: frame.minX, y: frame.maxY)
         }
+    }
+
+    /// Drops every strong reference the sidebar layout keeps on this window's
+    /// view tree, so closing the window can actually deallocate it.
+    ///
+    /// `BaseTerminalController.windowWillClose` clears `contentView`, and for a
+    /// window whose only strong link to its content is that one property that
+    /// is enough: the content view goes, and with it the terminal's hosting
+    /// view, whose root view holds `TerminalView(viewModel: self)` — the edge
+    /// that would otherwise point back at this controller.
+    ///
+    /// The sidebar path builds a second set of links that `contentView = nil`
+    /// cannot reach: the split view itself, the chrome views, and the editor's
+    /// hosting view. Any one of them keeps the right pane alive, the right pane
+    /// keeps the terminal's hosting view alive, and the cycle back through the
+    /// controller closes again.
+    ///
+    /// The constraints are cleared too, and they are **not** part of that —
+    /// `NSLayoutConstraint` refers to its items weakly, so holding one holds no
+    /// view. This was written believing otherwise; the test that was supposed
+    /// to pin the belief refuted it instead, and now pins the refutation. They
+    /// are dropped as tidiness, so nothing here reads as load-bearing when it
+    /// is not.
+    ///
+    /// The cost of leaving it closed is not just memory: a controller that
+    /// never deallocates never releases its surface tree, a surface owns its
+    /// pty, and a pty that is never closed sends nobody `SIGHUP` — so the
+    /// shell and everything the reader started in it go on running after the
+    /// tab has left the screen. That is the shape of the report this came
+    /// from: `agy` and `opencode` still in Activity Monitor after their tabs
+    /// were closed.
+    ///
+    /// The chain is read from the code rather than from a profiler, and the
+    /// links are checkable: every property below is a strong reference, an
+    /// activated constraint retains the view it was installed in, and
+    /// `BaseTerminalController.windowWillClose` clears `contentView` and
+    /// nothing else. A window opened without the sidebar has only that one
+    /// link, which is why upstream tears down correctly and this path does
+    /// not.
+    ///
+    /// Only `sidebarSplitView` was measured holding the detached tree — it was
+    /// the one direct owner of the tree's root in a leaked window. The rest of
+    /// this list is deliberately defensive: each is a strong reference into the
+    /// same tree that would keep it alive on its own, and the failure they
+    /// cause is invisible until someone reads `ps`. That costs a line here per
+    /// reference the sidebar path adds, which is the trade this accepts — if
+    /// you add one, add it here too.
+    private func releaseSidebarChrome() {
+        sidebarTabManager = nil
+        sidebarLayout = nil
+        sidebarSplitView = nil
+        sidebarBackgroundView = nil
+        sidebarChromeView = nil
+        sidebarChromeTrailingConstraint = nil
+        sidebarExpandedConstraints = []
+        sidebarCollapsedConstraint = nil
+        terminalTitlebarFiller = nil
+        terminalTitlebarFillerBottom = nil
+        paneTabBarTopConstraint = nil
+        paneTabBarHeight = nil
+        editorHostingView = nil
     }
 
     override func windowDidBecomeKey(_ notification: Notification) {
