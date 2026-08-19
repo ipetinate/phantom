@@ -304,12 +304,22 @@ struct FileExplorerView: View {
             .onChange(of: model.currentDirectory) { path in
                 guard let path else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(path, anchor: .center)
+                    /// No anchor: `scrollTo` then moves the least it can to
+                    /// bring the row into view, and leaves the list alone when
+                    /// the row is already there. Centring instead re-scrolled
+                    /// on every change, which is what made a click feel
+                    /// mechanical — the row you aimed at jumped to the middle
+                    /// under the pointer.
+                    proxy.scrollTo(path)
                 }
             }
             .onChange(of: model.editing) { _ in
                 guard let id = model.createPlaceholderID else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
+                    /// Centred, unlike the others: a name field that opens
+                    /// at the very bottom of a long folder is half off screen
+                    /// with a minimal scroll, and there is nothing to preserve
+                    /// about a position the reader is about to type into.
                     proxy.scrollTo(id, anchor: .center)
                 }
             }
@@ -415,8 +425,10 @@ struct FileExplorerView: View {
             }
 
             revealTarget = nil
+            /// Minimal, for the reason on `currentDirectory` above: a reveal
+            /// should put the row on screen, not rearrange the list around it.
             withAnimation(.easeOut(duration: 0.2)) {
-                proxy.scrollTo(target, anchor: .center)
+                proxy.scrollTo(target)
             }
         }
     }
@@ -656,6 +668,10 @@ private struct FileExplorerRow: View {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(background)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(selectionRing, lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -760,14 +776,48 @@ private struct FileExplorerRow: View {
             : icons.icon(forFile: row.node.name)
     }
 
+    /// One filled row, and it is the file open in the focused tab.
+    ///
+    /// There used to be three fills at three strengths — the clicked row, the
+    /// open file, and the terminal's directory — and two of them could land on
+    /// different rows at once. Reading that took working out which shade meant
+    /// what, which is a puzzle nobody asked for in a file list: the question a
+    /// tree answers is "where am I", and there is one answer.
+    ///
+    /// The other two states did not go away, they stopped being fills.
+    /// Selection is drawn as an outline, because it is a *different* fact —
+    /// what Return renames and Delete trashes — and the terminal's directory
+    /// keeps the bolder text it already had.
     private var background: Color {
-        // The item being acted on reads strongest, then the file on screen,
-        // then the terminal's directory. Hover stays the faintest so it
-        // never competes with a real state.
-        if isSelected { return accent.opacity(0.45) }
-        if isOpenInEditor { return accent.opacity(0.34) }
-        if isCurrent { return accent.opacity(0.28) }
-        return isHovered ? accent.opacity(0.12) : .clear
+        switch emphasis.fill {
+        case .open: accent.opacity(0.45)
+        case .hover: accent.opacity(0.12)
+        case .none: .clear
+        }
+    }
+
+    private var emphasis: FileExplorerRowEmphasis {
+        .resolve(
+            isOpenInEditor: isOpenInEditor,
+            isSelected: isSelected,
+            isHovered: isHovered
+        )
+    }
+
+    /// The selection, as a ring rather than a fill.
+    ///
+    /// It cannot simply be dropped: Return renames it, Delete moves it to the
+    /// trash, and a new file lands beside it — three commands read
+    /// `model.selection`, so a tree with no selection is a tree where those
+    /// three have nothing to act on. What it must stop doing is competing with
+    /// the open file for the same visual language, which is what put two
+    /// highlights on screen.
+    ///
+    /// Nothing is drawn when the selection *is* the open file, the common case
+    /// after a click: a ring around the filled row would be a second mark for
+    /// one fact.
+    private var selectionRing: Color {
+        emphasis.showsSelectionRing ? accent.opacity(0.55) : .clear
     }
 
     private var indent: CGFloat {
