@@ -73,12 +73,23 @@ final class EditorCenter: ObservableObject {
     ///   file in the Git panel again is a request to see the changes, not a
     ///   request to focus a tab that happens to exist.
     @discardableResult
-    func open(_ url: URL, reveal: LSPRange? = nil, showing: EditorPresentation? = nil) -> Bool {
+    func open(
+        _ url: URL,
+        reveal: LSPRange? = nil,
+        showing: EditorPresentation? = nil,
+        reviewBase: String? = nil
+    ) -> Bool {
         let path = url.path
 
         if let existing = documents[path] {
             if let reveal { existing.reveal = (id: UUID().uuidString, range: reveal) }
             if let showing { existing.presentation = showing }
+
+            /// Written on every open, including with nil, so a file opened
+            /// from the review and then reopened from the Changes list stops
+            /// being compared against the base. Only setting it when non-nil
+            /// would leave the second reading showing the first one's diff.
+            existing.reviewBase = reviewBase
             tabs.select(path)
             lastSelectedFile = path
             return true
@@ -99,6 +110,7 @@ final class EditorCenter: ObservableObject {
             /// only to the already-open case above left the feature working
             /// exactly when it was not needed.
             if let showing { document.presentation = showing }
+            document.reviewBase = reviewBase
 
             documents[path] = document
             document.startWatching()

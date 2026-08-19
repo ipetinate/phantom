@@ -303,6 +303,32 @@ private struct DocumentView: View {
     /// nothing to compare it against.
     private var gitContext: (root: String, change: GitFileChange, side: GitDiffSide)? {
         let path = document.url.path
+
+        /// A file opened from the branch review is compared against that
+        /// review's base, whatever the working tree says — including when the
+        /// working tree says nothing, which is the ordinary case: most files a
+        /// branch changes were committed and are clean now.
+        ///
+        /// The change is synthesised rather than looked up for that reason.
+        /// Only two of its fields matter down this path — the path itself, and
+        /// `isUntracked`, which short-circuits to the working tree — because a
+        /// branch range is expressed in the arguments and not in the status
+        /// letters. Giving it a letter it did not earn would be inventing
+        /// history; `M` here means "ask git", and git answers.
+        if let base = document.reviewBase,
+           let root = EditorChangeLookup.owningRoot(forPath: path, amongRoots: Array(git.statuses.keys)),
+           let relative = EditorChangeLookup.relativePath(forPath: path, root: root) {
+            let change = GitFileChange(
+                path: relative,
+                originalPath: nil,
+                index: ".",
+                worktree: "M",
+                isUntracked: false,
+                isUnmerged: false
+            )
+            return (root, change, .branch(base: base))
+        }
+
         guard let root = EditorChangeLookup.owningRoot(forPath: path, amongRoots: Array(git.statuses.keys)),
               let status = git.status(forRoot: root),
               let relative = EditorChangeLookup.relativePath(forPath: path, root: root),

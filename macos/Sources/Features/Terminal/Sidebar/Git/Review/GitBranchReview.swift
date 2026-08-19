@@ -21,6 +21,21 @@ enum GitReviewBaseSource: Equatable {
 
     /// Named by the caller instead of worked out here.
     case explicit
+
+    /// How the base was arrived at, in three words or fewer.
+    ///
+    /// Shown because the base is a guess in every case but one, and a reader
+    /// looking at a surprising list of commits needs to know whether the
+    /// answer came from their own upstream or from this app picking a
+    /// well-known name.
+    var summary: String {
+        switch self {
+        case .upstream: "from upstream"
+        case .remoteHead: "remote default"
+        case .wellKnown: "guessed"
+        case .explicit: "chosen"
+        }
+    }
 }
 
 /// The branch's base, and the commit the two of them last shared.

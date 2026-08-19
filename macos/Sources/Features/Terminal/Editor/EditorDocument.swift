@@ -61,6 +61,16 @@ final class EditorDocument: ObservableObject, Identifiable {
     /// for the current sitting, not a property of the file.
     @Published var presentation: EditorPresentation = .source
 
+    /// The ref this file is being compared against, when it was opened from a
+    /// branch review rather than from the working tree.
+    ///
+    /// Carried on the document because it is a property of *this reading* of
+    /// the file: the same path opened from the Changes list is a working-tree
+    /// diff, and opened from the review it is `base...HEAD`. Nil is the
+    /// ordinary case and means "ask the working tree", which is what every
+    /// other entry point wants.
+    @Published var reviewBase: String?
+
     var id: String { url.path }
 
     var language: CodeLanguage {

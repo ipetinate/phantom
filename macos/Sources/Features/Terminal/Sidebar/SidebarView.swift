@@ -89,6 +89,9 @@ struct SidebarView: View {
     /// which has no changes to show.
     var onOpenDiff: ((URL) -> Void)?
 
+    /// See `GitRepoView.onOpenBranchDiff`.
+    var onOpenBranchDiff: ((URL, String) -> Void)?
+
     /// List animations are suspended while the sidebar first populates.
     private var listAnimation: Animation? {
         tabManager.animationsEnabled ? .snappy(duration: 0.22) : nil
@@ -188,7 +191,8 @@ struct SidebarView: View {
                     tabManager: tabManager,
                     onSpawnTerminal: onSpawnTerminalBesideSelection,
                     onOpenInEditor: onOpenInEditor,
-                    onOpenDiff: onOpenDiff
+                    onOpenDiff: onOpenDiff,
+                    onOpenBranchDiff: onOpenBranchDiff
                 )
             }
         }

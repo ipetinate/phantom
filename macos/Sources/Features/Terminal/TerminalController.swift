@@ -1408,6 +1408,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             },
             onOpenDiff: { [weak self] url in
                 self?.openInEditor(url, showing: .diff)
+            },
+            onOpenBranchDiff: { [weak self] url, base in
+                self?.openBranchDiff(url, base: base)
             }
         ).interfaceFont())
         sidebarHosting.translatesAutoresizingMaskIntoConstraints = false
@@ -1872,11 +1875,18 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         openInEditor(url)
     }
 
+    /// Opens a file as the branch review sees it: its diff against the base
+    /// the review was measured from, rather than against the working tree.
+    func openBranchDiff(_ url: URL, base: String) {
+        openInEditor(url, showing: .diff, reviewBase: base)
+    }
+
     private func openInEditor(
         _ url: URL,
         line: Int? = nil,
         column: Int? = nil,
-        showing: EditorPresentation? = nil
+        showing: EditorPresentation? = nil,
+        reviewBase: String? = nil
     ) {
         // A line from a compiler or a stack trace is one-based; the editor's
         // reveal is zero-based, like the protocol it came from.
@@ -1888,7 +1898,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             return LSPRange(start: position, end: position)
         }
 
-        guard !editorCenter.open(url, reveal: reveal, showing: showing) else { return }
+        guard !editorCenter.open(
+            url,
+            reveal: reveal,
+            showing: showing,
+            reviewBase: reviewBase
+        ) else { return }
         openInEditorFailed(url)
     }
 

@@ -28,6 +28,9 @@ struct GitPanelView: View {
     /// See `GitRepoView.onOpenDiff`.
     var onOpenDiff: ((URL) -> Void)?
 
+    /// See `GitRepoView.onOpenBranchDiff`.
+    var onOpenBranchDiff: ((URL, String) -> Void)?
+
     @ObservedObject private var center: GitCenter = .shared
     @ObservedObject private var palette: ThemePalette = .shared
     @ObservedObject private var refresh: GitPanelRefresh = .shared
@@ -115,7 +118,8 @@ struct GitPanelView: View {
             selectedTab: selectedTab,
             onSpawnTerminal: onSpawnTerminal,
             onOpenInEditor: onOpenInEditor,
-            onOpenDiff: onOpenDiff
+            onOpenDiff: onOpenDiff,
+            onOpenBranchDiff: onOpenBranchDiff
         )
     }
 
