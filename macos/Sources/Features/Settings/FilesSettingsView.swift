@@ -22,6 +22,7 @@ struct FilesSettingsView: View {
     @AppStorage(EditorSettings.closesTagsKey) private var closesTags = true
     @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
     @AppStorage(EditorSettings.usesPrettierKey) private var usesPrettier = true
+    @AppStorage(EditorSettings.markdownSnippetsKey) private var markdownSnippets = true
 
     @State private var isChoosingFont = false
 
@@ -94,10 +95,20 @@ struct FilesSettingsView: View {
                     .toggleStyle(.switch)
                 Toggle("Close Tags", isOn: $closesTags)
                     .toggleStyle(.switch)
+                Toggle("Markdown Snippets on /", isOn: $markdownSnippets)
+                    .toggleStyle(.switch)
             } header: {
                 Text("Typing")
             } footer: {
-                Text("Tags close in HTML, Vue and JSX. They deliberately do not in .ts, where a `<` is always a generic and closing it would always be wrong.")
+                Text("""
+                Tags close in HTML, Vue and JSX. They deliberately do not in \
+                .ts, where a `<` is always a generic and closing it would \
+                always be wrong.
+
+                In Markdown, typing `/` opens the snippet list — a bare slash \
+                lists everything. It stays shut inside fenced code, and after \
+                a word character, so `and/or` and `https://` are left alone.
+                """)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

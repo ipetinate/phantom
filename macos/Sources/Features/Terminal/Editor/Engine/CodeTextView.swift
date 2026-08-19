@@ -113,6 +113,14 @@ struct CodeTextView: NSViewRepresentable {
 
     /// Keyboard commands the host owns. Passed in rather than assumed, so
     /// the engine never decides what saving means.
+    /// Characters that open the completion list on their own.
+    ///
+    /// A value, because which ones they are is a fact about the language
+    /// server and about the file — `.` nearly everywhere, `/` in Markdown for
+    /// the snippet catalogue — and the engine is not allowed to know either.
+    /// The view's own default keeps the dot working when nothing supplies it.
+    var completionTriggers: Set<Character> = ["."]
+
     /// The reader's configured shortcuts, keyed by the app's action id.
     ///
     /// Passed through as values: the engine may not name the app's store, and
@@ -259,6 +267,7 @@ struct CodeTextView: NSViewRepresentable {
         textView.onFindReferences = onFindReferences
         textView.onFormat = onFormat
         textView.commandShortcuts = commandShortcuts
+        textView.completionTriggers = completionTriggers
         textView.onJumpToDefinition = onJumpToDefinition
         textView.hoverProvider = hoverProvider
         textView.completionProvider = completionProvider
@@ -305,6 +314,7 @@ struct CodeTextView: NSViewRepresentable {
             code.onFindReferences = onFindReferences
             code.onFormat = onFormat
             code.commandShortcuts = commandShortcuts
+            code.completionTriggers = completionTriggers
             code.onJumpToDefinition = onJumpToDefinition
             code.hoverProvider = hoverProvider
             code.completionProvider = completionProvider

@@ -231,6 +231,7 @@ private struct DocumentView: View {
     @ObservedObject private var shortcutStore: PhantomShortcutStore = .shared
 
     @AppStorage(EditorSettings.usesPrettierKey) private var usesPrettier = true
+    @AppStorage(EditorSettings.markdownSnippetsKey) private var markdownSnippets = true
     @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
 
     @State private var notice: String?
@@ -498,6 +499,7 @@ private struct DocumentView: View {
             onFindReferences: { offset in findReferences(from: offset) },
             onFormat: { format() },
             onScrollViewReady: { linkSourcePane($0) },
+            completionTriggers: completionTriggers,
             commandShortcuts: editorShortcuts,
             onSave: { saveWithFormatting() },
             onSaveAll: onSaveAll,
@@ -752,6 +754,30 @@ private struct DocumentView: View {
         )
     }
 
+    /// The characters that open the completion list on their own.
+    ///
+    /// What the language server advertised, plus `/` in a Markdown file so the
+    /// snippet catalogue opens the moment the slash is typed rather than after
+    /// a letter follows it. Without that character in here nothing asks the
+    /// provider at all: a slash is not an identifier, so the list would only
+    /// have appeared once you had typed `/t` — which makes a catalogue you are
+    /// supposed to browse feel like one you have to already know.
+    ///
+    /// The server's own set is unioned rather than replaced. TypeScript
+    /// advertises `/`, `@` and `<` besides the dot, and dropping them to make
+    /// room for this would trade one feature for another.
+    private var completionTriggers: Set<Character> {
+        var triggers = lsp.completionSupport(forPath: document.url.path)?.triggerCharacters ?? ["."]
+        triggers.insert(".")
+
+        if markdownSnippets,
+           MarkdownSnippets.flavor(forFileName: document.url.lastPathComponent) != nil {
+            triggers.insert("/")
+        }
+
+        return triggers
+    }
+
     /// The Markdown catalogue's rows, when the caret is on a `/` trigger.
     ///
     /// Answered before the server is asked, and returned instead of its
@@ -769,6 +795,7 @@ private struct DocumentView: View {
     /// other one. Inside a fence the request falls through to the server,
     /// which is what a shell script or a Swift sample in a README should get.
     private func markdownSnippets(at offset: Int) -> [CodeCompletionItem]? {
+        guard markdownSnippets else { return nil }
         guard let flavor = MarkdownSnippets.flavor(
             forFileName: document.url.lastPathComponent
         ) else { return nil }

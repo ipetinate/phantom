@@ -124,6 +124,15 @@ enum EditorSettings {
     /// this app. Turning this off keeps formatting on the language server.
     static let usesPrettierKey = "EditorUsesPrettier"
 
+    /// Offer the Markdown snippet catalogue when a `/` is typed.
+    ///
+    /// On by default, and worth a switch because the trigger it installs is a
+    /// character people also type as punctuation — in a path, in a date, in
+    /// `and/or`. The catalogue refuses to open in those places, but somebody
+    /// who writes enough of them may still want the whole thing gone, and
+    /// turning it off should silence the trigger rather than just the rows.
+    static let markdownSnippetsKey = "EditorMarkdownSnippets"
+
     static let defaultFontSize = 12.0
     static let defaultTabWidth = 4
 
