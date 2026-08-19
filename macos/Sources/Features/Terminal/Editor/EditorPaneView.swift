@@ -756,19 +756,22 @@ private struct DocumentView: View {
 
     /// The characters that open the completion list on their own.
     ///
-    /// What the language server advertised, plus `/` in a Markdown file so the
-    /// snippet catalogue opens the moment the slash is typed rather than after
-    /// a letter follows it. Without that character in here nothing asks the
-    /// provider at all: a slash is not an identifier, so the list would only
-    /// have appeared once you had typed `/t` — which makes a catalogue you are
-    /// supposed to browse feel like one you have to already know.
+    /// The dot, and `/` in a Markdown file so the snippet catalogue opens the
+    /// moment the slash is typed rather than after a letter follows it —
+    /// without that character in here nothing asks the provider at all, since
+    /// a slash is not an identifier.
     ///
-    /// The server's own set is unioned rather than replaced. TypeScript
-    /// advertises `/`, `@` and `<` besides the dot, and dropping them to make
-    /// room for this would trade one feature for another.
+    /// **The language server's own advertised set is deliberately not passed
+    /// through.** It never was, and turning it on changes what typing feels
+    /// like in every TypeScript file at once: the server advertises `/`, `@`
+    /// and `<`, so the list would open on the first slash of a `//` comment,
+    /// on a decorator, and on every `a < b`. VS Code does exactly that and it
+    /// is defensible — it is also a decision of its own, and it arrived here
+    /// as a side effect of wiring the channel this Markdown trigger needed.
+    /// Doing one thing at a time: the channel is wired, and what else travels
+    /// down it is a separate change with its own evaluation.
     private var completionTriggers: Set<Character> {
-        var triggers = lsp.completionSupport(forPath: document.url.path)?.triggerCharacters ?? ["."]
-        triggers.insert(".")
+        var triggers: Set<Character> = ["."]
 
         if markdownSnippets,
            MarkdownSnippets.flavor(forFileName: document.url.lastPathComponent) != nil {
