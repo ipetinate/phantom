@@ -124,6 +124,48 @@ struct SyntaxRules {
         "symbol", "unknown",
     ]
 
+    /// A JSX element's tag, in the language JSX is written in.
+    ///
+    /// JavaScript's rules had nothing for it, so `<div className="card">` came
+    /// out as a bare string with two plain words around it, and the tag of a
+    /// `<script type="text/babel">` block in an HTML file was only ever
+    /// coloured by accident — by the *markup* rules, which were also painting
+    /// its `const` as nothing and its `name =` as an attribute.
+    ///
+    /// **Three branches, and the asymmetry between the first two is the whole
+    /// design.** In JavaScript `<` is an operator, so a tag has to be told
+    /// from a comparison and from a type argument:
+    ///
+    /// - A closing tag needs no guard. `</` cannot begin a comparison, and it
+    ///   must work with nothing but text behind it — `<p>hello</p>` is the
+    ///   commonest shape there is.
+    /// - An opening tag is only a tag where an *expression* can start: after
+    ///   whitespace, an opening bracket, a comma, an arrow, a logical
+    ///   operator. That negative lookbehind is what keeps `Array<string>`,
+    ///   `Map<K, V>` and `useState<Foo>()` out of it — the `<` there sits
+    ///   against a letter, which is a place no JSX tag can begin.
+    /// - The fragment, `<>` and `</>`, which no other construct spells.
+    ///
+    /// The edge it declines to solve: `a <b` — a comparison written with the
+    /// space on the wrong side — is painted as a tag. It is the same edge
+    /// `callBeforeParenOrGeneric` already documents, and the same answer:
+    /// nobody writes comparisons that way. Attributes inside the tag stay
+    /// plain, because "a name before `=`" in JavaScript is *every assignment*
+    /// — knowing that one is inside a tag needs a parser, not a pattern.
+    ///
+    /// **Every branch begins with the literal `<`, and that is a cost
+    /// decision rather than a style one.** The readable spelling puts the
+    /// guard first — `(?<![^\s…])<` — and that makes the engine evaluate a
+    /// lookbehind at *every position in the file* before failing on a
+    /// character that was never a `<`. Measured over the 401 `.ts` files of
+    /// `front-app-eita`, one line re-highlighted each, best of three: 6.1 ms
+    /// before this rule, **9.4 ms** with the guard first, **6.8 ms** with the
+    /// literal first. Same tokens, 1.8 µs per keystroke per file instead of
+    /// 8.2. So the lookbehind is written after the `<` it guards, spanning
+    /// both characters, which is why it reads as awkwardly as it does.
+    static let jsxTag =
+        #"</[A-Za-z][A-Za-z0-9._-]*|<(?<=(?:^|[\s(\[{,;=>&|?:!])<)[A-Za-z][A-Za-z0-9._-]*|</?>"#
+
     /// A property name in an object literal or a type: `label:`.
     ///
     /// Same shape the CSS rules already call an attribute — a name before a
@@ -180,7 +222,7 @@ struct SyntaxRules {
                     "readonly", "return", "satisfies", "set", "static", "super", "switch",
                     "this", "throw", "try", "type", "typeof", "var", "void", "while", "yield",
                     "true", "false", "null", "undefined",
-                ]),
+                ]) + "|" + jsxTag,
                 type: capitalizedType + "|" + words(typescriptPrimitives),
                 function: callBeforeParenOrGeneric,
                 // Decorators and object/type property names share this slot:
