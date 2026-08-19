@@ -330,6 +330,14 @@ struct FileExplorerView: View {
                 guard let target = revealTarget else { return }
                 scrollToReveal(target, using: proxy)
             }
+            /// Clearing the search is what pays the scroll a search deferred.
+            /// Watched as a `Bool` rather than on the matches themselves: the
+            /// question is only whether the tree is back, and every keystroke
+            /// in that field rebuilds the array.
+            .onChange(of: model.matches == nil) { isTree in
+                guard isTree, let target = revealTarget else { return }
+                scrollToReveal(target, using: proxy)
+            }
             // A create field lands at the end of a possibly long folder, so
             // it can start below the fold; make sure the keys the explorer
             // answers for have somewhere to land.
@@ -390,8 +398,11 @@ struct FileExplorerView: View {
         guard let path else { return }
 
         model.expandAncestors(of: path)
-        guard model.matches == nil else { return }
 
+        /// Set before the search is considered, so a file opened from a search
+        /// result has its scroll owed rather than skipped. `scrollToReveal`
+        /// declines to act while matches are on screen and is called again the
+        /// moment they go.
         revealTarget = path
         scrollToReveal(path, using: proxy)
     }
@@ -409,16 +420,19 @@ struct FileExplorerView: View {
     /// there: a folder that couldn't be read yields no children and no row,
     /// and a file outside the tree never had one. Waiting forever would let
     /// an unrelated expansion, minutes later, jump the tree somewhere the
-    /// reader didn't ask to go. A search starting inside that same wait
-    /// drops it too — the list on screen stopped being the tree, and the
-    /// row this was going to scroll to is not in the one that replaced it.
+    /// reader didn't ask to go.
+    ///
+    /// A search does not drop it, it defers it. While the field has text the
+    /// list on screen is matches rather than tree rows, so there is nothing to
+    /// scroll to — but clicking a result is the single most common way a file
+    /// deep in a tree gets opened, and the tree is where the reader looks
+    /// next. So the target waits, and clearing the field spends it.
     private func scrollToReveal(_ target: String, using proxy: ScrollViewProxy) {
         DispatchQueue.main.async {
             guard revealTarget == target else { return }
-            guard model.matches == nil else {
-                revealTarget = nil
-                return
-            }
+            /// Kept, not cleared: the scroll is owed until the tree is what
+            /// is on screen again. See `revealPendingTargetWhenSearchClears`.
+            guard model.matches == nil else { return }
             guard model.rows.contains(where: { $0.id == target }) else {
                 if model.loading.isEmpty { revealTarget = nil }
                 return
