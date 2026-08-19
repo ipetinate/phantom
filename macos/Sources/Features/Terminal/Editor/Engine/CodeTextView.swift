@@ -2731,10 +2731,9 @@ final class CodeNSTextView: NSTextView {
     /// dictionary's order is not a promise, and "works until you restart" is
     /// the worst shape a shortcut bug takes.
     private func boundCommand(for event: NSEvent) -> String? {
-        for id in commandShortcuts.keys.sorted() {
-            if commandShortcuts[id]?.contains(where: { $0.matches(event) }) == true { return id }
+        commandShortcuts.keys.sorted().first { id in
+            commandShortcuts[id]?.contains { $0.matches(event) } == true
         }
-        return nil
     }
 
     /// Runs a command by id, answering whether it was this view's to run.
