@@ -124,11 +124,25 @@ struct LSPFanOutPlacementTests {
         return found
     }
 
-    private func body(of name: String) throws -> String {
+    /// The body of a method, chosen by name and by the labels that tell two
+    /// of them apart.
+    ///
+    /// `LSPCenter` has two methods called `definition`: the feature, which
+    /// takes a position, and `definition(forPath:)`, which looks up a server's
+    /// configuration and happens to be declared first. Matching on the name
+    /// alone read the wrong one — the test failed while the code was right,
+    /// which is the worse of the two ways a source-reading test can be wrong.
+    private func body(of name: String, taking label: String? = nil) throws -> String {
         let all = try methods()
         let method = try #require(
-            all.first { $0.name == name },
-            "LSPCenter has no method named \(name)"
+            all.first { candidate in
+                guard candidate.name == name else { return false }
+                guard let label else { return true }
+                /// The scanned body starts at the declaration line, so the
+                /// parameter labels are in it.
+                return candidate.body.contains(label)
+            },
+            "LSPCenter has no method named \(name)\(label.map { " taking \($0)" } ?? "")"
         )
         return method.body
     }
@@ -145,7 +159,10 @@ struct LSPFanOutPlacementTests {
     /// file's servers, not the primary alone.
     @Test func everyPositionalFeatureGoesThroughTheFanOut() throws {
         for feature in ["hover", "definition", "references", "rename"] {
-            let text = try body(of: feature)
+            /// By the position parameter, which is what makes a feature
+            /// positional and what separates `definition` from the
+            /// server-configuration lookup of the same name.
+            let text = try body(of: feature, taking: "position: LSPPosition")
             #expect(
                 text.contains("firstAnswer("),
                 """
