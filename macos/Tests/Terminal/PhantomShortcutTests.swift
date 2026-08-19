@@ -91,56 +91,8 @@ struct PhantomShortcutTests {
     }
 }
 
-/// The store that persists the two configurable shortcuts.
-@MainActor
-struct PhantomShortcutStoreTests {
-    private func withDefaults(_ body: (PhantomShortcutStore) -> Void) {
-        let keys = [
-            PhantomShortcutStore.newFileDefaultsKey,
-            PhantomShortcutStore.newFolderDefaultsKey,
-        ]
-        let stored = keys.map { ($0, UserDefaults.standard.string(forKey: $0)) }
-        keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
-        defer {
-            for (key, value) in stored {
-                if let value {
-                    UserDefaults.standard.set(value, forKey: key)
-                } else {
-                    UserDefaults.standard.removeObject(forKey: key)
-                }
-            }
-        }
-        body(PhantomShortcutStore())
-    }
-
-    @Test func defaultsAreNewFileAndNewFolder() {
-        withDefaults { store in
-            #expect(store.newFile == PhantomShortcutStore.newFileDefault)
-            #expect(store.newFolder == PhantomShortcutStore.newFolderDefault)
-        }
-    }
-
-    @Test func settingPersistsAndIsReadBack() {
-        withDefaults { store in
-            let replaced = PhantomShortcut(key: "f", modifiers: [.command, .shift])
-            store.set(replaced, for: .newFile)
-
-            let fresh = PhantomShortcutStore()
-            #expect(fresh.newFile == replaced)
-            #expect(fresh.newFolder == PhantomShortcutStore.newFolderDefault)
-        }
-    }
-
-    @Test func aStoredShortcutIsReturnedByAction() {
-        withDefaults { store in
-            #expect(store.shortcut(for: .newFile) == store.newFile)
-            #expect(store.shortcut(for: .newFolder) == store.newFolder)
-        }
-    }
-}
-
-/// Whether a proposed shortcut is already taken, by a menu item or by one
-/// of the fixed pane actions.
+/// Whether a proposed shortcut is already taken — by a menu item, by one of
+/// the fixed pane actions, by another command, or by the same command twice.
 @MainActor
 struct ShortcutCollisionCheckerTests {
     private func menu(_ items: [(title: String, key: String, flags: NSEvent.ModifierFlags)]) -> NSMenu {
@@ -153,11 +105,15 @@ struct ShortcutCollisionCheckerTests {
         return menu
     }
 
+    private func map(_ bindings: [PhantomShortcutAction: [PhantomShortcut]]) -> PhantomShortcutMap {
+        PhantomShortcutMap(bindings)
+    }
+
     @Test func anUnclaimedShortcutCollidesWithNothing() {
         let menu = menu([("New Window", "n", [.command])])
         let candidate = PhantomShortcut(key: "n", modifiers: [.command, .shift])
         #expect(ShortcutCollisionChecker.collisions(
-            with: candidate, excluding: nil, otherPhantom: nil, menu: menu
+            with: candidate, for: .newFile, excluding: nil, bindings: map([:]), menu: menu
         ).isEmpty)
     }
 
@@ -165,9 +121,11 @@ struct ShortcutCollisionCheckerTests {
         let menu = menu([("New Window", "n", [.command])])
         let candidate = PhantomShortcut(key: "n", modifiers: [.command])
         let collisions = ShortcutCollisionChecker.collisions(
-            with: candidate, excluding: nil, otherPhantom: nil, menu: menu
+            with: candidate, for: .newFile, excluding: nil, bindings: map([:]), menu: menu
         )
-        #expect(collisions == [ShortcutCollision(owner: "New Window", shortcut: candidate)])
+        #expect(collisions == [
+            ShortcutCollision(owner: "New Window", shortcut: candidate, source: .menu),
+        ])
     }
 
     /// Re-recording the shortcut that is already assigned to this action is
@@ -176,39 +134,88 @@ struct ShortcutCollisionCheckerTests {
         let menu = menu([("New Window", "n", [.command])])
         let current = PhantomShortcut(key: "n", modifiers: [.command])
         #expect(ShortcutCollisionChecker.collisions(
-            with: current, excluding: current, otherPhantom: nil, menu: menu
+            with: current,
+            for: .newFile,
+            excluding: current,
+            bindings: map([.newFile: [current]]),
+            menu: menu
         ).isEmpty)
     }
 
-    @Test func theOtherPhantomShortcutCollides() {
-        let other = PhantomShortcut(key: "n", modifiers: [.command, .shift])
-        let candidate = PhantomShortcut(key: "n", modifiers: [.command, .shift])
+    @Test func anotherCommandsShortcutCollides() {
+        let taken = PhantomShortcut(key: "n", modifiers: [.command, .shift])
         let collisions = ShortcutCollisionChecker.collisions(
-            with: candidate,
+            with: taken,
+            for: .newFile,
             excluding: nil,
-            otherPhantom: (.newFolder, other),
+            bindings: map([.newFolder: [taken]]),
             menu: nil
         )
         #expect(collisions.map(\.owner) == ["New Folder"])
+        #expect(collisions.map(\.source) == [.otherCommand])
     }
 
-    @Test func theOtherPhantomShortcutWhenItIsCurrentDoesNotCollide() {
-        let other = PhantomShortcut(key: "n", modifiers: [.command, .shift])
+    /// The same combination twice on one command changes nothing, and the
+    /// reader has to be told that rather than shown "already used by Format
+    /// Document" while recording for Format Document.
+    @Test func theSameCommandsOwnShortcutCollidesAsADuplicate() {
+        let taken = PhantomShortcut(key: "f", modifiers: [.command, .shift])
         let collisions = ShortcutCollisionChecker.collisions(
-            with: other,
-            excluding: other,
-            otherPhantom: (.newFolder, other),
+            with: taken,
+            for: .formatDocument,
+            excluding: nil,
+            bindings: map([.formatDocument: [taken]]),
             menu: nil
         )
-        #expect(collisions.isEmpty)
+        #expect(collisions.map(\.source) == [.sameCommand])
+        #expect(collisions.first?.message.contains("would change nothing") == true)
+    }
+
+    /// A second binding for a command that already has one is the whole
+    /// point of the list, so it must not be refused for existing.
+    @Test func addingASecondUnclaimedShortcutToACommandIsFine() {
+        let existing = PhantomShortcut(key: "f", modifiers: [.command, .shift])
+        let candidate = PhantomShortcut(key: "l", modifiers: [.command, .control])
+        #expect(ShortcutCollisionChecker.collisions(
+            with: candidate,
+            for: .formatDocument,
+            excluding: nil,
+            bindings: map([.formatDocument: [existing]]),
+            menu: nil
+        ).isEmpty)
+    }
+
+    /// Most specific first: the alert leads with the list the reader can fix
+    /// without knowing anything about the rest of the app.
+    @Test func theDuplicateIsReportedBeforeTheMenu() {
+        let taken = PhantomShortcut(key: "n", modifiers: [.command])
+        let collisions = ShortcutCollisionChecker.collisions(
+            with: taken,
+            for: .newFile,
+            excluding: nil,
+            bindings: map([.newFile: [taken]]),
+            menu: menu([("New Window", "n", [.command])])
+        )
+        #expect(collisions.map(\.source) == [.sameCommand, .menu])
     }
 
     @Test func fixedPaneShortcutsCollide() {
         let candidate = PhantomShortcut(key: "\\", modifiers: [.command, .option])
         let collisions = ShortcutCollisionChecker.collisions(
-            with: candidate, excluding: nil, otherPhantom: nil, menu: nil
+            with: candidate, for: .newFile, excluding: nil, bindings: map([:]), menu: nil
         )
         #expect(collisions.map(\.owner).contains("Toggle terminal pane"))
+    }
+
+    /// The editor's keys are configurable commands now. Leaving them in the
+    /// fixed table as well would make every one of them collide with itself
+    /// the moment somebody re-recorded it.
+    @Test func theEditorsOwnKeysAreNoLongerFixed() {
+        let owners = ShortcutCollisionChecker.fixedShortcuts.map(\.owner)
+        #expect(!owners.contains("Format document"))
+        #expect(!owners.contains("Rename symbol"))
+        #expect(!owners.contains("Find references"))
+        #expect(!owners.contains("Search workspace"))
     }
 
     @Test func submenuItemsAreFound() {
@@ -223,7 +230,7 @@ struct ShortcutCollisionCheckerTests {
 
         let candidate = PhantomShortcut(key: "j", modifiers: [.command, .option])
         #expect(ShortcutCollisionChecker.collisions(
-            with: candidate, excluding: nil, otherPhantom: nil, menu: menu
+            with: candidate, for: .newFile, excluding: nil, bindings: map([:]), menu: menu
         ).map(\.owner) == ["New File"])
     }
 }

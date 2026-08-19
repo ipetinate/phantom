@@ -53,6 +53,22 @@ struct CodeTheme: Equatable {
         ]
     }
 
+    /// The wash behind the bracket under the caret and behind its partner.
+    ///
+    /// Derived from the foreground rather than added to the theme, for the
+    /// same reason as `bracketColors`: a terminal palette has sixteen colours
+    /// and no notion of this, so a new field would be a colour invented out
+    /// of nothing and wrong for half the themes somebody might pick.
+    ///
+    /// A translucent wash rather than a replacement colour, because the two
+    /// marks on that character say different things and both are wanted: the
+    /// glyph keeps its depth colour — which pair it belongs to — while the
+    /// wash says the caret is on this one. Painting over the glyph would
+    /// trade one fact for the other.
+    var bracketMatchBackground: NSColor {
+        foreground.withAlphaComponent(0.22)
+    }
+
     /// A neutral theme, used before a host supplies one and by the tests.
     static var fallback: CodeTheme {
         CodeTheme(

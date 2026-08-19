@@ -472,9 +472,13 @@ struct GitRepoView: View {
                 GitChangeRow(
                     change: row.change,
                     staged: staged,
+                    url: url(for: row.change),
                     onOpen: { open(row.change) },
                     onPrimary: { toggleStage(row.change, staged: staged) },
-                    onDiscard: merge ? nil : { discarding = [row.change] }
+                    onDiscard: merge ? nil : { discarding = [row.change] },
+                    onOpenDiff: { openDiff(row.change) },
+                    onOpenSource: { openSource(row.change) },
+                    onIgnore: merge ? nil : { ignore(row.change) }
                 )
             }
         }
@@ -500,12 +504,62 @@ struct GitRepoView: View {
         }
     }
 
-    /// Same choice the file explorer offers, since it's the same question:
-    /// look at this in the terminal, or hand it to an app. Git reports
-    /// paths relative to the repository, so they have to be rejoined with
-    /// the root before anything can open them.
+    /// Adds an untracked path to `.gitignore` and refreshes, so the row it
+    /// was invoked from disappears rather than lingering as a change that is
+    /// now ignored.
+    ///
+    /// Whether the path is a directory is asked of the filesystem rather than
+    /// inferred from the name: git prints an untracked directory with a
+    /// trailing slash, but not always, and a directory ignored as if it were
+    /// a file leaves everything inside it still reported.
+    private func ignore(_ change: GitFileChange) {
+        let url = url(for: change)
+        var isDirectory: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+
+        guard GitIgnore.add(
+            relativePath: change.path,
+            isDirectory: isDirectory.boolValue,
+            inRepositoryAt: root
+        ) else { return }
+
+        center.requestStatus(root: root, force: true)
+    }
+
+    /// Git reports paths relative to the repository, so they have to be
+    /// rejoined with the root before anything can open, reveal or copy them.
+    private func url(for change: GitFileChange) -> URL {
+        URL(fileURLWithPath: root).appendingPathComponent(change.path)
+    }
+
     private func open(_ change: GitFileChange) {
-        let url = URL(fileURLWithPath: root).appendingPathComponent(change.path)
+        openThroughDialog(change, openInEditor: onOpenDiff ?? onOpenInEditor)
+    }
+
+    /// The diff, with no detour through the open dialog.
+    ///
+    /// The dialog answers "where do you want this file opened", and a terminal
+    /// editor or an external app is a fine answer to that question and a wrong
+    /// one to a menu item that names the diff.
+    ///
+    /// Falls back to the file when no host wired a diff, for the same reason
+    /// `onOpenDiff` is optional: showing the file beats doing nothing.
+    private func openDiff(_ change: GitFileChange) {
+        guard let onOpenDiff else { return openSource(change) }
+        onOpenDiff(url(for: change))
+    }
+
+    /// The file as it stands, wherever the reader has said files should open —
+    /// the same question the file explorer asks, and the same answer.
+    private func openSource(_ change: GitFileChange) {
+        openThroughDialog(change, openInEditor: onOpenInEditor)
+    }
+
+    private func openThroughDialog(
+        _ change: GitFileChange,
+        openInEditor: @escaping (URL) -> Void
+    ) {
+        let url = url(for: change)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
 
         FileOpener.prompt(
@@ -513,7 +567,7 @@ struct GitRepoView: View {
             in: selectedTab?.window,
             currentTerminal: surface(for: selectedTab),
             spawnTerminal: onSpawnTerminal,
-            openInEditor: onOpenDiff ?? onOpenInEditor
+            openInEditor: openInEditor
         )
     }
 

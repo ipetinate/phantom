@@ -114,7 +114,12 @@ struct MarkdownPreviewView: NSViewRepresentable {
     /// hundred lines. Touching `layoutManager` is what performs the
     /// downgrade, and building the stack by hand is the version that says
     /// so on purpose rather than by accident.
-    private static func makeTextView() -> NSTextView {
+    ///
+    /// Internal rather than private so a test can put the real thing inside a
+    /// real `NSScrollView`: the sizing below is the whole difference between a
+    /// document that scrolls and one clipped to the viewport, and nothing in
+    /// the parse or the render can tell those two apart.
+    static func makeTextView() -> NSTextView {
         let storage = NSTextStorage()
         let layoutManager = NSLayoutManager()
         let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
@@ -131,6 +136,21 @@ struct MarkdownPreviewView: NSViewRepresentable {
         textView.displaysLinkToolTips = true
         textView.textContainerInset = CGSize(width: 20, height: 20)
         textView.isVerticallyResizable = true
+        /// The other half of the resizing recipe, and without it the preview
+        /// could not be scrolled past its first screen. `NSTextView(frame:
+        /// textContainer:)` leaves `maxSize` at the initial frame — zero here
+        /// — and a text view only grows up to `maxSize`, so a README laid out
+        /// 5000pt tall stayed exactly as tall as the clip view it sits in:
+        /// everything below the fold was rendered and unreachable, with a
+        /// document view the same height as the viewport for the scroller to
+        /// find no travel in. `minSize` is `.zero` for the same reason it is
+        /// in `CodeTextView`; a text view never shrinks below its clip view
+        /// anyway, so a short document still fills the pane.
+        textView.minSize = .zero
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [NSView.AutoresizingMask.width]
         return textView

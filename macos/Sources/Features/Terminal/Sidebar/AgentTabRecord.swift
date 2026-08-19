@@ -15,10 +15,23 @@ import Foundation
 /// a `ses_`-prefixed token from OpenCode. Those are the shapes
 /// `AgentTabRecord.sanitized(sessionID:)` has to pass through untouched, and
 /// the ones `AgentSessionStore` reads back when no hook reported an id.
-enum CodingAgent: String, Sendable {
+enum CodingAgent: String, Sendable, CaseIterable {
     case claude
     case codex
     case opencode
+
+    /// What to call this agent in the interface.
+    ///
+    /// Here beside `launchCommand` because the two are the same fact read two
+    /// ways — what the reader calls it and what the shell calls it — and a
+    /// fourth agent should have to answer both in one place.
+    var displayName: String {
+        switch self {
+        case .claude: "Claude Code"
+        case .codex: "Codex"
+        case .opencode: "OpenCode"
+        }
+    }
 
     /// What starts a fresh session with this agent.
     ///
@@ -83,6 +96,30 @@ struct AgentTabRecord: Equatable, Sendable {
     /// The agent's own id for the conversation in this tab.
     var sessionID: String?
 
+    /// Whether the session in this tab ended *while Phantom was running*.
+    ///
+    /// The word `ended` alone cannot answer the question a restore has to ask,
+    /// because both endings write it: the reader quitting the agent, and
+    /// Phantom quitting and taking the agent down with it. Only one of those
+    /// means "I am done with this conversation", and restoring the other is the
+    /// whole reason ids were captured.
+    ///
+    /// What separates them is who was still alive to see it. An `ended` that a
+    /// running, not-quitting Phantom watched arrive is one the reader caused —
+    /// the app was sitting there, nothing was being torn down, and the agent
+    /// stopped anyway. An `ended` that appears with nobody watching (written as
+    /// the app exits, or found already in the file at the next launch) is the
+    /// quit's doing, and stays resumable. `TabStateCenter` is the only writer
+    /// of this field for exactly that reason: it is the thing that was
+    /// watching. See `TabStateCenter.endMarking`.
+    ///
+    /// It is also self-healing, and that falls out of the format rather than
+    /// being arranged: every hook writes the whole file and none of them knows
+    /// this key, so the next event of a live session drops it. A `/clear`, a
+    /// resume, a second agent started in the same tab — each one silently
+    /// un-ends the tab, which is what should happen when a session is up again.
+    var endedByUser: Bool
+
     /// Session ids are read off disk and typed into a live shell, so the only
     /// ones accepted are the ones that cannot mean anything else: no spaces,
     /// no quotes, no `;` and no `$`. Real ids — UUIDs from Claude Code and
@@ -95,10 +132,21 @@ struct AgentTabRecord: Equatable, Sendable {
     /// file cannot become a runaway command line.
     private static let maxIDLength = 128
 
-    init(stateWord: String, agent: CodingAgent? = nil, sessionID: String? = nil) {
+    /// The only value `end=` is ever written with. A different one is read as
+    /// no mark at all: this field decides whether a conversation comes back, so
+    /// a word neither end of the contract recognizes must not be guessed at.
+    static let userEndMarker = "user"
+
+    init(
+        stateWord: String,
+        agent: CodingAgent? = nil,
+        sessionID: String? = nil,
+        endedByUser: Bool = false
+    ) {
         self.stateWord = stateWord
         self.agent = agent
         self.sessionID = sessionID.flatMap(Self.sanitized(sessionID:))
+        self.endedByUser = endedByUser
     }
 
     init(fileContents raw: String) {
@@ -107,6 +155,7 @@ struct AgentTabRecord: Equatable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.agent = nil
         self.sessionID = nil
+        self.endedByUser = false
 
         for line in lines.dropFirst() {
             let field = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -117,6 +166,7 @@ struct AgentTabRecord: Equatable, Sendable {
             switch key {
             case "agent": agent = CodingAgent(rawValue: value)
             case "session": sessionID = Self.sanitized(sessionID: value)
+            case "end": endedByUser = value == Self.userEndMarker
             default: continue
             }
         }
@@ -135,10 +185,34 @@ struct AgentTabRecord: Equatable, Sendable {
         agent != nil || sessionID != nil
     }
 
+    /// The agent whose session is up in this tab right now, or nil when none
+    /// is — the one fact two separate features need to agree on.
+    ///
+    /// A restore asks it to decide whether to bring a conversation back, and
+    /// the sidebar asks it to decide whether a plan tag has anything behind it.
+    /// Answering it twice would let them disagree, and a tag that outlives its
+    /// session is exactly what disagreement looks like.
+    ///
+    /// `agentState` cannot stand in for this. That is nil both for a tab that
+    /// never had an agent and for one whose agent is merely idle — the shape a
+    /// record takes the moment a `done` is looked at, which is when a plan is
+    /// most likely to be worth showing.
+    ///
+    /// A record with neither a state word this build knows nor any identity is
+    /// not evidence of a session; it is a file. Everything else with something
+    /// in it counts, and a record that names no agent is Claude's, because that
+    /// is how every other reader here treats a file written before `agent=`
+    /// existed.
+    var liveAgent: CodingAgent? {
+        guard !endedByUser, state != .ended else { return nil }
+        guard carriesIdentity || state != nil else { return nil }
+        return agent ?? .claude
+    }
+
     /// Whether an id from the agent's own on-disk store is worth going to look
     /// for — see `AgentSessionStore`, which does the looking.
     ///
-    /// Three conditions, each of which is a reason not to bother:
+    /// Four conditions, each of which is a reason not to bother:
     ///
     /// - **No named agent**, and there is nothing to query. A file with no
     ///   `agent=` line predates the metadata entirely; it is read as Claude's
@@ -153,8 +227,10 @@ struct AgentTabRecord: Equatable, Sendable {
     ///   inherits the exact imprecision the `ended` rule exists to refuse:
     ///   for a session somebody finished on purpose, "whatever is newest here"
     ///   is a guess whether it comes from a flag or from a file.
+    /// - **Ended by the reader**, where there is nothing to resume at all, so
+    ///   an id would only be looked up to be thrown away.
     var needsSessionLookup: Bool {
-        agent != nil && sessionID == nil && state != .ended
+        agent != nil && sessionID == nil && state != .ended && !endedByUser
     }
 
     /// The on-disk form. The state word stays on the first line so that a
@@ -163,6 +239,7 @@ struct AgentTabRecord: Equatable, Sendable {
         var lines = [stateWord]
         if let agent { lines.append("agent=\(agent.rawValue)") }
         if let sessionID { lines.append("session=\(sessionID)") }
+        if endedByUser { lines.append("end=\(Self.userEndMarker)") }
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -197,7 +274,19 @@ struct AgentTabRecord: Equatable, Sendable {
     /// still up when we quit", which is both the pre-session-id behavior and
     /// the forgiving default for a file another program owns.
     ///
-    /// `ended` is the interesting one, and it turns on whether there is an id:
+    /// An `end=user` mark outranks all of it and resumes nothing. That is the
+    /// reader having quit the agent themselves, with Phantom watching it happen
+    /// — see `endedByUser` — and a conversation somebody closed on purpose is
+    /// not one they want typed back at them on the next launch. The tab still
+    /// comes back; it comes back as the plain shell it would have been.
+    ///
+    /// The mark is honoured whatever word sits beside it, not only `ended`.
+    /// Nothing writes that combination, so a record carrying one is a record in
+    /// a state this build did not produce — and the safe reading of one of those
+    /// is to restore less rather than to restore something invented.
+    ///
+    /// `ended` without that mark is the interesting one, and it turns on
+    /// whether there is an id:
     ///
     /// - **With an id**, it resumes. Quitting Phantom kills the agent, and a
     ///   dying agent's own hook writes `ended` — so at quit time *every*
@@ -249,6 +338,7 @@ struct AgentTabRecord: Equatable, Sendable {
     ) -> String? {
         guard let contents else { return nil }
         let record = AgentTabRecord(fileContents: contents)
+        if record.endedByUser { return nil }
         if record.state == .ended, record.sessionID == nil { return nil }
 
         let sessionID = record.sessionID ?? (

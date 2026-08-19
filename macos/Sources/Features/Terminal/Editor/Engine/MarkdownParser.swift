@@ -454,6 +454,67 @@ private struct Parse {
 /// Kept apart from the parse because they are the part worth reading twice:
 /// every one of them is a rule from CommonMark that a plausible-looking
 /// simplification gets wrong.
+/// Whether an offset sits inside a fenced code block.
+///
+/// Lives here, beside `Syntax.fence`, rather than wherever the caller is:
+/// the answer is only useful if it agrees with what the renderer treats as a
+/// fence, and a second opinion about that would disagree the day one of them
+/// learns about `~~~` or about indented fences. Keeping them in one file also
+/// keeps `Syntax` private.
+///
+/// Asked by the snippet catalogue, which cannot see the document: a line
+/// inside a fence looks like any other line, and offering Markdown snippets
+/// in the middle of a shell script is the one place the `/` trigger would
+/// still be wrong.
+///
+/// Counts fences up to the caret rather than parsing the document. A parse
+/// builds every block in the file and this runs while somebody is typing;
+/// the fences before the caret are the whole answer, and reaching them costs
+/// a walk over lines that are already in memory.
+extension MarkdownParser {
+    static func isInsideFencedCode(_ text: NSString, offset: Int) -> Bool {
+        let caret = max(0, min(offset, text.length))
+        var open: Syntax.Fence?
+        var lineStart = 0
+
+        while lineStart < caret {
+            let range = text.lineRange(for: NSRange(location: lineStart, length: 0))
+
+            /// The line the caret is *on* cannot open or close anything for
+            /// this purpose: typing the opening fence should not make the
+            /// caret count as already inside it.
+            guard NSMaxRange(range) <= caret else { break }
+
+            /// Trailing `\r` trimmed because a CRLF file otherwise hands the
+            /// fence its own line ending as an info string — harmless today,
+            /// and exactly the kind of thing that stops being harmless.
+            let line = text
+                .substring(with: range)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\r\n"))
+
+            if let fence = Syntax.fence(line) {
+                if let current = open {
+                    /// A closer has to be the same character and at least as
+                    /// long, and carries no info string. Anything else is
+                    /// content that happens to look like a fence.
+                    if fence.character == current.character,
+                       fence.length >= current.length,
+                       fence.info == nil {
+                        open = nil
+                    }
+                } else {
+                    open = fence
+                }
+            }
+
+            lineStart = NSMaxRange(range)
+            if range.length == 0 { break }
+        }
+
+        return open != nil
+    }
+}
+
 private enum Syntax {
     struct Fence {
         let character: Character

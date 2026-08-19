@@ -35,6 +35,16 @@ struct FileExplorerView: View {
     /// The path waiting for the "Move to Trash" confirmation.
     @State private var pendingDelete: String?
 
+    /// The file a reveal still owes a scroll to, or nil when nothing is
+    /// pending.
+    ///
+    /// Held for one reason: a row inside a folder that had never been listed
+    /// does not exist yet, and the listing lands off the main actor a moment
+    /// later. Cleared as soon as the scroll happens, which is what keeps the
+    /// reveal an event — a folder the reader collapses afterwards stays
+    /// collapsed, because nothing remembers it was ever revealed.
+    @State private var revealTarget: String?
+
     private var selectedTab: SidebarTabModel? {
         tabManager.models.first { $0.isSelected }
     }
@@ -219,17 +229,20 @@ struct FileExplorerView: View {
         .padding(.bottom, 4)
     }
 
-    /// The directory to show beside a name, and only when it is needed.
+    /// The directory to show beside a name, on every search result.
     ///
-    /// Search results are a flat list, so two files called `index.ts` are two
-    /// identical rows — the one thing the list must not be. The folder is
-    /// shown for those and left off everywhere else, because a path repeated
-    /// on every row is noise that makes the ambiguous case harder to spot,
-    /// not easier.
+    /// It used to appear only where two matches shared a name, on the theory
+    /// that a path on every row is noise. Using it says otherwise: a flat
+    /// list of names strips the one thing that tells you *which* file you are
+    /// about to open, and having to notice a collision before the folder
+    /// appears means the reader is doing the disambiguating the list was
+    /// meant to do. Repeated paths read as a column; a path that comes and
+    /// goes reads as a glitch.
+    ///
+    /// Still search-only. The tree already shows where a file is by where it
+    /// sits, so a folder name beside it there would be saying it twice.
     private func ghostPath(for row: FileRow) -> String? {
-        guard let matches = model.matches, let root = model.root else { return nil }
-        guard matches.contains(where: { $0.id != row.id && $0.node.name == row.node.name })
-        else { return nil }
+        guard model.matches != nil, let root = model.root else { return nil }
 
         let directory = (row.node.path as NSString).deletingLastPathComponent
         guard directory.hasPrefix(root.path) else { return directory }
@@ -291,14 +304,39 @@ struct FileExplorerView: View {
             .onChange(of: model.currentDirectory) { path in
                 guard let path else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(path, anchor: .center)
+                    /// No anchor: `scrollTo` then moves the least it can to
+                    /// bring the row into view, and leaves the list alone when
+                    /// the row is already there. Centring instead re-scrolled
+                    /// on every change, which is what made a click feel
+                    /// mechanical — the row you aimed at jumped to the middle
+                    /// under the pointer.
+                    proxy.scrollTo(path)
                 }
             }
             .onChange(of: model.editing) { _ in
                 guard let id = model.createPlaceholderID else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
+                    /// Centred, unlike the others: a name field that opens
+                    /// at the very bottom of a long folder is half off screen
+                    /// with a minimal scroll, and there is nothing to preserve
+                    /// about a position the reader is about to type into.
                     proxy.scrollTo(id, anchor: .center)
                 }
+            }
+            .onChange(of: editorCenter.tabs.selectedPath) { path in
+                revealOpenFile(path, using: proxy)
+            }
+            .onChange(of: model.rows) { _ in
+                guard let target = revealTarget else { return }
+                scrollToReveal(target, using: proxy)
+            }
+            /// Clearing the search is what pays the scroll a search deferred.
+            /// Watched as a `Bool` rather than on the matches themselves: the
+            /// question is only whether the tree is back, and every keystroke
+            /// in that field rebuilds the array.
+            .onChange(of: model.matches == nil) { isTree in
+                guard isTree, let target = revealTarget else { return }
+                scrollToReveal(target, using: proxy)
             }
             // A create field lands at the end of a possibly long folder, so
             // it can start below the fold; make sure the keys the explorer
@@ -342,20 +380,93 @@ struct FileExplorerView: View {
         )
     }
 
+    /// Opens the folders holding the file the pane just switched to, and
+    /// scrolls its row into view.
+    ///
+    /// Answers the *change* of open file, never the file that is open: the
+    /// highlight can only be seen if the row is on screen, and a reveal that
+    /// ran on every redraw would re-open a folder the reader had deliberately
+    /// collapsed, which is a worse thing than an unseen highlight.
+    ///
+    /// While a search is on, the list on screen is matches rather than the
+    /// tree, so scrolling one of those into view would say nothing about
+    /// where the file lives. The folders open anyway, so clearing the search
+    /// — which is how most files reached from a search get opened — finds
+    /// the tree already standing open at the right place.
+    private func revealOpenFile(_ path: String?, using proxy: ScrollViewProxy) {
+        revealTarget = nil
+        guard let path else { return }
+
+        model.expandAncestors(of: path)
+
+        /// Set before the search is considered, so a file opened from a search
+        /// result has its scroll owed rather than skipped. `scrollToReveal`
+        /// declines to act while matches are on screen and is called again the
+        /// moment they go.
+        revealTarget = path
+        scrollToReveal(path, using: proxy)
+    }
+
+    /// Scrolls to the file a reveal is waiting on, a runloop turn later.
+    ///
+    /// Never in the same turn: a row inside a folder that just opened does
+    /// not exist until the rebuilt list has been through a render, and
+    /// `scrollTo` an id the list doesn't hold does nothing at all. A folder
+    /// that had never been listed takes longer than a turn — its rows arrive
+    /// with the listing, off the main actor — which is why `rows` changing
+    /// calls this again.
+    ///
+    /// The target is dropped once nothing is listing and the row still isn't
+    /// there: a folder that couldn't be read yields no children and no row,
+    /// and a file outside the tree never had one. Waiting forever would let
+    /// an unrelated expansion, minutes later, jump the tree somewhere the
+    /// reader didn't ask to go.
+    ///
+    /// A search does not drop it, it defers it. While the field has text the
+    /// list on screen is matches rather than tree rows, so there is nothing to
+    /// scroll to — but clicking a result is the single most common way a file
+    /// deep in a tree gets opened, and the tree is where the reader looks
+    /// next. So the target waits, and clearing the field spends it.
+    private func scrollToReveal(_ target: String, using proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            guard revealTarget == target else { return }
+            /// Kept, not cleared: the scroll is owed until the tree is what
+            /// is on screen again. See `revealPendingTargetWhenSearchClears`.
+            guard model.matches == nil else { return }
+            guard model.rows.contains(where: { $0.id == target }) else {
+                if model.loading.isEmpty { revealTarget = nil }
+                return
+            }
+
+            revealTarget = nil
+            /// Minimal, for the reason on `currentDirectory` above: a reveal
+            /// should put the row on screen, not rearrange the list around it.
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(target)
+            }
+        }
+    }
+
     /// The keys the explorer answers for while it has focus: the configured
     /// create shortcuts, Return to rename the selection, Delete to trash it.
     private func handleKeyPress(_ press: BackportKeyPress) -> BackportKeyPressResult {
         guard model.editing == nil else { return .ignored }
         let modifiers = PhantomShortcut.modifiers(from: press.modifiers)
 
-        if shortcuts.newFile.matches(modifiers: modifiers, key: press.key) {
+        /// Resolved against the whole map rather than the two explorer
+        /// commands, so a combination the reader gave to an editor command
+        /// falls through to the editor instead of being swallowed here.
+        switch shortcuts.map.action(key: press.key, modifiers: modifiers) {
+        case .newFile:
             model.beginCreateDefault(isFolder: false)
             return .handled
-        }
-        if shortcuts.newFolder.matches(modifiers: modifiers, key: press.key) {
+        case .newFolder:
             model.beginCreateDefault(isFolder: true)
             return .handled
+        default:
+            break
         }
+
         if press.key == KeyEquivalent.return.character {
             guard let selection = model.selection else { return .ignored }
             model.beginRename(path: selection)
@@ -571,6 +682,10 @@ private struct FileExplorerRow: View {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(background)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(selectionRing, lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -675,14 +790,48 @@ private struct FileExplorerRow: View {
             : icons.icon(forFile: row.node.name)
     }
 
+    /// One filled row, and it is the file open in the focused tab.
+    ///
+    /// There used to be three fills at three strengths — the clicked row, the
+    /// open file, and the terminal's directory — and two of them could land on
+    /// different rows at once. Reading that took working out which shade meant
+    /// what, which is a puzzle nobody asked for in a file list: the question a
+    /// tree answers is "where am I", and there is one answer.
+    ///
+    /// The other two states did not go away, they stopped being fills.
+    /// Selection is drawn as an outline, because it is a *different* fact —
+    /// what Return renames and Delete trashes — and the terminal's directory
+    /// keeps the bolder text it already had.
     private var background: Color {
-        // The item being acted on reads strongest, then the file on screen,
-        // then the terminal's directory. Hover stays the faintest so it
-        // never competes with a real state.
-        if isSelected { return accent.opacity(0.45) }
-        if isOpenInEditor { return accent.opacity(0.34) }
-        if isCurrent { return accent.opacity(0.28) }
-        return isHovered ? accent.opacity(0.12) : .clear
+        switch emphasis.fill {
+        case .open: accent.opacity(0.45)
+        case .hover: accent.opacity(0.12)
+        case .none: .clear
+        }
+    }
+
+    private var emphasis: FileExplorerRowEmphasis {
+        .resolve(
+            isOpenInEditor: isOpenInEditor,
+            isSelected: isSelected,
+            isHovered: isHovered
+        )
+    }
+
+    /// The selection, as a ring rather than a fill.
+    ///
+    /// It cannot simply be dropped: Return renames it, Delete moves it to the
+    /// trash, and a new file lands beside it — three commands read
+    /// `model.selection`, so a tree with no selection is a tree where those
+    /// three have nothing to act on. What it must stop doing is competing with
+    /// the open file for the same visual language, which is what put two
+    /// highlights on screen.
+    ///
+    /// Nothing is drawn when the selection *is* the open file, the common case
+    /// after a click: a ring around the filled row would be a second mark for
+    /// one fact.
+    private var selectionRing: Color {
+        emphasis.showsSelectionRing ? accent.opacity(0.55) : .clear
     }
 
     private var indent: CGFloat {

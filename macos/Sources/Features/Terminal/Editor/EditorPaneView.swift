@@ -191,6 +191,22 @@ struct EditorPaneView: View {
 
 /// One document's text surface, plus the banner for a file that changed
 /// underneath it.
+/// What one attempt at Prettier came back with.
+///
+/// Three answers rather than an optional and a thrown error, because the
+/// caller has to tell "Prettier does not own this file" from "Prettier looked
+/// and there was nothing to change" — the first falls through to the language
+/// server, the second must not. Collapsing them is how a `.kt` file ends up
+/// formatted by nobody.
+///
+/// The failure travels as a string: it crosses an actor boundary, and what the
+/// reader needs from it is a sentence, not an error to re-inspect.
+private enum PrettierAttempt: Sendable {
+    case notOurs
+    case answered(PrettierEdit?)
+    case failed(String)
+}
+
 private struct DocumentView: View {
     @ObservedObject var document: EditorDocument
     let theme: CodeTheme
@@ -210,6 +226,14 @@ private struct DocumentView: View {
 
     /// Where a rename or a jump reports it found nothing, since silence
     /// reads as the feature being broken.
+    /// Observed so a remap reaches an editor that is already open, rather
+    /// than only the next file to be opened.
+    @ObservedObject private var shortcutStore: PhantomShortcutStore = .shared
+
+    @AppStorage(EditorSettings.usesPrettierKey) private var usesPrettier = true
+    @AppStorage(EditorSettings.markdownSnippetsKey) private var markdownSnippets = true
+    @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
+
     @State private var notice: String?
 
     /// The server log to offer alongside `notice`, captured at the moment
@@ -390,7 +414,9 @@ private struct DocumentView: View {
             /// Reachable for an instant: the control was drawn from a status
             /// that has since been replaced by one with no entry for this
             /// file. The next body evaluation moves off `.diff` entirely.
-            Color(nsColor: theme.background)
+            /// Clear, like the diff it stands in for, so the host's layer is
+            /// what shows for that instant.
+            Color.clear
         }
     }
 
@@ -473,7 +499,9 @@ private struct DocumentView: View {
             onFindReferences: { offset in findReferences(from: offset) },
             onFormat: { format() },
             onScrollViewReady: { linkSourcePane($0) },
-            onSave: onSave,
+            completionTriggers: completionTriggers,
+            commandShortcuts: editorShortcuts,
+            onSave: { saveWithFormatting() },
             onSaveAll: onSaveAll,
             onCloseTab: onCloseTab,
             onSearchWorkspace: onSearchWorkspace
@@ -688,6 +716,8 @@ private struct DocumentView: View {
     /// and a `false` remembered from before it was ready would leave the
     /// documentation card permanently silent.
     private func completions(at offset: Int) async -> CodeCompletionAnswer {
+        if let snippets = markdownSnippets(at: offset) { return .items(snippets) }
+
         let outcome = await lsp.completions(
             path: document.url.path,
             position: position(at: offset)
@@ -700,6 +730,96 @@ private struct DocumentView: View {
         return completionBridge.items(from: outcome, in: document.currentText as NSString)
     }
 
+    /// The editor's shortcuts, translated into what the engine takes.
+    ///
+    /// Only the editor's own commands: the explorer's live on the explorer,
+    /// and handing the text view a binding for New Folder would let a
+    /// keystroke meant for a tree act on a buffer.
+    ///
+    /// An action the reader unbound arrives as an empty list rather than
+    /// being left out, because the engine reads a missing id as "use the
+    /// default" and an empty one as "no shortcut" — which is the difference
+    /// between a command they never touched and one they deliberately
+    /// silenced.
+    private var editorShortcuts: [String: [EditorShortcut]] {
+        Dictionary(
+            uniqueKeysWithValues: PhantomShortcutAction.actions(in: .editor).map { action in
+                (
+                    action.rawValue,
+                    shortcutStore.shortcuts(for: action).map {
+                        EditorShortcut(key: $0.key, modifiers: $0.eventModifierFlags)
+                    }
+                )
+            }
+        )
+    }
+
+    /// The characters that open the completion list on their own.
+    ///
+    /// The dot, and `/` in a Markdown file so the snippet catalogue opens the
+    /// moment the slash is typed rather than after a letter follows it —
+    /// without that character in here nothing asks the provider at all, since
+    /// a slash is not an identifier.
+    ///
+    /// **The language server's own advertised set is deliberately not passed
+    /// through.** It never was, and turning it on changes what typing feels
+    /// like in every TypeScript file at once: the server advertises `/`, `@`
+    /// and `<`, so the list would open on the first slash of a `//` comment,
+    /// on a decorator, and on every `a < b`. VS Code does exactly that and it
+    /// is defensible — it is also a decision of its own, and it arrived here
+    /// as a side effect of wiring the channel this Markdown trigger needed.
+    /// Doing one thing at a time: the channel is wired, and what else travels
+    /// down it is a separate change with its own evaluation.
+    private var completionTriggers: Set<Character> {
+        var triggers: Set<Character> = ["."]
+
+        if markdownSnippets,
+           MarkdownSnippets.flavor(forFileName: document.url.lastPathComponent) != nil {
+            triggers.insert("/")
+        }
+
+        return triggers
+    }
+
+    /// The Markdown catalogue's rows, when the caret is on a `/` trigger.
+    ///
+    /// Answered before the server is asked, and returned instead of its
+    /// reply rather than merged with it: a `/` is somebody asking for this
+    /// list by name, so mixing in identifiers from elsewhere would bury what
+    /// they asked for. Every other keystroke in the file goes to the server
+    /// exactly as before.
+    ///
+    /// Local and synchronous, so a `/` opens the list in the same frame —
+    /// there is nothing to wait for, and a catalogue that arrives after a
+    /// round trip feels like a different feature.
+    ///
+    /// The fence check is the part `MarkdownSnippets` cannot do for itself:
+    /// it is handed a line, and a line inside a fenced block looks like any
+    /// other one. Inside a fence the request falls through to the server,
+    /// which is what a shell script or a Swift sample in a README should get.
+    private func markdownSnippets(at offset: Int) -> [CodeCompletionItem]? {
+        guard markdownSnippets else { return nil }
+        guard let flavor = MarkdownSnippets.flavor(
+            forFileName: document.url.lastPathComponent
+        ) else { return nil }
+
+        let text = document.currentText as NSString
+        let caret = max(0, min(offset, text.length))
+        guard !MarkdownParser.isInsideFencedCode(text, offset: caret) else { return nil }
+
+        let line = text.lineRange(for: NSRange(location: caret, length: 0))
+        guard let trigger = MarkdownSnippets.trigger(
+            line: text.substring(with: line),
+            caretInLine: caret - line.location
+        ) else { return nil }
+
+        return MarkdownSnippets.items(
+            for: flavor,
+            trigger: trigger,
+            lineStart: line.location
+        )
+    }
+
     /// Asks the server to finish one row, for the documentation card.
     ///
     /// The item is looked up rather than rebuilt, because the server has to be
@@ -709,6 +829,14 @@ private struct DocumentView: View {
     /// with an error** — an empty card that is indistinguishable from a symbol
     /// nobody documented.
     private func documentation(for item: CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome {
+        /// A catalogue row was never sent by a server, so there is nobody to
+        /// ask: its card is the snippet's own summary and the text it will
+        /// insert. Checked first, because the lookup below would report it as
+        /// superseded — an empty card that reads as a server being slow.
+        if let local = MarkdownSnippets.documentation(for: item) {
+            return .resolved(local)
+        }
+
         guard let completion = completionBridge.completion(for: item.resolveToken) else {
             Self.completionLog.debug(
                 "resolve skipped: no stored item for token \(item.resolveToken ?? -1, privacy: .public)"
@@ -806,8 +934,102 @@ private struct DocumentView: View {
         }
     }
 
+    /// Formats the file the way the project says it should be.
+    ///
+    /// One routing for both callers — the menu item and the save — because
+    /// two would drift, and the day they drift the reader gets one style on
+    /// ⌥⌘F and another on ⌘S in the same file.
+    ///
+    /// `announcing` is off for the save path. A file whose language server
+    /// has no formatter is an ordinary state, and a modal saying so on every
+    /// ⌘S would train the reader to dismiss alerts without reading them.
+    private func formatDocument(announcing: Bool) async {
+        if await formatWithPrettier(announcing: announcing) { return }
+        await formatWithLanguageServer(announcing: announcing)
+    }
+
     private func format() {
+        Task { await formatDocument(announcing: true) }
+    }
+
+    /// Writes the file, tidying it first when the reader asked for that.
+    ///
+    /// **The save happens whatever the formatter does** — missing, broken,
+    /// slow or refusing. A ⌘S that quietly did not write because Prettier
+    /// was not installed is a data-loss bug wearing a feature's clothes, and
+    /// the reader would find out at the worst possible moment.
+    private func saveWithFormatting() {
+        guard formatOnSave else { return onSave() }
         Task {
+            await formatDocument(announcing: false)
+            onSave()
+        }
+    }
+
+    /// Whether Prettier answered for this file, and so the language server
+    /// must not also run.
+    ///
+    /// True covers both of Prettier's answers: it reformatted the file, and it
+    /// looked and found nothing to change. False means Prettier does not own
+    /// this file at all — a `.kt` in a repository that also has a `.prettierrc`
+    /// — which is the only case where falling through is right.
+    ///
+    /// A failure does **not** fall through. Formatting a Prettier-owned file
+    /// with the language server instead would rewrite it in a style the
+    /// project rejected, and do it silently; saying so and changing nothing is
+    /// the smaller harm.
+    private func formatWithPrettier(announcing: Bool) async -> Bool {
+        guard usesPrettier else { return false }
+
+        let revision = document.revision
+        let text = document.currentText
+        let path = document.url.path
+
+        /// Off the main actor: discovery walks directories and the run is a
+        /// subprocess reading a pipe, and both would otherwise hold the frame
+        /// on the keystroke that asked for them.
+        let outcome = await Task.detached(priority: .userInitiated) {
+            let project = PrettierProject.discover(forFile: path)
+            guard project.handles(fileNamed: (path as NSString).lastPathComponent)
+            else { return PrettierAttempt.notOurs }
+
+            do {
+                return .answered(try PrettierFormatter.edit(for: text, at: path, in: project))
+            } catch {
+                return .failed(error.localizedDescription)
+            }
+        }.value
+
+        switch outcome {
+        case .notOurs:
+            return false
+
+        case .failed(let reason):
+            if announcing {
+                notice = "Prettier couldn't format this file: \(reason)"
+                noticeLog = nil
+            }
+            return true
+
+        case .answered(nil):
+            if announcing { notice = "Prettier had nothing to change here." }
+            return true
+
+        case .answered(let edit?):
+            /// The same guard the server path needs, for the same reason: the
+            /// edit was measured against the text as it was when the run
+            /// started, and the reader kept typing while a subprocess ran.
+            guard document.revision == revision else { return true }
+
+            let formatted = edit.applied(to: text)
+            document.replaceText(formatted)
+            lsp.didChange(path: path, text: formatted)
+            return true
+        }
+    }
+
+    /// What formatting was before Prettier: ask the language server.
+    private func formatWithLanguageServer(announcing: Bool) async {
             /// Captured before the request, compared after it.
             ///
             /// A formatting reply is a list of ranges computed against the
@@ -831,6 +1053,7 @@ private struct DocumentView: View {
                 insertSpaces: configuration.insertsSpacesForTab
             )
             guard !edits.isEmpty else {
+                guard announcing else { return }
                 reportEmpty(
                     whenHealthyAndEmpty: "The language server returned no formatting.",
                     whenUnsupported: "This language server doesn't offer formatting.",
@@ -853,7 +1076,6 @@ private struct DocumentView: View {
             /// positions that no longer exist. It repairs itself on the next
             /// keystroke, by accident, which is why nobody notices.
             lsp.didChange(path: document.url.path, text: formatted)
-        }
     }
 
     /// Applies a rename across every file the server named.

@@ -113,6 +113,20 @@ struct CodeTextView: NSViewRepresentable {
 
     /// Keyboard commands the host owns. Passed in rather than assumed, so
     /// the engine never decides what saving means.
+    /// Characters that open the completion list on their own.
+    ///
+    /// A value, because which ones they are is a fact about the language
+    /// server and about the file — `.` nearly everywhere, `/` in Markdown for
+    /// the snippet catalogue — and the engine is not allowed to know either.
+    /// The view's own default keeps the dot working when nothing supplies it.
+    var completionTriggers: Set<Character> = ["."]
+
+    /// The reader's configured shortcuts, keyed by the app's action id.
+    ///
+    /// Passed through as values: the engine may not name the app's store, and
+    /// a map is what "one command, several shortcuts" looks like from here.
+    var commandShortcuts: [String: [EditorShortcut]] = [:]
+
     var onSave: () -> Void = {}
     var onSaveAll: () -> Void = {}
     var onCloseTab: () -> Void = {}
@@ -252,6 +266,8 @@ struct CodeTextView: NSViewRepresentable {
         textView.onRename = onRename
         textView.onFindReferences = onFindReferences
         textView.onFormat = onFormat
+        textView.commandShortcuts = commandShortcuts
+        textView.completionTriggers = completionTriggers
         textView.onJumpToDefinition = onJumpToDefinition
         textView.hoverProvider = hoverProvider
         textView.completionProvider = completionProvider
@@ -297,6 +313,8 @@ struct CodeTextView: NSViewRepresentable {
             code.onRename = onRename
             code.onFindReferences = onFindReferences
             code.onFormat = onFormat
+            code.commandShortcuts = commandShortcuts
+            code.completionTriggers = completionTriggers
             code.onJumpToDefinition = onJumpToDefinition
             code.hoverProvider = hoverProvider
             code.completionProvider = completionProvider
@@ -382,6 +400,11 @@ struct CodeTextView: NSViewRepresentable {
 
         /// The bracket spans currently coloured, guarded the same way.
         private var appliedBrackets: [BracketDepth.Span] = []
+
+        /// The pair currently washed, guarded the same way again — a caret
+        /// crossing a word moves through a dozen offsets that are on no
+        /// bracket at all, and none of them should rewrite an attribute.
+        private var appliedBracketMatch: BracketMatch.Pair?
 
         /// The look currently applied, so an update that changed something
         /// else doesn't rewrite every attribute in the document.
@@ -501,7 +524,17 @@ struct CodeTextView: NSViewRepresentable {
         /// single regex cannot count. Runs after the syntax colours so it
         /// paints over them — a bracket is punctuation, and whatever rule
         /// happened to claim it has nothing to say about which pair it is.
+        ///
+        /// The `defer` repaints the caret's pair, whose wash is one of the
+        /// attributes a colouring pass resets. It covers every exit below,
+        /// including the one that finds the depths unchanged — the depths
+        /// surviving a recolour says nothing about whether the wash did.
         func colorBrackets(in region: NSRange) {
+            defer {
+                clearBracketMatch()
+                highlightBracketMatch()
+            }
+
             guard let textView, let textStorage = textView.textStorage else { return }
             guard storage.configuration.colorsBracketPairs else {
                 if !appliedBrackets.isEmpty {
@@ -540,6 +573,108 @@ struct CodeTextView: NSViewRepresentable {
             }
             textStorage.endEditing()
             requestRedraw(of: textView)
+        }
+
+        /// Washes the bracket under the caret and the one that closes it.
+        ///
+        /// The depth colours say how deeply a bracket is nested; this says
+        /// *which other one it is*, which is the question a block running off
+        /// the bottom of the screen actually raises. The rule itself is
+        /// `BracketMatch` and is pure — everything here is the part that has
+        /// a text storage in it.
+        ///
+        /// Gated on the same switch as the depth colours: both are the
+        /// editor drawing on brackets, and somebody who turned that off did
+        /// not ask for half of it back.
+        func highlightBracketMatch() {
+            guard let textView, let textStorage = textView.textStorage else { return }
+
+            let found = matchedPair(in: textStorage, of: textView)
+            guard found != appliedBracketMatch else { return }
+
+            clearBracketMatch()
+            guard let found else {
+                requestRedraw(of: textView)
+                return
+            }
+
+            textStorage.beginEditing()
+            for range in found.ranges {
+                let clipped = NSIntersectionRange(
+                    range,
+                    NSRange(location: 0, length: textStorage.length)
+                )
+                guard clipped.length > 0 else { continue }
+                textStorage.addAttribute(
+                    .backgroundColor,
+                    value: storage.theme.bracketMatchBackground,
+                    range: clipped
+                )
+            }
+            textStorage.endEditing()
+
+            appliedBracketMatch = found
+            requestRedraw(of: textView)
+        }
+
+        /// Lifts the wash currently painted, wherever it is.
+        ///
+        /// By remembered range rather than over the region being redrawn: the
+        /// partner of a bracket is routinely off screen, so a pass that only
+        /// cleared what it was recolouring would leave a wash behind on a
+        /// bracket the caret left a scroll ago.
+        private func clearBracketMatch() {
+            guard let applied = appliedBracketMatch else { return }
+            appliedBracketMatch = nil
+
+            guard let textStorage = textView?.textStorage else { return }
+            textStorage.beginEditing()
+            for range in applied.ranges {
+                let clipped = NSIntersectionRange(
+                    range,
+                    NSRange(location: 0, length: textStorage.length)
+                )
+                guard clipped.length > 0 else { continue }
+                textStorage.removeAttribute(.backgroundColor, range: clipped)
+            }
+            textStorage.endEditing()
+        }
+
+        /// The pair to wash, or `nil` when there is nothing to say.
+        ///
+        /// Only a window around the caret is lexed, and the search is bounded
+        /// to the same window: this runs on every caret move, and lexing a
+        /// megabyte per arrow key is exactly the cost `BracketMatch`'s bound
+        /// exists to avoid. The window inherits the limitation the viewport
+        /// pass already documents — one that opens inside a multi-line string
+        /// cannot know it, so a brace in there may still be counted — which is
+        /// the same trade the depth colours have always made.
+        ///
+        /// A selection rather than a caret means nothing: the reader is
+        /// choosing text, not standing on a bracket, and two washed characters
+        /// inside a highlighted range read as a rendering fault.
+        private func matchedPair(
+            in textStorage: NSTextStorage,
+            of textView: NSTextView
+        ) -> BracketMatch.Pair? {
+            guard storage.configuration.colorsBracketPairs else { return nil }
+
+            let selection = textView.selectedRange()
+            guard selection.length == 0 else { return nil }
+
+            let text = textStorage.string as NSString
+            let caret = min(selection.location, text.length)
+            let window = CodeTextStorage.invalidationRange(
+                for: NSRange(location: caret, length: 0),
+                in: text,
+                padding: BracketMatch.searchLimit
+            )
+            let skipped = SyntaxHighlighter(syntax: storage.syntax)
+                .tokens(in: textStorage.string, range: window)
+                .filter { $0.kind == .string || $0.kind == .comment }
+                .map(\.range)
+
+            return BracketMatch.pair(in: text, caret: caret, skipping: skipped)
         }
 
         /// Asks for a redraw after attributes changed in bulk.
@@ -794,6 +929,8 @@ struct CodeTextView: NSViewRepresentable {
                 code.completionEnabled = configuration.completionEnabled
                 code.completesFromBuffer = configuration.completesFromBuffer
                 code.completionFetchDelay = configuration.completionFetchDelay
+                code.insertsSpacesForTab = configuration.insertsSpacesForTab
+                code.tabWidth = configuration.tabWidth
             }
 
             // Everything below rewrites attributes or re-lays out the document,
@@ -881,6 +1018,7 @@ struct CodeTextView: NSViewRepresentable {
             // in the gutter — both are the same fact drawn in two places.
             gutter?.setCurrentLine(currentLineNumber(in: textView))
             updateCurrentLineBand()
+            highlightBracketMatch()
         }
 
         /// Moves the band to the line the insertion point is on.
@@ -1120,6 +1258,14 @@ final class CodeNSTextView: NSTextView {
     var onRename: ((Int) -> Void)?
     var onFindReferences: ((Int) -> Void)?
     var onFormat: (() -> Void)?
+
+    /// The shortcuts the reader configured, keyed by the app's action id.
+    ///
+    /// Handed in as values rather than read from a store, because this view
+    /// lives inside the engine and may not name the app. Empty means "nothing
+    /// configured", and every command falls back to the combination it has
+    /// always had — so an editor with no host wiring still works.
+    var commandShortcuts: [String: [EditorShortcut]] = [:]
     var onJumpToDefinition: ((Int) -> Void)?
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
     var completionProvider: ((Int) async -> CodeCompletionAnswer)?
@@ -1220,6 +1366,32 @@ final class CodeNSTextView: NSTextView {
     /// knows what ratio it needs.
     var hoverFetchDelay: Duration = .milliseconds(450)
 
+    /// How long a card lingers once the pointer is no longer on what it
+    /// describes.
+    ///
+    /// The grace exists because the card is a **separate window**, sitting a
+    /// few points clear of the line: the pointer travelling towards it is off
+    /// the word and not yet on the card, and both paths that notice —
+    /// crossing other characters, and leaving the view entirely — used to
+    /// mean "gone". Every card anybody reached for was dismissed on the way.
+    /// Each move restarts the clock, so a card survives a pointer heading for
+    /// it and closes shortly after the pointer settles somewhere else.
+    ///
+    /// A `var` for the same reason `hoverFetchDelay` is one: what is worth
+    /// testing here is *when* the close happens, and a test that has to sleep
+    /// past a shipped 400ms to find out is betting on the host being fast
+    /// rather than asserting anything about this code.
+    var hoverDismissDelay: Duration = .milliseconds(400)
+
+    /// Called when the card is asked to close, whether or not one is up.
+    ///
+    /// An observation seam, and it is here for the same reason
+    /// `CodeHoverPanel.pointerLocationProvider` is: the fact worth pinning
+    /// down is the *timing* of a close, and no test can watch a real card to
+    /// learn it — putting one on screen reaches `orderFront`, which from a
+    /// test host with no event loop never returns. Production leaves it nil.
+    var onHoverDismiss: (() -> Void)?
+
     /// The pending close. Separate from `hoverTask` because the two run at
     /// once: one card is on its way out while the next one is being fetched.
     private var dismissTask: Task<Void, Never>?
@@ -1253,6 +1425,16 @@ final class CodeNSTextView: NSTextView {
     /// `CodeEditorConfiguration` for why they are two switches and not one.
     var completionEnabled = true
     var completesFromBuffer = true
+
+    /// What Tab types, and how far.
+    ///
+    /// Mirrored onto the view for the same reason as the switches above: the
+    /// keystroke arrives here, and the answer has to be a property load.
+    /// Both values already existed in the configuration and reached only the
+    /// formatting request sent to the language server — so a file was
+    /// formatted with spaces and then typed into with tabs.
+    var insertsSpacesForTab = true
+    var tabWidth = 4
 
     /// Which markup this file is, which the language cannot answer.
     ///
@@ -1320,7 +1502,7 @@ final class CodeNSTextView: NSTextView {
 
         // Closed on a delay, not at once. Closing immediately is correct in
         // the abstract — the card describes the offset it was opened for — and
-        // wrong in the hand: the card sits above the word, so *reaching* for it
+        // wrong in the hand: the card sits beside the word, so *reaching* for it
         // means crossing other characters, and every one of them dismissed it
         // before the pointer arrived. There was no way to scroll a long
         // description or select a line out of it. Each move restarts the clock,
@@ -1378,17 +1560,18 @@ final class CodeNSTextView: NSTextView {
     /// Closes the card unless the pointer reached it in the meantime.
     ///
     /// Closes the *window* and nothing else — deliberately not `hideHover`,
-    /// which also cancels the pending look-up. The close is scheduled 400ms out
-    /// and the look-up answers at 450ms, so a dismissal that cancelled the task
-    /// killed every fetch 50ms before it ran and no card could ever appear.
+    /// which also cancels the pending look-up. `hoverDismissDelay` is shorter
+    /// than `hoverFetchDelay`, so a dismissal that cancelled the task killed
+    /// every fetch before it ran and no card could ever appear.
     private func scheduleHoverDismissal() {
         dismissTask?.cancel()
-        dismissTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
+        dismissTask = Task { @MainActor [weak self, hoverDismissDelay] in
+            try? await Task.sleep(for: hoverDismissDelay)
             guard !Task.isCancelled, let self,
                   self.hoverPanel?.containsPointer != true
             else { return }
             self.hoverPanel?.dismiss()
+            self.onHoverDismiss?()
         }
     }
 
@@ -1397,17 +1580,31 @@ final class CodeNSTextView: NSTextView {
         hoverTask?.cancel()
         dismissTask?.cancel()
         hoverPanel?.dismiss()
+        onHoverDismiss?()
     }
 
-    /// Leaving the text view puts the card away — unless the pointer went
-    /// *into* the card, which is the one direction that must not dismiss it.
-    /// The card takes mouse events so that a long description can be
-    /// scrolled, and reaching for its scroller means leaving the text.
+    /// Leaving the text view puts the card away on the same delay a pointer
+    /// moving *within* the text gets — the same reason, turned inside out.
+    ///
+    /// The card is a window of its own, `PanelPlacement.gap` clear of the line
+    /// it describes, and it takes mouse events so a long description can be
+    /// scrolled or a line selected out of it. Reaching for it therefore means
+    /// leaving this view, and for the few points of the crossing the pointer
+    /// is on neither: `containsPointer` catches the pointer that has already
+    /// arrived, and closing at once dismissed every card that was still on its
+    /// way to being reached. The delay covers the gap; a pointer that
+    /// genuinely left is rid of the card a moment later either way.
+    ///
+    /// The look-up is abandoned immediately even though the window is not.
+    /// They are separate on purpose — see `scheduleHoverDismissal` — and the
+    /// pointer being off the text means an answer arriving now would describe
+    /// a word nobody is pointing at.
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         guard hoverPanel?.containsPointer != true else { return }
         hoverOffset = nil
-        hideHover()
+        hoverTask?.cancel()
+        scheduleHoverDismissal()
     }
 
     /// A card is a window, and a window outlives the view that opened it. Left
@@ -1443,43 +1640,113 @@ final class CodeNSTextView: NSTextView {
         ))
     }
 
-    /// Adds the language commands to the right-click menu.
+    /// The right-click menu, built here rather than taken from `NSTextView`.
     ///
-    /// A shortcut nobody can find is a shortcut nobody uses, and this is
-    /// the one place to put them that doesn't mean touching the
-    /// application's menu bar — which belongs to the terminal.
+    /// The stock menu is written for a word processor: spelling and grammar,
+    /// substitutions, transformations, speech, layout orientation, font and
+    /// writing direction. In a code editor every one of those is either
+    /// useless or actively unwanted — substitutions turn quotes into curly
+    /// quotes in source — and they buried the four commands worth having
+    /// under submenus nobody opens.
+    ///
+    /// Cut, copy, paste and select-all keep the standard selectors instead of
+    /// closures, so `NSTextView` goes on validating them: copy greys itself
+    /// over an empty selection, which is the honest state of a caret sitting
+    /// in a file, and reimplementing that judgement would be reimplementing
+    /// it worse.
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard let menu = super.menu(for: event) else { return nil }
-
         // Anchored to where the pointer is, not to the selection: the whole
         // point of right-clicking a symbol is to ask about *that* one.
         let point = convert(event.locationInWindow, from: nil)
         let offset = characterIndexForInsertion(at: point)
 
-        var items: [NSMenuItem] = []
-        if let onJumpToDefinition {
-            items.append(item("Go to Definition", key: "") { onJumpToDefinition(offset) })
-        }
-        if let onFindReferences {
-            items.append(item("Find All References", key: "g", [.command, .control]) {
-                onFindReferences(offset)
-            })
-        }
-        if let onRename {
-            items.append(item("Rename Symbol…", key: "r", [.command, .control]) {
-                onRename(offset)
-            })
-        }
-        if let onFormat {
-            items.append(item("Format Document", key: "f", [.command, .option]) { onFormat() })
+        let menu = NSMenu()
+        var lastGroup: Int?
+
+        for command in Self.contextMenuCommands(
+            hasDefinition: onJumpToDefinition != nil,
+            hasReferences: onFindReferences != nil,
+            hasRename: onRename != nil,
+            hasFormat: onFormat != nil
+        ) {
+            if let lastGroup, lastGroup != command.group {
+                menu.addItem(.separator())
+            }
+            lastGroup = command.group
+
+            let shown = displayedShortcut(for: command)
+
+            switch command {
+            case .goToDefinition:
+                menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
+                    self.onJumpToDefinition?(offset)
+                })
+            case .findReferences:
+                menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
+                    self.onFindReferences?(offset)
+                })
+            case .rename:
+                menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
+                    self.onRename?(offset)
+                })
+            case .format:
+                menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
+                    self.onFormat?()
+                })
+            case .cut, .copy, .paste, .selectAll:
+                let entry = NSMenuItem(
+                    title: command.title,
+                    action: command.selector,
+                    keyEquivalent: shown.key
+                )
+                entry.keyEquivalentModifierMask = shown.modifiers
+                menu.addItem(entry)
+            }
         }
 
-        guard !items.isEmpty else { return menu }
-        menu.insertItem(NSMenuItem.separator(), at: 0)
-        for (index, entry) in items.enumerated() {
-            menu.insertItem(entry, at: index)
+        return menu.numberOfItems > 0 ? menu : nil
+    }
+
+    /// The combination to draw beside a command.
+    ///
+    /// What the reader bound, and the shipped default only when they bound
+    /// nothing at all. An id present with an **empty** list is a command they
+    /// deliberately unbound, and it draws no key — showing the default there
+    /// would advertise a shortcut that does nothing, which is worse than a
+    /// menu item with no shortcut at all.
+    private func displayedShortcut(
+        for command: EditorContextCommand
+    ) -> (key: String, modifiers: NSEvent.ModifierFlags) {
+        guard let id = command.actionID, let bound = commandShortcuts[id] else {
+            return (command.key, command.modifiers)
         }
-        return menu
+        guard let primary = bound.first else { return ("", []) }
+        return (primary.key, primary.modifiers)
+    }
+
+    /// What the editor's right-click menu offers, in order, and where the
+    /// separators fall.
+    ///
+    /// A value rather than the menu building itself, so the rule — which
+    /// commands exist, and which of them the host actually wired — can be
+    /// stated and checked without an `NSEvent` to hand. The language commands
+    /// come first because they are the reason somebody right-clicked a word;
+    /// the clipboard is what they came for when they right-clicked a
+    /// selection, and it is where every other app keeps it.
+    static func contextMenuCommands(
+        hasDefinition: Bool,
+        hasReferences: Bool,
+        hasRename: Bool,
+        hasFormat: Bool
+    ) -> [EditorContextCommand] {
+        var commands: [EditorContextCommand] = []
+        if hasDefinition { commands.append(.goToDefinition) }
+        if hasReferences { commands.append(.findReferences) }
+        if hasRename { commands.append(.rename) }
+        if hasFormat { commands.append(.format) }
+
+        commands.append(contentsOf: [.cut, .copy, .paste, .selectAll])
+        return commands
     }
 
     private func item(
@@ -1528,14 +1795,14 @@ final class CodeNSTextView: NSTextView {
 
     /// One open completion list.
     ///
-    /// `prefix` is the range the list was built for, and it is what makes
-    /// deleting a character a *refilter* rather than a close: the list stays
-    /// while the caret is still inside the word it opened on, and closes when
-    /// the word empties or the caret leaves. `CodeCompletionTrigger.decide`
-    /// deliberately cannot make that call — a single typed character does not
-    /// say which range the list on screen belongs to.
+    /// It used to carry the range the list was built for, and accepting used
+    /// to insert over that range. **Both are gone on purpose.** A range
+    /// recorded when the answer arrived is a range the reader can type past
+    /// while the refilter for their next keystroke is still in flight, and
+    /// inserting over it strands the characters they typed last — the range
+    /// to replace is worked out at accept time by `replacementRange`, out of
+    /// the buffer as it is and the range the row itself asked for.
     struct CompletionSession {
-        var prefix: NSRange
         var items: [CodeCompletionItem]
         var selection: Int
     }
@@ -1698,7 +1965,7 @@ final class CodeNSTextView: NSTextView {
             return
         }
 
-        completionSession = CompletionSession(prefix: prefix, items: ranked, selection: 0)
+        completionSession = CompletionSession(items: ranked, selection: 0)
 
         /// Anchored on the **start of the word**, not the caret, so the list
         /// lines up under what is being completed rather than drifting right
@@ -1992,17 +2259,70 @@ final class CodeNSTextView: NSTextView {
         documentationPanel?.dismiss()
     }
 
-    /// Replaces the word being completed with the item's text.
+    private func acceptCompletion(_ item: CodeCompletionItem) {
+        guard completionSession != nil else { return }
+        dismissCompletions()
+        applyCompletion(item)
+    }
+
+    /// The span an accepted row replaces.
+    ///
+    /// The word under the caret is recomputed here rather than taken from the
+    /// session that opened the list, and that is a repair rather than
+    /// tidying: the session's range is the one the *answer* was drawn for, so
+    /// a reader who keeps typing while a refilter is still in flight accepts
+    /// against a range a character or two short. Replacing it strands what
+    /// they typed last after the insertion — `conn` accepting `connect`
+    /// becomes `connectn`, caret in the middle of it.
+    ///
+    /// `asked` — the range the row's producer named — wins where the two
+    /// disagree, but by **union** rather than by replacement, for that same
+    /// reason: it was measured against the document as it was, so honouring
+    /// it alone re-strands anything typed since. The union covers both what
+    /// the server meant to erase and what the reader has since added.
+    ///
+    /// Two guards, and both are about a range that no longer describes this
+    /// document. It has to lie on the caret's line, which is the restriction
+    /// VS Code puts on a completion's `textEdit` and which bounds the damage
+    /// of a stale one to a line rather than to a file; and it has to touch
+    /// the word, so a range pointing somewhere else entirely is refused
+    /// rather than unioned into a deletion of everything in between. A
+    /// refused range leaves the word — which is what a row carrying no range
+    /// gets anyway, so the worst case is the old behaviour rather than a new
+    /// one.
+    static func replacementRange(asked: NSRange?, caret: Int, in content: NSString) -> NSRange {
+        let caret = min(max(caret, 0), content.length)
+        let word = identifierRange(in: content, endingAt: caret)
+        guard let asked, asked.length >= 0 else { return word }
+
+        let line = content.lineRange(for: NSRange(location: caret, length: 0))
+        guard asked.location >= line.location, NSMaxRange(asked) <= NSMaxRange(line)
+        else { return word }
+
+        guard asked.location <= NSMaxRange(word), word.location <= NSMaxRange(asked)
+        else { return word }
+
+        return NSUnionRange(asked, word)
+    }
+
+    /// Replaces what the row says it replaces with the row's text.
     ///
     /// Through `shouldChangeText` and `didChangeText` rather than a bare
     /// `replaceCharacters`, so undo registers it as one step and the
     /// delegate fires — which is what tells the language server the buffer
     /// moved. A raw replacement desynchronises the server silently.
-    private func acceptCompletion(_ item: CodeCompletionItem) {
-        guard let session = completionSession else { return }
-        let range = session.prefix
-        dismissCompletions()
+    ///
+    /// Split from `acceptCompletion` — which is the list's half, and needs a
+    /// session to have been open — so the buffer half can be driven without a
+    /// panel, a window or an event loop.
+    func applyCompletion(_ item: CodeCompletionItem) {
         endSnippet()
+
+        let range = Self.replacementRange(
+            asked: item.replaceRange,
+            caret: selectedRange().location,
+            in: string as NSString
+        )
 
         /// Everything lands inside one undo group, so a single ⌘Z takes back
         /// the completion *and* the import it dragged in. Two steps would
@@ -2128,12 +2448,69 @@ final class CodeNSTextView: NSTextView {
         }
     }
 
+    /// How many spaces a Tab inserts from a given column.
+    ///
+    /// Aligned to the next tab stop, not a flat `width` spaces: with a width
+    /// of four, a Tab at column two inserts two and lands on four. That is
+    /// what makes a column of code line up, and inserting four there instead
+    /// would put the next line at six.
+    ///
+    /// - Parameter column: characters since the start of the line, zero for
+    ///   the first one.
+    static func spacesForTab(atColumn column: Int, width: Int) -> Int {
+        guard width > 0 else { return 1 }
+        return width - (column % width)
+    }
+
+    /// Characters between the caret and the start of its line.
+    ///
+    /// Counted in characters rather than in rendered width, which is the
+    /// same thing here: this only runs when Tab inserts spaces, so the
+    /// leading run is spaces, and a file that mixes in real tabs is one the
+    /// reader is already converting away from.
+    private var caretColumn: Int {
+        let text = string as NSString
+        let caret = min(selectedRange().location, text.length)
+        let lineStart = text.range(
+            of: "\n",
+            options: .backwards,
+            range: NSRange(location: 0, length: caret)
+        )
+        guard lineStart.location != NSNotFound else { return caret }
+        return caret - NSMaxRange(lineStart)
+    }
+
+    /// Tab as spaces, when that is what the reader asked for.
+    ///
+    /// `tabWidth` and `insertsSpacesForTab` existed in the configuration and
+    /// reached only the *formatting* request sent to the language server —
+    /// so a file was formatted with spaces and then typed into with tabs.
+    /// Nothing was reading either value on the typing path.
+    ///
+    /// Goes through `insertText` rather than writing the storage directly, so
+    /// it lands in one undo group with the surrounding typing and the edit is
+    /// announced to the language server like any other.
+    private func insertTabAsSpacesIfWanted() -> Bool {
+        guard insertsSpacesForTab else { return false }
+
+        let spaces = Self.spacesForTab(atColumn: caretColumn, width: tabWidth)
+        insertText(String(repeating: " ", count: spaces), replacementRange: selectedRange())
+        return true
+    }
+
     override func doCommand(by selector: Selector) {
         guard let claim = Self.completionCommand(
             for: selector,
             isListOpen: isCompletionListOpen,
             hasSnippetSession: snippetSession != nil
         ) else {
+            /// After the completion claim, never before: a Tab with a list
+            /// open accepts the selection, and a Tab inside a snippet moves
+            /// to the next field. Only a Tab that means nothing else indents.
+            if selector == #selector(NSResponder.insertTab(_:)), insertTabAsSpacesIfWanted() {
+                return
+            }
+
             super.doCommand(by: selector)
             return
         }
@@ -2327,14 +2704,85 @@ final class CodeNSTextView: NSTextView {
                let after = Self.character(in: content, at: caret),
                Self.autoClosingPairs[before] == after,
                closes(before) {
-                super.replaceCharacters(in: NSRange(location: caret - 1, length: 2), with: "")
+                /// Through the delegate, for the reason the tag path above
+                /// gives: a raw `replaceCharacters` registers no undo step
+                /// and tells nobody the buffer moved. Deleting the pair was
+                /// therefore unundoable, and left the language server
+                /// describing two characters that are no longer there.
+                /// `textStorage`, not `super.replaceCharacters`: the latter
+                /// is `NSText`'s and does not go through the machinery
+                /// `shouldChangeText` primes, so the pair came back deleted
+                /// with nothing on the undo stack. Measured — the test below
+                /// fails on the other spelling.
+                let pair = NSRange(location: caret - 1, length: 2)
+                guard shouldChangeText(in: pair, replacementString: "") else { return }
+                textStorage?.replaceCharacters(in: pair, with: "")
+                didChangeText()
                 return
             }
         }
         super.deleteBackward(sender)
     }
 
+    /// The command the reader bound to this event, if any.
+    ///
+    /// Ids are sorted so two commands sharing a combination resolve the same
+    /// way every time. The app refuses to store a collision, but a
+    /// dictionary's order is not a promise, and "works until you restart" is
+    /// the worst shape a shortcut bug takes.
+    private func boundCommand(for event: NSEvent) -> String? {
+        commandShortcuts.keys.sorted().first { id in
+            commandShortcuts[id]?.contains { $0.matches(event) } == true
+        }
+    }
+
+    /// Runs a command by id, answering whether it was this view's to run.
+    ///
+    /// The caret is read here rather than passed in because the symbol
+    /// commands mean "the one I am on", and a shortcut has no pointer to
+    /// speak of — unlike the context menu, which anchors to where you
+    /// right-clicked.
+    private func runCommand(_ id: String) -> Bool {
+        let caret = selectedRange().location
+
+        switch id {
+        case "save": onSave?()
+        case "saveAll": onSaveAll?()
+        case "closeTab":
+            guard let onCloseTab else { return false }
+            onCloseTab()
+        case "searchWorkspace":
+            guard let onSearchWorkspace else { return false }
+            onSearchWorkspace()
+        case "findInFile":
+            let sender = NSMenuItem()
+            sender.tag = NSTextFinder.Action.showFindInterface.rawValue
+            performTextFinderAction(sender)
+        case "goToDefinition":
+            guard let onJumpToDefinition else { return false }
+            onJumpToDefinition(caret)
+        case "findReferences":
+            guard let onFindReferences else { return false }
+            onFindReferences(caret)
+        case "renameSymbol":
+            guard let onRename else { return false }
+            onRename(caret)
+        case "formatDocument":
+            guard let onFormat else { return false }
+            onFormat()
+        default:
+            return false
+        }
+        return true
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        /// The reader's own bindings first, so a remapped command wins over
+        /// the combination this app happens to ship with. Falling through
+        /// when nothing matches is what keeps the defaults working before
+        /// anybody has configured anything.
+        if let id = boundCommand(for: event), runCommand(id) { return true }
+
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard modifiers.contains(.command) else {
             return super.performKeyEquivalent(with: event)
@@ -2344,9 +2792,13 @@ final class CodeNSTextView: NSTextView {
         case "s":
             if modifiers.contains(.shift) { onSaveAll?() } else { onSave?() }
             return true
+        /// ⇧⌘F, asked for by name. Workspace search had it and moved to ⌥⌘F,
+        /// which is the pair VS Code uses the other way round — so the two
+        /// swapped rather than one of them losing a shortcut. Both are
+        /// remappable, and the menu shows whichever is bound.
         case "f" where modifiers.contains(.shift):
-            guard let onSearchWorkspace else { break }
-            onSearchWorkspace()
+            guard let onFormat else { break }
+            onFormat()
             return true
         case "f" where modifiers == .command:
             // Plain ⌘F is the in-file find bar. Claimed explicitly because
@@ -2367,8 +2819,8 @@ final class CodeNSTextView: NSTextView {
             onRename(selectedRange().location)
             return true
         case "f" where modifiers.contains(.option):
-            guard let onFormat else { break }
-            onFormat()
+            guard let onSearchWorkspace else { break }
+            onSearchWorkspace()
             return true
         case "g" where modifiers.contains(.control):
             guard let onFindReferences else { break }
@@ -2402,6 +2854,62 @@ final class CodeNSTextView: NSTextView {
     private let textUndoManager = UndoManager()
 
     override var undoManager: UndoManager? { textUndoManager }
+
+    /// ⌘Z, answered by the view that holds the text.
+    ///
+    /// The Undo item is wired to `undo:` on the first responder, and nothing
+    /// in the editor's chain answered it. The search walked past this view
+    /// and past the window — whose delegate hands back the *application's*
+    /// manager, the one that takes back closing a tab — so the item was
+    /// validated against a stack that typing never touches. It stayed grey,
+    /// and a disabled item does not consume its key equivalent: ⌘Z fell
+    /// through to `keyDown`, where nothing maps it, and the beep was macOS
+    /// saying exactly that — over a perfectly good undo stack that had been
+    /// sitting on this view the whole time.
+    ///
+    /// Answering here puts the question where the text is. Window undo is
+    /// untouched, because this view is in the responder chain only while it
+    /// holds focus, which is precisely when ⌘Z means "take back what I
+    /// typed".
+    @objc func undo(_ sender: Any?) {
+        guard textUndoManager.canUndo else { return }
+        textUndoManager.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        guard textUndoManager.canRedo else { return }
+        textUndoManager.redo()
+    }
+
+    /// Validated against the same manager the action uses.
+    ///
+    /// The two disagreeing is its own bug: enabled over an empty stack reads
+    /// as a dead key, and grey over a full one reads as lost work.
+    ///
+    /// The title is written here rather than left alone because the item is
+    /// shared with the window's undo, and whoever validated last owns what it
+    /// says — so leaving it would mean editing text under a menu still
+    /// offering to undo closing a tab.
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)):
+            item.title = Self.undoTitle("Undo", actionName: textUndoManager.undoActionName)
+            return textUndoManager.canUndo
+
+        case #selector(redo(_:)):
+            item.title = Self.undoTitle("Redo", actionName: textUndoManager.redoActionName)
+            return textUndoManager.canRedo
+
+        default:
+            return super.validateMenuItem(item)
+        }
+    }
+
+    /// AppKit's convention for these two items: the verb alone when the stack
+    /// cannot name what it holds, and the verb plus that name when it can.
+    private static func undoTitle(_ verb: String, actionName: String) -> String {
+        actionName.isEmpty ? verb : "\(verb) \(actionName)"
+    }
 
     /// True when this view is laying out through TextKit 2.
     ///

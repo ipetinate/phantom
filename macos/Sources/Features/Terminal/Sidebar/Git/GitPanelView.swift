@@ -257,9 +257,33 @@ struct SectionRow: Identifiable {
 struct GitChangeRow: View {
     let change: GitFileChange
     let staged: Bool
+
+    /// The file itself, for the two items that only need to point at it.
+    ///
+    /// An absolute URL where the repository root was deliberately withheld,
+    /// which is a narrower thing to hand over than it looks: revealing a file
+    /// and copying its path are reads. Every action that *changes* anything is
+    /// still a callback, so the row remains unable to write to disk.
+    let url: URL
+
     let onOpen: () -> Void
     let onPrimary: () -> Void
     let onDiscard: (() -> Void)?
+
+    /// The diff, with no detour through the open dialog — see
+    /// `GitRepoView.openDiff`. Optional so a host that has not wired it gets a
+    /// menu without the item rather than one that does nothing.
+    var onOpenDiff: (() -> Void)?
+
+    /// The file as it stands, wherever the reader has said files should open.
+    var onOpenSource: (() -> Void)?
+
+    /// Adds this path to the repository's `.gitignore`.
+    ///
+    /// A callback rather than the row doing it, because the row does not know
+    /// the repository root — and giving it one would make every row able to
+    /// write to disk.
+    var onIgnore: (() -> Void)?
 
     @ObservedObject private var palette: ThemePalette = .shared
     @ObservedObject private var icons: FileIconProvider = .shared
@@ -324,12 +348,53 @@ struct GitChangeRow: View {
                 .fill(isHovered ? accent.opacity(0.12) : .clear)
         )
         .onHover { isHovered = $0 }
-        .contextMenu {
-            Button("Copy Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(change.path, forType: .string)
+        .contextMenu { menu }
+    }
+
+    /// Everything this row can do, which used to be one item.
+    ///
+    /// Which items appear is `GitRowAction.groups` and not this view: those are
+    /// rules about git's vocabulary, and they are checked without a menu on
+    /// screen. All that is left here is doing them.
+    @ViewBuilder
+    private var menu: some View {
+        let groups = GitRowAction.groups(
+            for: change,
+            staged: staged,
+            canDiscard: onDiscard != nil,
+            canIgnore: onIgnore != nil
+        )
+
+        ForEach(groups.indices, id: \.self) { index in
+            if index > 0 { Divider() }
+
+            ForEach(groups[index], id: \.self) { action in
+                Button(
+                    action.title,
+                    role: action.isDestructive ? .destructive : nil
+                ) {
+                    perform(action)
+                }
             }
         }
+    }
+
+    private func perform(_ action: GitRowAction) {
+        switch action {
+        case .openDiff: (onOpenDiff ?? onOpen)()
+        case .openFile: (onOpenSource ?? onOpen)()
+        case .stage, .unstage: onPrimary()
+        case .discardChanges, .deleteUntrackedFile: onDiscard?()
+        case .addToGitignore: onIgnore?()
+        case .revealInFinder: NSWorkspace.shared.activateFileViewerSelecting([url])
+        case .copyPath: copy(url.path)
+        case .copyRelativePath: copy(change.path)
+        }
+    }
+
+    private func copy(_ string: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
     }
 
     /// Matches `SidebarIconButton`'s hit area exactly, so swapping the

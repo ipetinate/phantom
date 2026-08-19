@@ -179,6 +179,22 @@ final class SidebarTabManager: ObservableObject {
             }
             .store(in: &centerCancellables)
 
+        /// A second subscription rather than one on `$records` alone, because
+        /// the two carry different news: `states` is what the agent is doing,
+        /// records are whether there is a session at all. A row showing
+        /// something about the session — the plan tag — goes quiet the moment
+        /// that session ends, and `states` has never been able to report an
+        /// ending: it drops `ended` on the floor.
+        TabStateCenter.shared.$records
+            .sink { [weak self] records in
+                guard let self else { return }
+                for model in self.models {
+                    guard let surfaceId = model.surfaceId else { continue }
+                    model.setLiveAgent(records[surfaceId]?.liveAgent)
+                }
+            }
+            .store(in: &centerCancellables)
+
         GitStatusCenter.shared.$repos
             .sink { [weak self] repos in
                 guard let self else { return }
@@ -318,8 +334,10 @@ final class SidebarTabManager: ObservableObject {
             model.setSurfaceId(surface?.id)
             if let surfaceId = surface?.id {
                 model.setAgentState(TabStateCenter.shared.states[surfaceId])
+                model.setLiveAgent(TabStateCenter.shared.records[surfaceId]?.liveAgent)
             } else {
                 model.setAgentState(nil)
+                model.setLiveAgent(nil)
             }
             bumpGrouping()
         }

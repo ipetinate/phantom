@@ -1168,13 +1168,43 @@ private struct SidebarTabRow: View {
     @AppStorage("SidebarShowGitStatus") private var showGitStatus = true
     @AppStorage("SidebarShowPullRequest") private var showPullRequest = true
     @AppStorage("SidebarShowDevServer") private var showDevServer = true
+    @AppStorage("SidebarShowPlan") private var showPlan = true
     @AppStorage("SidebarTabDensity") private var density = "default"
+
+    /// Which agents this row offers to start, mirroring the keys the sidebar
+    /// header and the group header already use for their own buttons.
+    @AppStorage("SidebarTabShowClaude") private var showClaudeAction = true
+    @AppStorage("SidebarTabShowCodex") private var showCodexAction = true
+    @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = true
+    @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
     private var isCompact: Bool { density == "compact" }
 
     private var insertAfter: Bool? {
         guard dragState.target?.row == tab.id else { return nil }
         return dragState.target?.after
+    }
+
+    /// The agent buttons this row draws, decided by `TabRowAgentActions` — a
+    /// tab already running one gets none, because these type into its shell.
+    private var agentActions: [CodingAgent] {
+        var shown: Set<CodingAgent> = []
+        if showClaudeAction { shown.insert(.claude) }
+        if showCodexAction { shown.insert(.codex) }
+        if showOpenCodeAction { shown.insert(.opencode) }
+
+        return TabRowAgentActions.agents(shown: shown, liveAgent: tab.liveAgent)
+    }
+
+    /// Each agent's own mark, at the size the group header uses. Separate
+    /// types rather than one image name, so this is a switch and not a lookup.
+    @ViewBuilder
+    private func agentIcon(_ agent: CodingAgent) -> some View {
+        switch agent {
+        case .claude: ClaudeIcon(size: 11)
+        case .codex: CodexIcon(size: 11)
+        case .opencode: OpenCodeIcon(size: 11)
+        }
     }
 
     private var override: SidebarGroupStore.TabOverride? {
@@ -1252,7 +1282,9 @@ private struct SidebarTabRow: View {
                         devServerChip(port: port)
                     }
 
-                    if let plan = planCenter.plan(forTerminalAt: tab.pwd) {
+                    if showPlan,
+                       ClaudePlanIndex.tagIsVisible(liveAgent: tab.liveAgent),
+                       let plan = planCenter.plan(forTerminalAt: tab.pwd) {
                         planChip(plan: plan)
                     }
 
@@ -1266,6 +1298,17 @@ private struct SidebarTabRow: View {
             }
 
             Spacer(minLength: 0)
+
+            ForEach(agentActions, id: \.self) { agent in
+                SidebarIconButton(help: "Start \(agent.displayName) in This Tab") {
+                    tabManager.select(tab)
+                    AgentLauncher.start(agent, in: tab)
+                } label: {
+                    agentIcon(agent)
+                }
+                .opacity(alwaysShowActions || isHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHovered)
+            }
 
             ZStack {
                 statusIndicator
@@ -1592,19 +1635,22 @@ private struct SidebarTabRow: View {
 }
 
 /// One cell of the icon grid: hover highlight, accent fill when selected.
-private struct SidebarIconCell: View {
-    let symbol: String
+private struct SidebarIconCell<Mark: View>: View {
     let isSelected: Bool
     let action: () -> Void
+
+    /// Whatever the cell offers. A symbol name cannot stand in for this any
+    /// more: the agents' marks are views this app draws, not names AppKit
+    /// resolves, and they keep their own colours where a symbol takes the
+    /// cell's.
+    @ViewBuilder let mark: () -> Mark
 
     @State private var isHovered = false
     @ObservedObject private var palette: ThemePalette = .shared
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isSelected ? .white : .primary)
+            mark()
                 .frame(width: 32, height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
@@ -1636,17 +1682,62 @@ private struct SidebarIconPicker: View {
         "music.note", "paintbrush", "curlybraces", "cpu", "network", "lock", "bell",
     ]
 
+    /// The rest of the agent row: symbols for the kind of work rather than
+    /// for one product, so a tab running something with no mark of its own
+    /// still gets a fitting icon.
+    ///
+    /// No robot among them because SF Symbols has none — checked, not
+    /// assumed, and an unknown name draws an empty box. 🤖 through the emoji
+    /// field below is the way to have one.
+    private static let agentSymbols: [String] = [
+        "brain", "brain.head.profile", "apple.intelligence", "wand.and.sparkles",
+    ]
+
     private let columns = Array(
         repeating: GridItem(.flexible(), spacing: 6),
         count: 7
     )
 
     var body: some View {
+        sectionLabel("General")
+
         LazyVGrid(columns: columns, spacing: 6) {
             ForEach(Self.symbols, id: \.self) { symbol in
-                SidebarIconCell(symbol: symbol, isSelected: selection == symbol) {
+                SidebarIconCell(isSelected: selection == symbol) {
                     selection = symbol
                     emoji = ""
+                } mark: {
+                    Image(systemName: symbol)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(selection == symbol ? .white : .primary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+
+        sectionLabel("AI Agents/Harness")
+
+        LazyVGrid(columns: columns, spacing: 6) {
+            ForEach(CodingAgent.allCases, id: \.self) { agent in
+                let id = SidebarIconID.id(for: agent)
+
+                SidebarIconCell(isSelected: selection == id) {
+                    selection = id
+                    emoji = ""
+                } mark: {
+                    SidebarGroupIcon(icon: id, size: 15)
+                }
+                .help(agent.displayName)
+            }
+
+            ForEach(Self.agentSymbols, id: \.self) { symbol in
+                SidebarIconCell(isSelected: selection == symbol) {
+                    selection = symbol
+                    emoji = ""
+                } mark: {
+                    Image(systemName: symbol)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(selection == symbol ? .white : .primary)
                 }
             }
         }
@@ -1680,10 +1771,26 @@ private struct SidebarIconPicker: View {
             }
         }
         .onAppear {
-            if !selection.isEmpty && !Self.symbols.contains(selection) {
+            /// An agent id is neither a symbol nor an emoji, and without this
+            /// it would land in the emoji field — which trims to one character
+            /// on edit, so opening the sheet and touching that field would
+            /// quietly turn `agent:claude` into `a`.
+            if !selection.isEmpty,
+               !Self.symbols.contains(selection),
+               !Self.agentSymbols.contains(selection),
+               SidebarIconID.agent(for: selection) == nil {
                 emoji = selection
             }
         }
+    }
+
+    /// A quiet heading inside the Icon section, in the caption voice the rest
+    /// of these sheets use for anything that is not a control.
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1755,6 +1862,33 @@ private struct SidebarColorRows: View {
                 }
             }
         }
+
+        LabeledContent("Custom") {
+            ColorPicker("", selection: customColor, supportsOpacity: false)
+                .labelsHidden()
+        }
+    }
+
+    /// The two presets rows offer a fixed set; this is anything else.
+    ///
+    /// Writes through the same `colorHex` the theme swatches use, so the
+    /// three are one choice rather than three competing ones — picking a
+    /// custom colour deselects the theme swatch by making the hex stop
+    /// matching it, with no extra state to keep in step.
+    ///
+    /// The accent stands in when nothing is set, because a colour well has to
+    /// show *something*, and showing the colour the row would use anyway is
+    /// less of a lie than showing black.
+    private var customColor: Binding<Color> {
+        Binding(
+            get: {
+                guard let colorHex, let nsColor = NSColor(hex: colorHex) else {
+                    return palette.accent ?? .accentColor
+                }
+                return Color(nsColor: nsColor)
+            },
+            set: { colorHex = NSColor($0).hexString }
+        )
     }
 }
 

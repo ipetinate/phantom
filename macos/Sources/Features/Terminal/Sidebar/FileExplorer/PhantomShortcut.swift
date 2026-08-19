@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// One modifier that can be part of a shortcut.
-enum PhantomShortcutModifier: String, CaseIterable, Codable, Hashable {
+enum PhantomShortcutModifier: String, CaseIterable, Codable, Hashable, Sendable {
     case control
     case option
     case shift
@@ -18,13 +18,13 @@ enum PhantomShortcutModifier: String, CaseIterable, Codable, Hashable {
     }
 }
 
-/// A key combination Phantom lets the user configure — for now the file
-/// explorer's new-file and new-folder shortcuts.
+/// A key combination Phantom lets the user configure — every command in
+/// `PhantomShortcutAction`, each of which may answer to several of these.
 ///
 /// A value type so the settings window can hand it to a key recorder, the
-/// explorer can match against key presses, and both can share the same
-/// serialization without either depending on the other.
-struct PhantomShortcut: Equatable, Codable {
+/// explorer and the editor can match against key presses, and all of them
+/// can share the same serialization without any depending on the other.
+struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
     /// The plain key, lowercased — "n" for ⇧⌘N, "\\" for ⌥⌘\.
     let key: String
     let modifiers: Set<PhantomShortcutModifier>
@@ -130,6 +130,17 @@ struct PhantomShortcut: Equatable, Codable {
     /// lowercased here — the stored key is normalized lowercase already.
     func matches(modifiers: Set<PhantomShortcutModifier>, key: Character) -> Bool {
         modifiers == self.modifiers && key.lowercased() == self.key
+    }
+
+    /// The same modifiers as AppKit flags — what a menu item's key
+    /// equivalent takes, and what a key event carries.
+    var eventModifierFlags: NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers.contains(.command) { flags.insert(.command) }
+        if modifiers.contains(.shift) { flags.insert(.shift) }
+        if modifiers.contains(.option) { flags.insert(.option) }
+        if modifiers.contains(.control) { flags.insert(.control) }
+        return flags
     }
 
     /// The command/shift/option/control set of a SwiftUI key press,

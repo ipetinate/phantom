@@ -70,6 +70,7 @@ final class CompletionBridge {
                     label: completion.label,
                     detail: Self.detail(of: completion),
                     insertText: completion.insertText,
+                    replaceRange: Self.replaceRange(of: completion.edit, using: index),
                     isSnippet: completion.isSnippet,
                     filterText: completion.filterText,
                     sortText: completion.sortText,
@@ -142,6 +143,36 @@ final class CompletionBridge {
             return detail
         }
         return completion.detail
+    }
+
+    /// The span the item's own text replaces, in buffer offsets.
+    ///
+    /// Carrying it across is not politeness. `LSPCompletion.Edit` is an enum
+    /// *because* a server's range routinely starts before the caret, and
+    /// taking only `newText` through here is exactly what turns a
+    /// dot-accessor row into `foo..bar`: the list draws `newText`, and the
+    /// accept path needs both halves or it has to guess the other one from
+    /// the word being typed — which is never the same thing.
+    ///
+    /// An `InsertReplaceEdit` is honoured at its **insert** range, the
+    /// shorter of the two and the one ending at the caret. Same default VS
+    /// Code ships, and the conservative direction: the replace range's extra
+    /// span is text already on screen that the reader did not ask to lose.
+    ///
+    /// A range that does not resolve becomes `nil` rather than something
+    /// clamped, for the reason spelled out on `edits(_:using:)` — the view
+    /// then falls back to the word under the caret, which is a worse answer
+    /// than the server's and a far better one than an offset that survived
+    /// arithmetic it should not have.
+    static func replaceRange(of edit: LSPCompletion.Edit, using index: LSPLineIndex) -> NSRange? {
+        switch edit {
+        case .insertAtCaret:
+            return nil
+        case .replace(let range, _):
+            return index.range(of: range)
+        case .insertReplace(let insert, _, _):
+            return index.range(of: insert)
+        }
     }
 
     /// Converts the server's line/character ranges into buffer offsets.

@@ -77,13 +77,59 @@ struct EditorShortcutTests {
         )!
     }
 
-    @Test func commandOptionFFormats() {
+    /// ⇧⌘F, which Format took from workspace search when it was asked for by
+    /// name. The pair swapped rather than one of them losing a shortcut, so
+    /// both halves are pinned here — a swap that only half happened would
+    /// leave one command silently unreachable.
+    @Test func commandShiftFFormats() {
         let textView = CodeNSTextView()
         var formatted = false
         textView.onFormat = { formatted = true }
 
-        #expect(textView.performKeyEquivalent(with: event("f", [.command, .option])))
+        #expect(textView.performKeyEquivalent(with: event("f", [.command, .shift])))
         #expect(formatted)
+    }
+
+    @Test func commandOptionFSearchesTheWorkspace() {
+        let textView = CodeNSTextView()
+        var searched = false
+        textView.onSearchWorkspace = { searched = true }
+
+        #expect(textView.performKeyEquivalent(with: event("f", [.command, .option])))
+        #expect(searched)
+    }
+
+    /// A remap wins over the shipped pair, which is the whole point of the
+    /// bindings arriving as values — and the default must stop working when
+    /// the reader has moved the command somewhere else.
+    @Test func aRemappedFormatShortcutIsTheOneThatWorks() {
+        let textView = CodeNSTextView()
+        var formatted = false
+        textView.onFormat = { formatted = true }
+        textView.commandShortcuts = [
+            "formatDocument": [EditorShortcut(key: "l", modifiers: [.command, .control])],
+        ]
+
+        #expect(textView.performKeyEquivalent(with: event("l", [.command, .control])))
+        #expect(formatted)
+    }
+
+    /// Two shortcuts, one command — asked for by name, and the thing a single
+    /// stored shortcut per command could not express.
+    @Test func aSecondShortcutForTheSameCommandAlsoWorks() {
+        let textView = CodeNSTextView()
+        var count = 0
+        textView.onFormat = { count += 1 }
+        textView.commandShortcuts = [
+            "formatDocument": [
+                EditorShortcut(key: "f", modifiers: [.command, .shift]),
+                EditorShortcut(key: "l", modifiers: [.command, .control]),
+            ],
+        ]
+
+        #expect(textView.performKeyEquivalent(with: event("f", [.command, .shift])))
+        #expect(textView.performKeyEquivalent(with: event("l", [.command, .control])))
+        #expect(count == 2)
     }
 
     @Test func controlCommandRRenames() {

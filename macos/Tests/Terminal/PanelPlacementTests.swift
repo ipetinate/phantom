@@ -36,9 +36,10 @@ struct PanelPlacementTests {
 
     // MARK: - The preference
 
-    /// The hover card's preference, and the behaviour this extraction had to
-    /// preserve: above, because the code you are reading continues downwards and
-    /// a card below the line covers the part being explained.
+    /// `.above` is nobody's preference now that the hover card has been
+    /// flipped to below, and it is still a real one: it is the side both
+    /// panels flip to when the display's edge is in the way, so it has to
+    /// keep meaning what it says.
     @Test func abovePutsThePanelOverTheAnchor() {
         let point = origin(anchorY: 400, prefers: .above)
 
@@ -46,9 +47,10 @@ struct PanelPlacementTests {
         #expect(point.x == 100)
     }
 
-    /// The completion list's preference. Below, because there it is the caret's
+    /// What both panels ask for. The completion list because it is the caret's
     /// own line that has to stay visible — you are watching the prefix you are
-    /// typing, not the line under it.
+    /// typing, not the line under it — and the hover card because a card above
+    /// the line stands between the pointer and the word it describes.
     @Test func belowPutsThePanelUnderTheAnchor() {
         let point = origin(anchorY: 400, prefers: .below)
 

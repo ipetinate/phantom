@@ -287,6 +287,7 @@ final class EditorCenter: ObservableObject {
         if saved {
             tabs.setDirty(false, for: document.id)
             LSPCenter.shared.didSave(path: document.url.path, text: document.currentText)
+            Self.noteGitChange(at: document.url.path)
         }
         return saved
     }
@@ -296,6 +297,33 @@ final class EditorCenter: ObservableObject {
             guard document.save() else { continue }
             tabs.setDirty(false, for: document.id)
             LSPCenter.shared.didSave(path: document.url.path, text: document.currentText)
+            Self.noteGitChange(at: document.url.path)
         }
+    }
+
+    /// Tells the Git panel that a file on disk just changed.
+    ///
+    /// Saving is the one moment this app knows for certain that a
+    /// repository's working tree moved, and nothing was passing it on. The
+    /// panel polls every couple of seconds behind a three-second staleness
+    /// gate, which is why the two directions felt different: removing a
+    /// change updated the *diff* on screen straight away — that pane re-reads
+    /// the document it is showing — while introducing one left the list of
+    /// changes to be noticed by a poll, seconds later and with no visible
+    /// cause.
+    ///
+    /// Forced, because the gate is exactly what has to be skipped: a save is
+    /// news, not a guess, and it is the only kind of news this app can be
+    /// sure of. One `git status` per save is cheap next to the write that
+    /// just happened, and the centre already refuses to run two at once for
+    /// the same repository.
+    ///
+    /// Here rather than in a view because every path that writes a file goes
+    /// through these two methods — ⌘S, Save All, and formatting on save —
+    /// and a hook on one of them would be a bug the day somebody used
+    /// another.
+    private static func noteGitChange(at path: String) {
+        guard let root = EditorChangeLookup.repositoryRoot(forPath: path) else { return }
+        GitCenter.shared.requestStatus(root: root, force: true)
     }
 }
