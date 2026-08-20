@@ -3,6 +3,10 @@
 What Phantom adds to Ghostty, and where each piece stands. Current version:
 `0.8.0-beta`. Latest release: `v0.7.0`.
 
+The suffix says how finished a version is: `-dev` while it is being worked on,
+`-beta` once it is usable but still taking fixes, and nothing at all when it is
+stable.
+
 ## What comes from Ghostty
 
 The terminal itself is Ghostty's, untouched — that is the reason this is a fork
@@ -64,8 +68,10 @@ and not a new app.
 | Editor | Return keeps the line's indentation | Unreleased | 0.8.0-beta |
 | Editor | Return continues a Markdown list, and ends an empty one | Unreleased | 0.8.0-beta |
 | Editor | Scroll sync between raw and rendered Markdown | Unverified | v0.6.0 |
-| Editor | Move line, multi-cursor | Planned | — |
-| Editor | Image, PDF and CSV viewers | Planned | — |
+| Editor | Move a line or a selected block, ⇧⌥↑ and ⇧⌥↓ | Unreleased | 0.8.0-beta |
+| Editor | Image and PDF viewers | Unreleased | 0.8.0-beta |
+| Editor | Multi-cursor | Planned | — |
+| Editor | CSV viewer | Planned | — |
 | Language | Language servers, 21 binaries | Shipped | v0.2.0 |
 | Language | Hover, definition, references, rename | Shipped | v0.2.0 |
 | Language | Completion list with icons and detail | Shipped | v0.5.0 |
