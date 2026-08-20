@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @testable import Ghostty
 import Testing
@@ -220,5 +221,42 @@ struct LSPServerRegistryTests {
         for (command, categories) in byCommand {
             #expect(categories.count == 1, "\(command) spans \(categories.count) categories")
         }
+    }
+}
+
+/// The logos beside the rows, which nothing checked until now.
+///
+/// A logo is looked up by asset name, and a name that is not in the catalogue
+/// draws **nothing** — no crash, no warning, an 18-point hole in the list. It
+/// is the same failure as naming an SF Symbol that does not exist, and the same
+/// way to catch it: ask the bundle.
+@MainActor
+struct LanguageIconAssetTests {
+    @Test func everyLogoTheListCanAskForIsInTheCatalogue() {
+        var names: Set<String> = []
+
+        for definition in LSPServerRegistry.distinctServers + LSPServerRegistry.tailwindServers {
+            if let name = definition.languageIconName { names.insert(name) }
+        }
+        for definition in LSPServerRegistry.all {
+            if let name = definition.languageIconName { names.insert(name) }
+        }
+
+        #expect(names.count > 15, "expected the whole set of logos, got \(names.count)")
+
+        for name in names.sorted() {
+            #expect(NSImage(named: name) != nil, "\(name) is not in Assets.xcassets")
+        }
+    }
+
+    /// Tailwind's row is the reason the lookup asks the command first: it is
+    /// registered under five language ids it does not own, so by language alone
+    /// it drew the logo of the server listed above it.
+    @Test func tailwindUsesItsOwnLogoAndNotItsLanguages() {
+        for definition in LSPServerRegistry.tailwindServers {
+            #expect(definition.languageIconName == "Lang-tailwind", "\(definition.languageID)")
+        }
+
+        #expect(LSPServerRegistry.server(forLanguage: "html")?.languageIconName == "Lang-html")
     }
 }
