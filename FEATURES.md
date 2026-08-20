@@ -59,8 +59,10 @@ and not a new app.
 | Editor | Markdown snippets on `/` | Shipped | v0.7.0 |
 | Editor | Format with the project's Prettier, and on save | Shipped | v0.7.0 |
 | Editor | Context menu built from the available commands | Shipped | v0.7.0 |
-| Editor | Undo and redo | Shipped | v0.7.0 |
+| Editor | Undo and redo, by menu and by ⌘Z | Unreleased | 0.8.0-dev |
 | Editor | Thin overlay scrollbars | Unreleased | 0.8.0-dev |
+| Editor | Return keeps the line's indentation | Unreleased | 0.8.0-dev |
+| Editor | Return continues a Markdown list, and ends an empty one | Unreleased | 0.8.0-dev |
 | Editor | Scroll sync between raw and rendered Markdown | Unverified | v0.6.0 |
 | Editor | Move line, multi-cursor | Planned | — |
 | Editor | Image, PDF and CSV viewers | Planned | — |
@@ -76,6 +78,7 @@ and not a new app.
 | Settings | App icon | Shipped | v0.2.0 |
 | Settings | Files and editor | Shipped | v0.2.0 |
 | Settings | Language servers, with install and uninstall | Shipped | v0.3.0 |
+| Settings | Both TypeScript servers listed apart, installed on their own | Unreleased | 0.8.0-dev |
 | Settings | Keyboard shortcuts, with collision warnings | Shipped | v0.4.0 |
 | Settings | Completion, globally and per language | Shipped | v0.5.0 |
 
