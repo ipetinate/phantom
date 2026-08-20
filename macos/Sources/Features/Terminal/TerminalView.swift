@@ -73,12 +73,12 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
         case .ready:
             ZStack {
                 VStack(spacing: 0) {
-                    // If we're running in debug mode we show a warning so that users
-                    // know that performance will be degraded.
-                    if Ghostty.info.mode == GHOSTTY_BUILD_MODE_DEBUG || Ghostty.info.mode == GHOSTTY_BUILD_MODE_RELEASE_SAFE {
-                        DebugBuildWarningView()
-                    }
-
+                    /// Upstream puts a banner across the top of every window in a
+                    /// debug build. Removed rather than hidden: the titlebar
+                    /// already carries a DEV badge, which says the same thing
+                    /// without a strip of chrome over the terminal — and a
+                    /// developer running a debug build for weeks reads the banner
+                    /// exactly once.
                     TerminalSplitTreeView(
                         tree: viewModel.surfaceTree,
                         action: { delegate?.performSplitAction($0) })
@@ -144,37 +144,3 @@ private struct UpdateOverlay: View {
     }
 }
 
-struct DebugBuildWarningView: View {
-    @State private var isPopover = false
-
-    var body: some View {
-        HStack {
-            Spacer()
-
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.yellow)
-
-            Text("You're running a debug build of \(appDisplayName)! Performance will be degraded.")
-                .padding(.all, 8)
-                .popover(isPresented: $isPopover, arrowEdge: .bottom) {
-                    Text("""
-                    Debug builds of Ghostty are very slow and you may experience
-                    performance problems. Debug builds are only recommended during
-                    development.
-                    """)
-                    .padding(.all)
-                }
-
-            Spacer()
-        }
-        .background(Color(.windowBackgroundColor))
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Debug build warning")
-        .accessibilityValue("Debug builds of Ghostty are very slow and you may experience performance problems. Debug builds are only recommended during development.")
-        .accessibilityAddTraits(.isStaticText)
-        .onTapGesture {
-            isPopover = true
-        }
-    }
-}
