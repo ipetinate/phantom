@@ -504,6 +504,11 @@ private struct DocumentView: View {
             /// are the same `CodeLanguage`, and a tag closed in `.ts` is
             /// always wrong because a `<` there can only be a generic.
             tagDialect: CodeTagDialect.resolve(fileName: document.url.lastPathComponent),
+            /// Asked of the running servers rather than of the file name: it
+            /// is true only while something is attached that can answer inside
+            /// a `class` attribute, and it turns back off by itself when that
+            /// server stops.
+            completesInsideClassAttribute: lsp.completesClassAttributes(forPath: document.url.path),
             theme: theme,
             configuration: configuration,
             onEdit: { edited in

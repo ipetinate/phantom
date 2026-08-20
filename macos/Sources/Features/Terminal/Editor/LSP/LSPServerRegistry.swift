@@ -218,6 +218,7 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
              "vscode-json-language-server":
             return "npm rm -g vscode-langservers-extracted"
         case "yaml-language-server": return "npm rm -g yaml-language-server"
+        case LSPServerRegistry.tailwindCommand: return "npm rm -g @tailwindcss/language-server"
         case "bash-language-server": return "npm rm -g bash-language-server"
         case "intelephense": return "npm rm -g intelephense"
         case "kotlin-language-server": return "brew uninstall kotlin-language-server"
@@ -258,6 +259,8 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
         case "intelephense": address = "https://intelephense.com"
         case "ruby-lsp": address = "https://github.com/Shopify/ruby-lsp"
         case "marksman": address = "https://github.com/artempyanykh/marksman"
+        case LSPServerRegistry.tailwindCommand:
+            address = "https://github.com/tailwindlabs/tailwindcss-intellisense"
         default: address = nil
         }
         return address.flatMap(URL.init(string:))
@@ -475,7 +478,7 @@ enum LSPServerRegistry {
     /// `byLanguageID` is built from `all` alone, so "the" server of a
     /// language is still the wrapper. Which of the two a file actually gets
     /// is not a property of the language and is not decided here — see
-    /// `servers(forPath:toolchain:)`.
+    /// `servers(forPath:toolchain:tailwind:)`.
     ///
     /// The hint is unpinned on purpose, the mirror of the `@6` on the wrapper:
     /// `npm i -g typescript` installs 7, which is exactly what these rows want
@@ -510,6 +513,55 @@ enum LSPServerRegistry {
             installHint: "npm i -g typescript"
         )
     ]
+
+    /// Tailwind IntelliSense, which is a *second* server for a file rather
+    /// than an alternative to its first — the same relationship the Vue
+    /// server has with `typescript-language-server`, and a third table for
+    /// the same reason `nativeServers` is one: these ids are already in
+    /// `all`, and `byLanguageID` must keep answering with the server that
+    /// completes the language itself.
+    ///
+    /// **One entry per language id, not one server for all of them**, because
+    /// `didOpen` announces `definition.languageID` and the server picks how to
+    /// extract classes from it. A document arriving as anything else is a
+    /// document it has no rule for. The cost is one process per language id
+    /// per workspace — a repository with `.tsx` and `.vue` files open runs
+    /// two — which is the same arithmetic `LSPCenter.Key` already applies to
+    /// every other server.
+    ///
+    /// **`typescript` and `javascript` are treated differently on purpose.**
+    /// JSX is a syntax error in a `.ts`, so a `class=` attribute cannot appear
+    /// there and a process for it would answer nothing; `.js` files carrying
+    /// JSX are what half of npm ships, so that id is in.
+    ///
+    /// Measured against 0.16.0: no `initializationOptions` are required, and
+    /// the `workspace/configuration` requests it sends are satisfied by the
+    /// nulls `LSPProcess.defaultAnswer` already replies with — it resolves
+    /// the project from `rootUri` alone, including a v4 project whose theme
+    /// lives in CSS.
+    static let tailwindCommand = "tailwindcss-language-server"
+
+    static let tailwindServers: [LSPServerDefinition] = [
+        "html", "vue", "typescriptreact", "javascriptreact", "javascript",
+    ].map { languageID in
+        LSPServerDefinition(
+            languageID: languageID,
+            displayName: "Tailwind CSS",
+            command: tailwindCommand,
+            arguments: ["--stdio"],
+            installHint: "npm i -g @tailwindcss/language-server"
+        )
+    }
+
+    private static let tailwindByLanguageID: [String: LSPServerDefinition] = Dictionary(
+        tailwindServers.map { ($0.languageID, $0) },
+        uniquingKeysWith: { first, _ in first }
+    )
+
+    /// The Tailwind server for a language, when there is one for it.
+    static func tailwindServer(forLanguage languageID: String) -> LSPServerDefinition? {
+        tailwindByLanguageID[languageID.lowercased()]
+    }
 
     private static let byLanguageID: [String: LSPServerDefinition] = Dictionary(
         all.map { ($0.languageID, $0) },
@@ -588,12 +640,35 @@ enum LSPServerRegistry {
     /// it means touching a disk and this type does not. See
     /// `TypeScriptToolchain.resolve(root:)`, and `LanguageResolver` for the
     /// call that joins the two.
+    /// `tailwind` is required rather than defaulted, and that is the same
+    /// judgement `LSPServerDefinition.origin` documents in reverse: a default
+    /// here would mean a call site that forgot to resolve it silently loses
+    /// the feature, and losing a feature quietly is the failure mode this
+    /// whole file keeps arguing against. There is one caller.
     static func servers(
         forPath path: String,
-        toolchain: TypeScriptToolchain
+        toolchain: TypeScriptToolchain,
+        tailwind: TailwindProject
     ) -> [LSPServerDefinition] {
         guard let languageID = languageID(forPath: path) else { return [] }
 
+        let primary = primaryServers(forLanguage: languageID, toolchain: toolchain)
+        guard tailwind.isInstalled, let tailwind = tailwindServer(forLanguage: languageID) else {
+            return primary
+        }
+
+        /// Last, because the order is "primary first" and everything that
+        /// merges answers from several servers reads it that way — the
+        /// language's own server is the one whose hover and diagnostics
+        /// should win. Tailwind adds classes to a completion list; it has no
+        /// opinion about the code around them.
+        return primary + [tailwind]
+    }
+
+    private static func primaryServers(
+        forLanguage languageID: String,
+        toolchain: TypeScriptToolchain
+    ) -> [LSPServerDefinition] {
         if languageID == "vue" { return vueServers(toolchain: toolchain) }
 
         guard let wrapper = server(forLanguage: languageID) else { return [] }
@@ -753,6 +828,7 @@ enum LSPServerRegistry {
     /// language ids point at it would be noise.
     static var distinctServers: [LSPServerDefinition] {
         var seen: Set<String> = []
-        return (all + nativeServers).filter { seen.insert($0.command).inserted }
+        return (all + nativeServers + tailwindServers)
+            .filter { seen.insert($0.command).inserted }
     }
 }

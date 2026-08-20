@@ -311,3 +311,76 @@ struct CodeCompletionFilterTests {
         #expect(CodeCompletionFilter.rank([], query: "con").isEmpty)
     }
 }
+
+/// What ranking costs when the list is the size the Tailwind server actually
+/// sends.
+///
+/// Measured against `@tailwindcss/language-server` 0.16.0 in a Tailwind 3
+/// project: a completion inside `className="w-"` answers **11,534 items**, and
+/// it does not filter by what was typed — it sends the whole universe of
+/// variants and utilities every time and expects the client to narrow it. So
+/// every keystroke inside a class attribute ranks eleven thousand candidates,
+/// which is two orders of magnitude past anything this filter was measured on
+/// before.
+///
+/// **Measured, on this machine:** 27 ms for the query `w-` and 43 ms for the
+/// empty query, which is the one typing the opening quote produces. Both run
+/// on the main actor, in `showCompletions`, so that is a frame or two per
+/// keystroke *inside a class attribute* — and nowhere else, since no other
+/// server sends a list within two orders of magnitude of this one.
+///
+/// The budgets below sit above those numbers with room for a slower machine.
+/// They are here to catch a change that makes ranking quadratic, not to
+/// defend a particular number.
+struct CompletionFilterAtTailwindScaleTests {
+    /// Shaped like the real answer: `w-1/2`, `hover:bg-red-500`, `[&>*]:mt-2`
+    /// and 15 variants per utility, which is where the volume comes from.
+    private static let candidates: [CodeCompletionItem] = {
+        let utilities = ["w", "h", "p", "m", "px", "py", "mt", "bg", "text", "border", "flex", "grid"]
+        let scales = (0..<40).map(String.init) + ["full", "fit", "auto", "px", "1/2", "1/3", "2/3"]
+        let variants = ["", "hover:", "focus:", "sm:", "md:", "lg:", "xl:", "dark:", "group-hover:",
+                        "peer-focus:", "first:", "last:", "odd:", "even:", "[&>*]:"]
+
+        var items: [CodeCompletionItem] = []
+        items.reserveCapacity(utilities.count * scales.count * variants.count)
+        for variant in variants {
+            for utility in utilities {
+                for scale in scales {
+                    items.append(CodeCompletionItem(
+                        kind: .value,
+                        label: "\(variant)\(utility)-\(scale)",
+                        detail: "width: 1rem;"
+                    ))
+                }
+            }
+        }
+        return items
+    }()
+
+    @Test func ranksElevenThousandCandidatesWithinAKeystroke() {
+        let items = Self.candidates
+        #expect(items.count > 8000, "the point of this test is the volume: \(items.count)")
+
+        let clock = ContinuousClock()
+        let elapsed = clock.measure { _ = CodeCompletionFilter.rank(items, query: "w-") }
+
+        #expect(elapsed < .milliseconds(60), "ranking \(items.count) items took \(elapsed)")
+    }
+
+    /// The empty query is the expensive one — nothing is rejected early, so
+    /// every candidate is scored, deduplicated and sorted. It is also a real
+    /// state: typing the quote in `className="` opens the whole list.
+    @Test func theEmptyQueryIsTheExpensiveOne() {
+        let clock = ContinuousClock()
+        let elapsed = clock.measure { _ = CodeCompletionFilter.rank(Self.candidates, query: "") }
+
+        #expect(elapsed < .milliseconds(90), "ranking everything took \(elapsed)")
+    }
+
+    /// The ordering that makes the volume bearable: what was typed has to come
+    /// first, or eleven thousand rows are eleven thousand rows.
+    @Test func whatWasTypedComesFirst() {
+        let ranked = CodeCompletionFilter.rank(Self.candidates, query: "w-f")
+        #expect(ranked.first?.label.hasPrefix("w-f") == true, "got \(ranked.first?.label ?? "nothing")")
+    }
+}

@@ -101,11 +101,12 @@ struct EditorPresentationControl: View {
         switch option {
         case .source: "chevron.left.forwardslash.chevron.right"
         case .preview: "doc.richtext"
-        /// Two versions of one document, the earlier one dashed. Not
-        /// `plus.forwardslash.minus`, which was here first and reads as a
-        /// percent sign, and not a swap arrow, which would say "switch" —
-        /// ambiguous next to buttons whose whole job is switching.
-        case .diff: "square.on.square.dashed"
+        /// Lines of text with a change marked against them, which is what a
+        /// source file's diff actually shows. Not `plus.forwardslash.minus`,
+        /// which was here first and reads as a percent sign, and not a swap
+        /// arrow, which would say "switch" — ambiguous next to buttons whose
+        /// whole job is switching.
+        case .diff: "text.append"
         case .split: "rectangle.split.2x1"
         }
     }

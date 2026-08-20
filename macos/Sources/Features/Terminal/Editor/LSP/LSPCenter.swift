@@ -738,6 +738,39 @@ final class LSPCenter: ObservableObject {
         return completionSupport[key]
     }
 
+    /// Whether a server that completes the inside of a class attribute is
+    /// **running** for this file — Tailwind's, today.
+    ///
+    /// The editor asks before lifting the string-and-comment suppression that
+    /// keeps a 1-character trigger out of prose, so the answer has to be about
+    /// a process that exists rather than about a project that could have one.
+    /// It reads `servers`, which is only written after a successful
+    /// `initialize`, and that makes the whole feature self-correcting: routed
+    /// but not installed, or installed but failing to start, and the exception
+    /// stays off — which is the right outcome, since there would be nothing to
+    /// answer the requests it lets through.
+    ///
+    /// Cheap enough for a view body: a dictionary walk, one extension lookup
+    /// and the `.git` walk `workspaceRoot` already does everywhere else. It
+    /// deliberately does not call `resolvedServers`, which stats a
+    /// `node_modules` per level.
+    /// The command is the **effective** one, not the registry's: a key holds
+    /// whatever `LSPServerOverrideStore` turned it into, so comparing against
+    /// the compiled-in name would answer no for anybody who pointed the
+    /// setting at their own build.
+    func completesClassAttributes(forPath path: String) -> Bool {
+        guard let languageID = LanguageResolver.shared.languageID(forPath: path),
+              let tailwind = LSPServerRegistry.tailwindServer(forLanguage: languageID)
+        else { return false }
+
+        let command = Self.effectiveDefinition(tailwind).command
+        let root = Self.workspaceRoot(for: path)
+
+        return servers.keys.contains { key in
+            key.languageID == languageID && key.root == root && key.command == command
+        }
+    }
+
     /// Whether this document has been announced to a server, or is on its
     /// way to one.
     ///

@@ -86,22 +86,28 @@ final class LanguageResolver: ObservableObject {
     /// Every server that should be started for a file, in the order they are
     /// to be consulted — primary first.
     ///
-    /// Plural because one language id is not one server. Since Volar 2 a
-    /// `.vue` file is served by the Vue server for its template and by
-    /// `typescript-language-server` — loading `@vue/typescript-plugin` — for
-    /// its `<script>`; one server per language id is the Volar 1.x model and
-    /// has been wrong since. Nothing about that has landed yet: today this
-    /// returns at most one element and behaviour is unchanged. The shape is
-    /// what lets the second server arrive without every call site in
-    /// `LSPCenter` learning about it separately.
+    /// Plural because one language id is not one server, and two things make
+    /// that concrete today. Since Volar 2 a `.vue` file is served by the Vue
+    /// server for its template and by `typescript-language-server` — loading
+    /// `@vue/typescript-plugin` — for its `<script>`; one server per language
+    /// id is the Volar 1.x model and has been wrong since. And a file in a
+    /// Tailwind project gets the Tailwind server alongside whichever server
+    /// completes the language itself, which is what fills in a `class`
+    /// attribute.
+    ///
+    /// This is also the seam where facts about disk are resolved: the registry
+    /// is pure and takes both of them as values.
     func serverDefinitions(forPath path: String) -> [LSPServerDefinition] {
         let name = (path as NSString).lastPathComponent
         if let contributed = catalog.contribution(forFileName: name) {
             return contributed.serverDefinition.map { [$0] } ?? []
         }
+
+        let root = LSPCenter.workspaceRoot(for: path)
         return LSPServerRegistry.servers(
             forPath: path,
-            toolchain: TypeScriptToolchain.resolve(root: LSPCenter.workspaceRoot(for: path))
+            toolchain: TypeScriptToolchain.resolve(root: root),
+            tailwind: TailwindProject.resolve(forPath: path, root: root)
         )
     }
 

@@ -45,6 +45,16 @@ struct CodeTextView: NSViewRepresentable {
     /// `CodeNSTextView.tagDialect`.
     var tagDialect: CodeTagDialect = .none
 
+    /// Whether a server that completes class attributes is attached to this
+    /// file. See `CodeClassAttribute`.
+    ///
+    /// Beside `tagDialect` rather than inside `CodeEditorConfiguration` for
+    /// the same reason: that value is a preference held per editor, and this
+    /// is a fact about one file — it changes when the document changes and
+    /// again when a server finishes starting. A field there would also be
+    /// compared by the `unchanged` guard, which is about what gets *drawn*.
+    var completesInsideClassAttribute = false
+
     let theme: CodeTheme
     let configuration: CodeEditorConfiguration
 
@@ -268,6 +278,7 @@ struct CodeTextView: NSViewRepresentable {
         textView.onFormat = onFormat
         textView.commandShortcuts = commandShortcuts
         textView.completionTriggers = completionTriggers
+        textView.completesInsideClassAttribute = completesInsideClassAttribute
         textView.onJumpToDefinition = onJumpToDefinition
         textView.hoverProvider = hoverProvider
         textView.completionProvider = completionProvider
@@ -315,6 +326,7 @@ struct CodeTextView: NSViewRepresentable {
             code.onFormat = onFormat
             code.commandShortcuts = commandShortcuts
             code.completionTriggers = completionTriggers
+            code.completesInsideClassAttribute = completesInsideClassAttribute
             code.onJumpToDefinition = onJumpToDefinition
             code.hoverProvider = hoverProvider
             code.completionProvider = completionProvider
@@ -1340,6 +1352,15 @@ final class CodeNSTextView: NSTextView {
     /// running. The default keeps the dot working when nothing supplies it.
     var completionTriggers: Set<Character> = ["."]
 
+    /// Whether one of the attached servers completes the inside of a class
+    /// attribute — Tailwind's, today.
+    ///
+    /// Lifts the string-and-comment suppression for that one place, and
+    /// widens what counts as the run being completed while it is there: see
+    /// `CodeClassAttribute` for both, and `CodeCompletionTrigger.decide` for
+    /// where in the order of rules it sits.
+    var completesInsideClassAttribute = false
+
     /// The list currently on screen, if any.
     private var completionSession: CompletionSession?
 
@@ -1989,7 +2010,8 @@ final class CodeNSTextView: NSTextView {
             typed: typed,
             isInStringOrComment: suppressed,
             triggerCharacters: completionTriggers,
-            minimumPrefix: completionMinimumPrefix)
+            minimumPrefix: completionMinimumPrefix,
+            completesInsideClassAttribute: completesInsideClassAttribute)
 
         return CodeCompletionTrigger.decide(
             context,
@@ -2034,7 +2056,7 @@ final class CodeNSTextView: NSTextView {
     private func showCompletions(_ items: [CodeCompletionItem], requestedAt offset: Int) {
         let content = string as NSString
         let caret = selectedRange().location
-        let prefix = Self.identifierRange(in: content, endingAt: caret)
+        let prefix = completionPrefixRange(in: content, endingAt: caret)
 
         let query = content.substring(with: prefix)
         let ranked = CodeCompletionFilter.rank(
@@ -2228,6 +2250,21 @@ final class CodeNSTextView: NSTextView {
     ///
     /// `$` counts, because it is a legal identifier character in JavaScript
     /// and TypeScript and dropping it would make `$el` complete as `el`.
+    /// What the list is being filtered against, in document coordinates.
+    ///
+    /// Not always an identifier, which is the whole point: a class attribute's
+    /// run ends at whitespace or at the quote, so `w-1/2` is one query and not
+    /// three. Getting this wrong is not a subtle defect — the identifier rule
+    /// answers *empty* for `w-`, and an empty query matches all 11,000
+    /// candidates equally and shows them in whatever order the server sent.
+    private func completionPrefixRange(in content: NSString, endingAt caret: Int) -> NSRange {
+        if completesInsideClassAttribute,
+           let token = CodeClassAttribute.tokenRange(in: content, caret: caret) {
+            return token
+        }
+        return Self.identifierRange(in: content, endingAt: caret)
+    }
+
     static func identifierRange(in content: NSString, endingAt caret: Int) -> NSRange {
         var start = min(max(caret, 0), content.length)
         while start > 0 {

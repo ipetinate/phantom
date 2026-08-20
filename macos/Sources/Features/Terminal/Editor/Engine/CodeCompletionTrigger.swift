@@ -73,13 +73,26 @@ struct CodeCompletionTrigger {
         /// than by making the trigger shy.
         var minimumPrefix: Int = 1
 
+        /// Whether one of the attached servers completes the *inside* of a
+        /// class attribute — which today means a Tailwind server is running
+        /// for this file.
+        ///
+        /// A value, and false by default, for the same reason
+        /// `triggerCharacters` is one: it is a fact about what happens to be
+        /// attached, not a rule about the language. Deciding it here would
+        /// mean this function guessing that a `.tsx` is a Tailwind project,
+        /// and guessing wrong turns the string suppression off in every
+        /// React file whether or not Tailwind is anywhere near it.
+        var completesInsideClassAttribute: Bool = false
+
         init(
             line: String,
             caretInLine: Int,
             typed: Character? = nil,
             isInStringOrComment: Bool = false,
             triggerCharacters: Set<Character> = [],
-            minimumPrefix: Int = 1
+            minimumPrefix: Int = 1,
+            completesInsideClassAttribute: Bool = false
         ) {
             self.line = line
             self.caretInLine = caretInLine
@@ -87,6 +100,7 @@ struct CodeCompletionTrigger {
             self.isInStringOrComment = isInStringOrComment
             self.triggerCharacters = triggerCharacters
             self.minimumPrefix = minimumPrefix
+            self.completesInsideClassAttribute = completesInsideClassAttribute
         }
     }
 
@@ -125,7 +139,26 @@ struct CodeCompletionTrigger {
     /// runs on every keystroke and a line of nothing but identifier characters
     /// would otherwise allocate one `String` per character to throw it away
     /// again.
+    ///
+    /// Inside a class attribute the run is the whole class rather than its
+    /// trailing identifier — `w-1/2` is one thing being completed, not the
+    /// three the identifier rule sees. See `CodeClassAttribute`.
     static func prefixRange(in context: Context) -> NSRange {
+        if let token = classToken(in: context) { return token }
+        return identifierPrefixRange(in: context)
+    }
+
+    /// The class under the caret, when a server that completes classes is
+    /// attached and the caret is in fact inside a class attribute.
+    private static func classToken(in context: Context) -> NSRange? {
+        guard context.completesInsideClassAttribute else { return nil }
+        return CodeClassAttribute.tokenRange(
+            in: context.line as NSString,
+            caret: context.caretInLine
+        )
+    }
+
+    private static func identifierPrefixRange(in context: Context) -> NSRange {
         let line = context.line as NSString
         let caret = max(0, min(context.caretInLine, line.length))
 
@@ -154,19 +187,41 @@ struct CodeCompletionTrigger {
     ///    suppression below: asking for completions on purpose inside a string
     ///    is a request, not an accident, and refusing it would be the editor
     ///    telling the user they did not mean it.
-    /// 2. **Inside a string or comment, every implicit trigger closes.** This
+    /// 2. **Inside a class attribute, every keystroke opens or refines** — and
+    ///    this rule is checked *before* the string suppression below, because
+    ///    a class attribute's value is a string and rule 3 would otherwise
+    ///    close the list on the only keystrokes that matter. It is also the
+    ///    one place where a keystroke that is neither an identifier nor a
+    ///    trigger character opens the list, since `-`, `:`, `/` and `[` are
+    ///    what a Tailwind class is largely made of. Whitespace opens too: it
+    ///    starts the next class, with an empty prefix, which is the whole list
+    ///    again.
+    /// 3. **Inside a string or comment, every implicit trigger closes.** This
     ///    is where a 1-character trigger would otherwise be at its worst —
     ///    prose is nothing but identifier characters.
-    /// 3. **A trigger character opens regardless of prefix length**, because
+    /// 4. **A trigger character opens regardless of prefix length**, because
     ///    the prefix after `.` is empty by definition and that is exactly the
     ///    moment the list is most wanted.
-    /// 4. **An identifier character opens at `minimumPrefix` and refines above
+    /// 5. **An identifier character opens at `minimumPrefix` and refines above
     ///    it.**
-    /// 5. **Anything else closes.**
+    /// 6. **Anything else closes.**
     static func decide(_ context: Context, isListOpen: Bool, isExplicit: Bool) -> Decision {
-        let prefix = prefixRange(in: context)
+        let classToken = classToken(in: context)
+        let prefix = classToken ?? identifierPrefixRange(in: context)
 
         if isExplicit { return .open(prefix: prefix) }
+
+        if let classToken {
+            /// Deletion refines here, where the identifier path leaves it to
+            /// the view. It can: a class's boundaries are whitespace and the
+            /// quote, so "the caret is still inside the class the list opened
+            /// on" is answerable from the line alone — which is exactly what
+            /// the identifier rule cannot do from a single character, and the
+            /// reason `typed` documents deletion as the view's business.
+            if isListOpen { return .refilter(prefix: classToken) }
+            return context.typed == nil ? .close : .open(prefix: classToken)
+        }
+
         if context.isInStringOrComment { return .close }
 
         guard let typed = context.typed else { return .close }
