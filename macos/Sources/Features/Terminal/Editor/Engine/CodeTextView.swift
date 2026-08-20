@@ -2640,6 +2640,46 @@ final class CodeNSTextView: NSTextView {
         return caret - NSMaxRange(lineStart)
     }
 
+    /// Return, carrying the line's indentation — and a list's marker — onto
+    /// the next line.
+    ///
+    /// Through `insertText` with a replacement range rather than several
+    /// edits, for the reasons `insertTabAsSpacesIfWanted` gives: one undo step
+    /// for the whole thing, and one `didChange` for the language server. An
+    /// empty list item is the only case that removes anything, and it removes
+    /// it as part of the same replacement.
+    override func insertNewline(_ sender: Any?) {
+        let content = string as NSString
+        let caret = selectedRange().location
+        guard selectedRange().length == 0, caret <= content.length else {
+            super.insertNewline(sender)
+            return
+        }
+
+        let lineRange = content.lineRange(for: NSRange(location: caret, length: 0))
+        let line = content.substring(with: lineRange)
+        let insertion = CodeNewlineIndent.insertion(
+            forLine: line.trimmingTrailingNewline,
+            caretInLine: caret - lineRange.location,
+            indentUnit: insertsSpacesForTab ? String(repeating: " ", count: max(tabWidth, 1)) : "\t",
+            continuesLists: hoverLanguage == .markdown
+        )
+
+        /// Nothing but the newline and nothing removed is what
+        /// `super.insertNewline` already does, and it does it with the
+        /// system's own undo coalescing.
+        guard insertion.text != "\n" || insertion.deletingBefore > 0 else {
+            super.insertNewline(sender)
+            return
+        }
+
+        let start = caret - insertion.deletingBefore
+        insertText(
+            insertion.text,
+            replacementRange: NSRange(location: start, length: insertion.deletingBefore))
+        setSelectedRange(NSRange(location: start + insertion.caretOffset, length: 0))
+    }
+
     /// Tab as spaces, when that is what the reader asked for.
     ///
     /// `tabWidth` and `insertsSpacesForTab` existed in the configuration and
