@@ -64,6 +64,50 @@ enum ShellCommand {
         }
     }
 
+    /// Starts writing `data` to the child's stdin from another queue.
+    ///
+    /// Concurrent with the drain, and not optionally so: a buffer larger than
+    /// a pipe (~64KB on this platform) blocks the writer until somebody
+    /// reads, and what a filter hands back is about the same size — so
+    /// writing the whole of stdin before reading stdout deadlocks on any
+    /// input worth piping, with both processes waiting on the other.
+    private static func feed(_ data: Data, into pipe: Pipe) {
+        DispatchQueue.global(qos: .utility).async {
+            send(data, to: pipe.fileHandleForWriting)
+        }
+    }
+
+    /// Writes the whole buffer to the child and closes the pipe, which is what
+    /// tells it the input has ended — without the close, a filter reading to
+    /// EOF waits and we time out.
+    ///
+    /// Written through the descriptor rather than `FileHandle.write(_:)`
+    /// because of what happens when the child is already gone: a command that
+    /// rejects its arguments exits before reading a byte, and writing into
+    /// that pipe raises `SIGPIPE`, whose default disposition terminates the
+    /// *writer* — the whole app, killed by a mistyped flag. `F_SETNOSIGPIPE`
+    /// turns that into an `EPIPE` return this loop can simply stop on.
+    private static func send(_ data: Data, to handle: FileHandle) {
+        let descriptor = handle.fileDescriptor
+        _ = fcntl(descriptor, F_SETNOSIGPIPE, 1)
+        defer { try? handle.close() }
+
+        data.withUnsafeBytes { raw in
+            guard var pointer = raw.baseAddress else { return }
+            var remaining = raw.count
+            while remaining > 0 {
+                let written = Darwin.write(descriptor, pointer, remaining)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    return
+                }
+                if written == 0 { return }
+                pointer = pointer.advanced(by: written)
+                remaining -= written
+            }
+        }
+    }
+
     /// Ends a process that outlived its timeout, and makes sure it ended.
     ///
     /// `terminate()` is SIGTERM, which a process is free to ignore — and a
@@ -141,6 +185,16 @@ enum ShellCommand {
         var stdout: String
         var stderr: String
 
+        /// Why the command could not be started at all, when that is what
+        /// happened.
+        ///
+        /// A launch failure and a kill at the deadline both leave `status`
+        /// nil, and they are not the same news: one is a binary that isn't
+        /// there, the other is a binary that never answered. A caller that
+        /// reports them differently — `PrettierRunner`, whose failure type
+        /// has a case for each — has nothing else to tell them apart by.
+        var launchFailure: String?
+
         var succeeded: Bool { status == 0 }
 
         /// The best line to put in front of a user. Git says useful things
@@ -168,6 +222,11 @@ enum ShellCommand {
     /// deadlock waiting to happen: a command that writes more than a pipe
     /// buffer (~64KB) to stderr blocks forever, and git is chatty there.
     ///
+    /// A `stdin` is written from a third queue while those two drain — see
+    /// `feed(_:into:)` for why that cannot be done first — and closed, which
+    /// is what tells a filter its input has ended. This is how a command gets
+    /// a buffer that was never saved to disk: `prettier --stdin-filepath`.
+    ///
     /// Blocks the calling thread — background tasks only, never the main
     /// actor.
     static func runResult(
@@ -175,6 +234,7 @@ enum ShellCommand {
         _ arguments: [String],
         cwd: String? = nil,
         environment: [String: String]? = nil,
+        stdin: Data? = nil,
         timeout: TimeInterval
     ) -> Result {
         let process = Process()
@@ -188,15 +248,27 @@ enum ShellCommand {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
-        // Nothing sensible can be read from a GUI app's stdin, and a child
-        // that blocks reading it would hang until the timeout.
-        process.standardInput = FileHandle.nullDevice
+        let inPipe = stdin.map { _ in Pipe() }
+        if let inPipe {
+            process.standardInput = inPipe
+        } else {
+            // Nothing sensible can be read from a GUI app's stdin, and a child
+            // that blocks reading it would hang until the timeout.
+            process.standardInput = FileHandle.nullDevice
+        }
 
         do {
             try process.run()
         } catch {
-            return Result(status: nil, stdout: "", stderr: error.localizedDescription)
+            return Result(
+                status: nil,
+                stdout: "",
+                stderr: error.localizedDescription,
+                launchFailure: error.localizedDescription
+            )
         }
+
+        if let stdin, let inPipe { feed(stdin, into: inPipe) }
 
         let outData = Output()
         let errData = Output()
@@ -259,7 +331,12 @@ enum ShellCommand {
         do {
             try process.run()
         } catch {
-            return Result(status: nil, stdout: "", stderr: error.localizedDescription)
+            return Result(
+                status: nil,
+                stdout: "",
+                stderr: error.localizedDescription,
+                launchFailure: error.localizedDescription
+            )
         }
 
         let outData = Output()

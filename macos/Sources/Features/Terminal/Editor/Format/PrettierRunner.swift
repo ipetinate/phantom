@@ -49,6 +49,12 @@ enum PrettierRunner {
 
     /// The formatted text, or **nil when nothing should change**.
     ///
+    /// The process mechanics belong to `ShellCommand`: the concurrent drain
+    /// of all three pipes, the deadline and the `SIGKILL` behind it, and the
+    /// `SIGPIPE`-safe write of the buffer into a child that may already have
+    /// exited. What is Prettier's own, and stays here, is the reading of what
+    /// came back — see `result(status:stdout:stderr:timeout:)`.
+    ///
     /// - Throws: `PrettierFailure`.
     static func format(
         _ text: String,
@@ -58,65 +64,23 @@ enum PrettierRunner {
         environment: [String: String]? = nil,
         timeout: TimeInterval = defaultTimeout
     ) throws -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["--stdin-filepath", filePath]
-        if let workingDirectory { process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory) }
-        if let environment { process.environment = environment }
+        let run = ShellCommand.runResult(
+            binary,
+            ["--stdin-filepath", filePath],
+            cwd: workingDirectory,
+            environment: environment,
+            stdin: Data(text.utf8),
+            timeout: timeout
+        )
 
-        let input = Pipe()
-        let output = Pipe()
-        let errors = Pipe()
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = errors
-
-        do {
-            try process.run()
-        } catch {
-            throw PrettierFailure.launchFailed(reason: error.localizedDescription)
+        if let reason = run.launchFailure {
+            throw PrettierFailure.launchFailed(reason: reason)
         }
-
-        /// All three pipes are worked concurrently, and none of them may be
-        /// left until another is finished. A buffer larger than a pipe (~64KB
-        /// on this platform) blocks the writer until somebody reads, and the
-        /// formatted copy coming back is about the same size — so writing the
-        /// whole of stdin before reading stdout deadlocks on any file worth
-        /// formatting, with both processes waiting on the other.
-        DispatchQueue.global(qos: .userInitiated).async {
-            send(Data(text.utf8), to: input.fileHandleForWriting)
-        }
-
-        let collected = Collected()
-        let group = DispatchGroup()
-        for (pipe, isError) in [(output, false), (errors, true)] {
-            group.enter()
-            DispatchQueue.global(qos: .userInitiated).async {
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                collected.store(data, isError: isError)
-                group.leave()
-            }
-        }
-
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline {
-            usleep(50_000)
-        }
-
-        var timedOut = false
-        if process.isRunning {
-            timedOut = true
-            kill(process)
-        }
-
-        /// The process has exited, so both read ends are at EOF and the
-        /// drains are about to finish; the bound only guards a stuck reader.
-        _ = group.wait(timeout: .now() + 2)
 
         return try result(
-            status: timedOut ? nil : process.terminationStatus,
-            stdout: collected.text(isError: false),
-            stderr: collected.text(isError: true),
+            status: run.status,
+            stdout: run.stdout,
+            stderr: run.stderr,
             timeout: timeout
         )
     }
@@ -182,73 +146,5 @@ enum PrettierRunner {
         let out = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if !out.isEmpty { return out }
         return "prettier failed without saying why."
-    }
-
-    // MARK: Private
-
-    /// Both output streams, written from two queues and read from a third.
-    private final class Collected: @unchecked Sendable {
-        private let lock = NSLock()
-        private var out = Data()
-        private var err = Data()
-
-        func store(_ data: Data, isError: Bool) {
-            lock.lock()
-            defer { lock.unlock() }
-            if isError { err = data } else { out = data }
-        }
-
-        func text(isError: Bool) -> String {
-            lock.lock()
-            defer { lock.unlock() }
-            return String(data: isError ? err : out, encoding: .utf8) ?? ""
-        }
-    }
-
-    /// Writes the whole buffer to the child and closes the pipe, which is what
-    /// tells Prettier the input has ended — without it, Prettier waits and we
-    /// time out.
-    ///
-    /// Written through the descriptor rather than `FileHandle.write(_:)`
-    /// because of what happens when the child is already gone: Prettier
-    /// rejecting its arguments exits before reading a byte, and writing into
-    /// that pipe raises `SIGPIPE`, whose default disposition terminates the
-    /// process — the whole app, killed by a mistyped flag. `F_SETNOSIGPIPE`
-    /// turns that into an `EPIPE` return this loop can simply stop on.
-    private static func send(_ data: Data, to handle: FileHandle) {
-        let descriptor = handle.fileDescriptor
-        _ = fcntl(descriptor, F_SETNOSIGPIPE, 1)
-        defer { try? handle.close() }
-
-        data.withUnsafeBytes { raw in
-            guard var pointer = raw.baseAddress else { return }
-            var remaining = raw.count
-            while remaining > 0 {
-                let written = Darwin.write(descriptor, pointer, remaining)
-                if written < 0 {
-                    if errno == EINTR { continue }
-                    return
-                }
-                if written == 0 { return }
-                pointer = pointer.advanced(by: written)
-                remaining -= written
-            }
-        }
-    }
-
-    /// Ends a run that outlived its deadline, and makes sure it ended.
-    ///
-    /// `terminate()` is `SIGTERM`, which a Node process under a shell wrapper
-    /// is free to ignore — and `node_modules/.bin/prettier` is a wrapper.
-    /// `SIGKILL` cannot be caught.
-    private static func kill(_ process: Process) {
-        process.terminate()
-        let deadline = Date().addingTimeInterval(0.5)
-        while process.isRunning, Date() < deadline {
-            usleep(50_000)
-        }
-        if process.isRunning {
-            Foundation.kill(process.processIdentifier, SIGKILL)
-        }
     }
 }
