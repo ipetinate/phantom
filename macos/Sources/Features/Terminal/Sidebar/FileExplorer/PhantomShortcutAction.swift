@@ -52,6 +52,8 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
     case findReferences
     case renameSymbol
     case formatDocument
+    case moveLineUp
+    case moveLineDown
 
     var id: String { rawValue }
 
@@ -75,6 +77,8 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         case .findReferences: return "Find All References"
         case .renameSymbol: return "Rename Symbol"
         case .formatDocument: return "Format Document"
+        case .moveLineUp: return "Move Line Up"
+        case .moveLineDown: return "Move Line Down"
         }
     }
 
@@ -91,6 +95,8 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         case .findReferences: return "Lists everywhere the symbol under the caret is used"
         case .renameSymbol: return "Renames the symbol under the caret across the project"
         case .formatDocument: return "Formats the focused file"
+        case .moveLineUp: return "Swaps the caret's line — or every selected line — with the one above"
+        case .moveLineDown: return "Swaps the caret's line — or every selected line — with the one below"
         }
     }
 
@@ -119,6 +125,15 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         case .findReferences: return [PhantomShortcut(key: "g", modifiers: [.command, .control])]
         case .renameSymbol: return [PhantomShortcut(key: "r", modifiers: [.command, .control])]
         case .formatDocument: return [PhantomShortcut(key: "f", modifiers: [.command, .shift])]
+
+        /// ⇧⌥↑ and ⇧⌥↓, which is what was asked for. Nothing else claims
+        /// them: not the terminal's own bindings, not the main menu, and not
+        /// the completion list — which answers to bare arrows only, and only
+        /// while it is open.
+        case .moveLineUp:
+            return [PhantomShortcut(key: PhantomShortcut.upArrow, modifiers: [.shift, .option])]
+        case .moveLineDown:
+            return [PhantomShortcut(key: PhantomShortcut.downArrow, modifiers: [.shift, .option])]
         }
     }
 

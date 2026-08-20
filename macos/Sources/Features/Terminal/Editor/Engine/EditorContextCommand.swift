@@ -17,15 +17,19 @@ struct EditorShortcut: Equatable, Sendable {
 
     /// Whether an event is this combination.
     ///
-    /// Compared against the device-independent flags only: an event carries
-    /// caps lock, numeric pad and function-key bits that no binding means,
-    /// and comparing raw would make a shortcut stop working on a keyboard
-    /// that sets one of them.
+    /// Narrowed to the four modifiers a binding can name, and not to
+    /// `deviceIndependentFlagsMask` as it was: that mask *includes* caps lock,
+    /// the numeric pad bit and the function-key bit, so an equality against it
+    /// failed on every event that carried one. Two consequences, both real —
+    /// no remapped shortcut worked while caps lock was down, and an arrow key,
+    /// which always sets the function bit, could not be bound at all.
     func matches(_ event: NSEvent) -> Bool {
         guard !key.isEmpty else { return false }
         guard event.charactersIgnoringModifiers?.lowercased() == key else { return false }
-        return event.modifierFlags.intersection(.deviceIndependentFlagsMask) == modifiers
+        return event.modifierFlags.intersection(Self.bindable) == modifiers.intersection(Self.bindable)
     }
+
+    private static let bindable: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
 }
 
 /// A command the editor's right-click menu offers.

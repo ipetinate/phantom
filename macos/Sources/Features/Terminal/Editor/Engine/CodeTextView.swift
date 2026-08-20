@@ -1893,6 +1893,23 @@ final class CodeNSTextView: NSTextView {
             complete(nil)
             return
         }
+
+        /// The reader's own bindings again, for whatever
+        /// `performKeyEquivalent` did not get to see — the comment above says
+        /// that method only observes ⌘ combinations, and a binding on ⇧⌥↑ has
+        /// to work either way round. Running it here cannot double up: this
+        /// method is only reached at all when `performKeyEquivalent` answered
+        /// false.
+        ///
+        /// Only for presses carrying option, control or command. Shift alone
+        /// is how capitals are typed, and a bare key is how everything else
+        /// is — swallowing either would turn a stray binding into a text view
+        /// that cannot type.
+        if !modifiers.isDisjoint(with: [.option, .control, .command]),
+           let id = boundCommand(for: event), runCommand(id) {
+            return
+        }
+
         super.keyDown(with: event)
     }
 
@@ -2989,10 +3006,35 @@ final class CodeNSTextView: NSTextView {
         case "formatDocument":
             guard let onFormat else { return false }
             onFormat()
+        case "moveLineUp":
+            moveSelectedLines(.up)
+        case "moveLineDown":
+            moveSelectedLines(.down)
         default:
             return false
         }
         return true
+    }
+
+    /// Swaps the caret's line — or every line the selection touches — with its
+    /// neighbour.
+    ///
+    /// Through `insertText` with a replacement range, for the reason
+    /// `insertNewline` gives: one undo step for the whole move and one
+    /// `didChange` for the language server, instead of a delete and an insert
+    /// the reader has to undo twice.
+    ///
+    /// A move with nowhere to go is still this view's key to swallow. Falling
+    /// through at the top or bottom of a file would hand ⇧⌥↑ back to AppKit,
+    /// which reads it as "extend the selection by a paragraph" — so holding the
+    /// shortcut would stop moving lines and start selecting them.
+    private func moveSelectedLines(_ direction: CodeLineMove.Direction) {
+        guard let move = CodeLineMove.move(
+            in: string as NSString, selection: selectedRange(), direction: direction)
+        else { return }
+
+        insertText(move.text, replacementRange: move.replacement)
+        setSelectedRange(move.selection)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

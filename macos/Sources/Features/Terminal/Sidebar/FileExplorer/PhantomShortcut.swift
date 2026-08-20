@@ -58,8 +58,33 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
             .filter { modifiers.contains($0) }
             .map(\.symbol)
             .joined()
-        return prefix + key.uppercased()
+        return prefix + keyLabel
     }
+
+    /// The key as somebody can read it.
+    ///
+    /// An arrow key reports a character in the private use area, which is a
+    /// perfectly good key to store and to match on but draws as a missing
+    /// glyph — an empty box where ↑ belongs. Only the four arrows are named
+    /// because they are the only function keys anything here binds; the rest
+    /// would be guesses.
+    private var keyLabel: String {
+        Self.functionKeyNames[key] ?? key.uppercased()
+    }
+
+    /// What an arrow key actually reports, which is what has to be stored and
+    /// compared — the glyph is for the reader alone.
+    static let upArrow = String(UnicodeScalar(NSUpArrowFunctionKey)!)
+    static let downArrow = String(UnicodeScalar(NSDownArrowFunctionKey)!)
+    static let leftArrow = String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+    static let rightArrow = String(UnicodeScalar(NSRightArrowFunctionKey)!)
+
+    private static let functionKeyNames: [String: String] = [
+        upArrow: "↑",
+        downArrow: "↓",
+        leftArrow: "←",
+        rightArrow: "→",
+    ]
 
     /// The stable form persisted and read back: "shift+command+n".
     var serialized: String {
