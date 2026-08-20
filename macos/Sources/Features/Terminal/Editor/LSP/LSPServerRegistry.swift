@@ -282,31 +282,31 @@ enum LSPServerRegistry {
     static let all: [LSPServerDefinition] = [
         LSPServerDefinition(
             languageID: "typescript",
-            displayName: "TypeScript Language Server",
+            displayName: "TypeScript (npm)",
             command: "typescript-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g typescript-language-server typescript@6"
+            installHint: "npm i -g typescript-language-server"
         ),
         LSPServerDefinition(
             languageID: "typescriptreact",
-            displayName: "TypeScript Language Server",
+            displayName: "TypeScript (npm)",
             command: "typescript-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g typescript-language-server typescript@6"
+            installHint: "npm i -g typescript-language-server"
         ),
         LSPServerDefinition(
             languageID: "javascript",
-            displayName: "TypeScript Language Server",
+            displayName: "TypeScript (npm)",
             command: "typescript-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g typescript-language-server typescript@6"
+            installHint: "npm i -g typescript-language-server"
         ),
         LSPServerDefinition(
             languageID: "javascriptreact",
-            displayName: "TypeScript Language Server",
+            displayName: "TypeScript (npm)",
             command: "typescript-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g typescript-language-server typescript@6"
+            installHint: "npm i -g typescript-language-server"
         ),
         LSPServerDefinition(
             languageID: "vue",
@@ -492,28 +492,28 @@ enum LSPServerRegistry {
     static let nativeServers: [LSPServerDefinition] = [
         LSPServerDefinition(
             languageID: "typescript",
-            displayName: "TypeScript (native)",
+            displayName: "TypeScript 7 (Go)",
             command: "tsc",
             arguments: ["--lsp", "--stdio"],
             installHint: "npm i -g typescript"
         ),
         LSPServerDefinition(
             languageID: "typescriptreact",
-            displayName: "TypeScript (native)",
+            displayName: "TypeScript 7 (Go)",
             command: "tsc",
             arguments: ["--lsp", "--stdio"],
             installHint: "npm i -g typescript"
         ),
         LSPServerDefinition(
             languageID: "javascript",
-            displayName: "TypeScript (native)",
+            displayName: "TypeScript 7 (Go)",
             command: "tsc",
             arguments: ["--lsp", "--stdio"],
             installHint: "npm i -g typescript"
         ),
         LSPServerDefinition(
             languageID: "javascriptreact",
-            displayName: "TypeScript (native)",
+            displayName: "TypeScript 7 (Go)",
             command: "tsc",
             arguments: ["--lsp", "--stdio"],
             installHint: "npm i -g typescript"
@@ -730,10 +730,10 @@ enum LSPServerRegistry {
     /// root, different command — instead of colliding with the Vue server.
     static let vueTypeScriptServer = LSPServerDefinition(
         languageID: "vue",
-        displayName: "TypeScript Language Server",
+        displayName: "TypeScript (npm)",
         command: "typescript-language-server",
         arguments: ["--stdio"],
-        installHint: "npm i -g typescript-language-server typescript@6",
+        installHint: "npm i -g typescript-language-server",
         initializationOptionsKind: .vueTypeScriptPlugin
     )
 

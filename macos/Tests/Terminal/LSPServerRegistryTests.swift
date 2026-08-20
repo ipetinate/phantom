@@ -260,3 +260,71 @@ struct LanguageIconAssetTests {
         #expect(LSPServerRegistry.server(forLanguage: "html")?.languageIconName == "Lang-html")
     }
 }
+
+/// The two TypeScript rows, which are two because a project's TypeScript
+/// decides which server can serve it, and a reader has to be able to tell them
+/// apart and install either one.
+struct TypeScriptRowTests {
+    private var wrapper: LSPServerDefinition? {
+        LSPServerRegistry.distinctServers.first { $0.command == "typescript-language-server" }
+    }
+
+    private var native: LSPServerDefinition? {
+        LSPServerRegistry.distinctServers.first { $0.command == "tsc" }
+    }
+
+    @Test func bothAreListedAndSayWhichTheyAre() throws {
+        let wrapper = try #require(wrapper)
+        let native = try #require(native)
+
+        #expect(wrapper.displayName != native.displayName)
+        #expect(native.displayName.contains("7"), "\(native.displayName)")
+        #expect(native.displayName.contains("Go"), "\(native.displayName)")
+        #expect(wrapper.displayName.contains("npm"), "\(wrapper.displayName)")
+    }
+
+    /// **The crossing that was reported.** The wrapper's install used to carry
+    /// a global `typescript@6`, and the native server *is* the `typescript`
+    /// package at 7 — so installing either row changed the other, and
+    /// uninstalling one could take the other's TypeScript with it.
+    @Test func theirPackagesDoNotOverlap() throws {
+        let wrapper = try #require(wrapper)
+        let native = try #require(native)
+
+        func packages(_ command: String?) -> Set<String> {
+            guard let command else { return [] }
+            let words = command.split(separator: " ").map(String.init)
+            return Set(words.dropFirst(3).map { $0.split(separator: "@").first.map(String.init) ?? $0 })
+        }
+
+        let wrapperPackages = packages(wrapper.installCommand).union(packages(wrapper.uninstallCommand))
+        let nativePackages = packages(native.installCommand).union(packages(native.uninstallCommand))
+
+        #expect(!wrapperPackages.isEmpty)
+        #expect(!nativePackages.isEmpty)
+        #expect(
+            wrapperPackages.isDisjoint(with: nativePackages),
+            "\(wrapperPackages) overlaps \(nativePackages)"
+        )
+    }
+
+    /// A row with a dependency plan draws the multi-package popover *and* an
+    /// Uninstall button beside it. Neither TypeScript row wants that: each is
+    /// one package, installed and removed on its own.
+    @Test func neitherRowNeedsTheMultiPackagePopover() throws {
+        #expect(try #require(wrapper).dependencyPlan == nil)
+        #expect(try #require(native).dependencyPlan == nil)
+    }
+
+    /// Both installed is a normal state, not a conflict: which one serves a
+    /// file is decided per project by whether it has a `tsserver.js`.
+    @Test func bothInstalledIsNotAConflict() {
+        let withLocal = TypeScriptToolchain.tsserver(path: "/p/node_modules/typescript/lib/tsserver.js")
+
+        let served = LSPServerRegistry.servers(forPath: "/p/a.ts", toolchain: withLocal, tailwind: .absent)
+        #expect(served.map(\.command) == ["typescript-language-server"])
+
+        let alone = LSPServerRegistry.servers(forPath: "/p/a.ts", toolchain: .native, tailwind: .absent)
+        #expect(alone.map(\.command) == ["tsc"])
+    }
+}
