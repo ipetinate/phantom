@@ -156,21 +156,29 @@ struct CodeClassAttributeTests {
     /// inherent rather than lazy: knowing whether the caret is in a class
     /// attribute at all requires reaching the attribute.
     ///
-    /// So the budget is stated at two sizes. A `className` with forty
-    /// utilities — long by the standards of real markup — is the one that has
-    /// to be free.
-    @Test func isFreeOnARealisticAttribute() {
-        let each = perScan(line(classes: 20))
-        #expect(each < .microseconds(10), "\(each) per scan")
+    /// So what is asserted is that shape, not a duration. Twenty times the
+    /// classes may cost twenty times as much; four hundred times says the walk
+    /// grew a walk inside it. A wall-clock budget here would be a bet on the
+    /// speed of whichever machine happens to run the suite — CI is a shared
+    /// runner, and the ranking tests next door failed exactly that bet.
+    ///
+    /// Reference numbers on this machine: ~2 µs for a twenty-class attribute,
+    /// ~56 µs for a four-hundred-class one, against the ~12 µs the highlighter
+    /// already spends per keystroke and the 2.7 ms that got `SFCRegions` ruled
+    /// out of this path entirely.
+    @Test func costGrowsWithTheAttributeAndNotFasterThanThat() {
+        let short = line(classes: 20)
+        let long = line(classes: 400)
+
+        let one = perScan(short)
+        let twenty = perScan(long, iterations: 200)
+
+        #expect(twenty < one * 100, "20× the classes cost \(twenty) against \(one)")
     }
 
-    /// And an absurd one still has to be affordable rather than merely
-    /// bounded. Measured at ~56 µs for an 800-class attribute — 0.3% of a
-    /// frame, against the ~12 µs the highlighter already spends per keystroke
-    /// and the 2.7 ms that got `SFCRegions` ruled out of this path entirely.
-    /// The number is here so that a change making it quadratic is loud.
-    @Test func staysAffordableOnAnAbsurdAttribute() {
-        let each = perScan(line(classes: 400), iterations: 200)
-        #expect(each < .microseconds(400), "\(each) per scan")
+    /// And an absolute ceiling loose enough for any machine: this runs on the
+    /// keystroke path, so a millisecond is already a different feature.
+    @Test func staysUnderAMillisecondEvenAbsurdly() {
+        #expect(perScan(line(classes: 400), iterations: 200) < .milliseconds(1))
     }
 }
