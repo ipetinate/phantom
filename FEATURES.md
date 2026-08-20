@@ -1,7 +1,7 @@
 # Phantom features
 
 What Phantom adds to Ghostty, and where each piece stands. Current version:
-`0.8.0-dev`. Latest release: `v0.7.0`.
+`0.8.0-beta`. Latest release: `v0.7.0`.
 
 ## What comes from Ghostty
 
@@ -41,7 +41,7 @@ and not a new app.
 | Git | Diff, split horizontal and vertical | Shipped | v0.6.0 |
 | Git | File context menu | Shipped | v0.7.0 |
 | Git | Add to .gitignore, tracked files included | Shipped | v0.7.0 |
-| Git | Branch review: commits and files against the base | Unverified | 0.8.0-dev |
+| Git | Branch review: commits and files against the base | Unverified | 0.8.0-beta |
 | Git | Search inside the git panel | Planned | — |
 | Git | Worktrees | Planned | — |
 | Files | File explorer with a directory watcher | Shipped | v0.2.0 |
@@ -59,10 +59,10 @@ and not a new app.
 | Editor | Markdown snippets on `/` | Shipped | v0.7.0 |
 | Editor | Format with the project's Prettier, and on save | Shipped | v0.7.0 |
 | Editor | Context menu built from the available commands | Shipped | v0.7.0 |
-| Editor | Undo and redo, by menu and by ⌘Z | Unreleased | 0.8.0-dev |
-| Editor | Thin overlay scrollbars | Unreleased | 0.8.0-dev |
-| Editor | Return keeps the line's indentation | Unreleased | 0.8.0-dev |
-| Editor | Return continues a Markdown list, and ends an empty one | Unreleased | 0.8.0-dev |
+| Editor | Undo and redo, by menu and by ⌘Z | Unreleased | 0.8.0-beta |
+| Editor | Thin overlay scrollbars | Unreleased | 0.8.0-beta |
+| Editor | Return keeps the line's indentation | Unreleased | 0.8.0-beta |
+| Editor | Return continues a Markdown list, and ends an empty one | Unreleased | 0.8.0-beta |
 | Editor | Scroll sync between raw and rendered Markdown | Unverified | v0.6.0 |
 | Editor | Move line, multi-cursor | Planned | — |
 | Editor | Image, PDF and CSV viewers | Planned | — |
@@ -72,13 +72,13 @@ and not a new app.
 | Language | Documentation panel beside the list | Shipped | v0.5.0 |
 | Language | Language extensions from a manifest | Shipped | v0.5.0 |
 | Language | More than one server per file | Shipped | v0.5.0 |
-| Language | Tailwind classes inside class attributes | Unverified | 0.8.0-dev |
+| Language | Tailwind classes inside class attributes | Unverified | 0.8.0-beta |
 | Language | CSS completion inside a template literal | Planned | — |
 | Settings | Appearance, theme browser, font picker | Shipped | v0.2.0 |
 | Settings | App icon | Shipped | v0.2.0 |
 | Settings | Files and editor | Shipped | v0.2.0 |
 | Settings | Language servers, with install and uninstall | Shipped | v0.3.0 |
-| Settings | Both TypeScript servers listed apart, installed on their own | Unreleased | 0.8.0-dev |
+| Settings | Both TypeScript servers listed apart, installed on their own | Unreleased | 0.8.0-beta |
 | Settings | Keyboard shortcuts, with collision warnings | Shipped | v0.4.0 |
 | Settings | Completion, globally and per language | Shipped | v0.5.0 |
 
