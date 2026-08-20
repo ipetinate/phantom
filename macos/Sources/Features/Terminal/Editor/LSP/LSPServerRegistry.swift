@@ -127,7 +127,13 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
             return .compiled
         case "vscode-html-language-server", "marksman":
             return .markup
-        case "vscode-css-language-server":
+        case "vscode-css-language-server", LSPServerRegistry.tailwindCommand:
+            /// Tailwind sits with CSS rather than with the script servers it
+            /// shares language ids with: what it completes is a stylesheet's
+            /// vocabulary, and the reader looking for it is looking for the
+            /// styling tool. Without this it fell to the `default` below and
+            /// listed itself under Script, which is where the comment there
+            /// says an unclassified server ends up.
             return .styles
         case "vscode-json-language-server", "yaml-language-server":
             return .data

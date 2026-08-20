@@ -127,6 +127,15 @@ struct TailwindProjectTests {
         #expect(rows.count == 1)
     }
 
+    /// It lists with CSS, not with the script servers whose language ids it
+    /// shares. The `category` switch has a `default` that answers `.script`,
+    /// so a server nobody classified lands in the wrong section quietly.
+    @Test func listsUnderStyles() {
+        let tailwind = LSPServerRegistry.tailwindServer(forLanguage: "typescriptreact")
+        #expect(tailwind?.category == .styles)
+        #expect(LSPServerRegistry.tailwindServers.allSatisfy { $0.category == .styles })
+    }
+
     /// `byLanguageID` must still answer with the server that completes the
     /// language itself. Tailwind repeats ids that `all` already has, which is
     /// why it is a table of its own.
