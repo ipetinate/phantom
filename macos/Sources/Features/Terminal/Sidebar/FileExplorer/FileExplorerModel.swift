@@ -390,9 +390,19 @@ final class FileExplorerModel: ObservableObject {
         openFolders(Self.ancestorsToOpen(revealing: directory, under: root.path) + [directory])
     }
 
+    /// Whether `path` is the root itself or sits under it.
+    ///
+    /// The separator has to be dropped when the root is the disk, because it
+    /// already ends in one: `"//"` is a prefix no path has, so a workspace
+    /// rooted at `/` answered "outside" for every path in it. That took the
+    /// highlight and the create field with it, while `expandAncestors(of:)`
+    /// went on working — it asks `ancestorsToOpen(revealing:under:)`, which
+    /// has always spelled the boundary correctly — and a tree that revealed
+    /// the open file but refused to reveal the terminal's folder is not where
+    /// anybody would look for a broken prefix.
     private func isInsideRoot(_ path: String) -> Bool {
-        guard let root else { return false }
-        return path == root.path || path.hasPrefix(root.path + "/")
+        guard let root = root?.path else { return false }
+        return path == root || path.hasPrefix(root == "/" ? "/" : root + "/")
     }
 
     /// Creates inside wherever the selection points, or the root.
