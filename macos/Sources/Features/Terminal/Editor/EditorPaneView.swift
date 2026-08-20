@@ -403,9 +403,15 @@ private struct DocumentView: View {
     /// the preview and the diff have no minimap at all. Insetting
     /// unconditionally would leave the control floating in from the edge on
     /// every one of those.
-    private var controlInsetFromMinimap: CGFloat {
+    private var controlTrailingInset: CGFloat {
         let showsSource = presentationOptions.nearest(to: document.presentation) == .source
-        return showsSource && configuration.showsMinimap ? CodeTextView.minimapColumnWidth : 0
+        let minimap = showsSource && configuration.showsMinimap ? CodeTextView.minimapColumnWidth : 0
+
+        /// Plus the scroller, always. Every pane this control floats over has
+        /// a vertical one, and the control used to sit directly on top of it —
+        /// which was invisible while the bar was faded out and then covered the
+        /// knob the moment somebody scrolled.
+        return minimap + ThinScroller.trackWidth
     }
 
     private var presentationControl: some View {
@@ -559,7 +565,7 @@ private struct DocumentView: View {
                 /// the first.
                 if drawsControlOverContent {
                     presentationControl
-                        .padding(.trailing, controlInsetFromMinimap)
+                        .padding(.trailing, controlTrailingInset)
                 }
             }
         }

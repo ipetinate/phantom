@@ -190,6 +190,7 @@ struct CodeTextView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
+        scrollView.useThinScrollers()
         scrollView.documentView = textView
 
         onScrollViewReady?(scrollView)
