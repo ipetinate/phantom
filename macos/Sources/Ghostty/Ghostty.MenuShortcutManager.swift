@@ -20,16 +20,23 @@ extension Ghostty {
 
         /// Syncs a single menu shortcut for the given action. The action string is the same
         /// action string used for the Ghostty configuration.
-        /// - Parameter fallback: what to use when the configuration has no
-        ///   answer. Supplied for the standard editing commands, whose menu
-        ///   action works through the first responder whether or not the
-        ///   terminal binds the same keys.
-        func syncMenuShortcut(
-            _ config: Ghostty.Config,
-            action: String?,
-            menuItem: NSMenuItem?,
-            fallback: (key: String, modifiers: NSEvent.ModifierFlags)? = nil
-        ) {
+        /// The shortcut macOS gives each standard editing command, used when
+        /// the configuration has no answer for it.
+        ///
+        /// These four are here and nothing else is, because these are the ones
+        /// whose menu action goes to the **first responder**: they do the right
+        /// thing in a text view and in a terminal alike, so supplying a
+        /// shortcut cannot make the menu advertise something that does not
+        /// work. A Ghostty-only action — Split Right, say — has nothing to fall
+        /// back to and should keep clearing.
+        static let standardEditingShortcuts: [String: (key: String, modifiers: NSEvent.ModifierFlags)] = [
+            "undo": ("z", .command),
+            "redo": ("z", [.command, .shift]),
+            "copy_to_clipboard": ("c", .command),
+            "paste_from_clipboard": ("v", .command),
+        ]
+
+        func syncMenuShortcut(_ config: Ghostty.Config, action: String?, menuItem: NSMenuItem?) {
             guard let menu = menuItem else { return }
             guard !updateMenuShortcut(config, action: action, menuItem: menu) else { return }
 
@@ -49,6 +56,7 @@ extension Ghostty {
             /// the editor through the first responder. Only the keystroke was
             /// missing, which is why two earlier attempts at this bug examined
             /// the action and found nothing wrong with it.
+            let fallback = action.flatMap { Self.standardEditingShortcuts[$0] }
             menu.keyEquivalent = fallback?.key ?? ""
             menu.keyEquivalentModifierMask = fallback?.modifiers ?? []
         }

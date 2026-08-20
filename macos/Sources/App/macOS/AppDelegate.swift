@@ -1313,19 +1313,13 @@ extension AppDelegate {
         syncMenuShortcut(config, action: "new_split:down", menuItem: self.menuSplitDown)
         syncMenuShortcut(config, action: "new_split:up", menuItem: self.menuSplitUp)
 
-        /// The five that carry a macOS-standard shortcut as their fallback.
-        /// Each one's menu action goes to the first responder, so it does the
-        /// right thing in a text view and in a terminal alike — and the
-        /// terminal claims these keys in its own `performKeyEquivalent`
-        /// before the menu is ever consulted, so nothing here takes a
-        /// keystroke away from it.
-        syncMenuShortcut(config, action: "undo", menuItem: self.menuUndo, fallback: ("z", .command))
-        syncMenuShortcut(
-            config, action: "redo", menuItem: self.menuRedo, fallback: ("z", [.command, .shift]))
-        syncMenuShortcut(
-            config, action: "copy_to_clipboard", menuItem: self.menuCopy, fallback: ("c", .command))
-        syncMenuShortcut(
-            config, action: "paste_from_clipboard", menuItem: self.menuPaste, fallback: ("v", .command))
+        /// These four keep a macOS-standard shortcut when the configuration
+        /// has no answer for them — see
+        /// `MenuShortcutManager.standardEditingShortcuts`.
+        syncMenuShortcut(config, action: "undo", menuItem: self.menuUndo)
+        syncMenuShortcut(config, action: "redo", menuItem: self.menuRedo)
+        syncMenuShortcut(config, action: "copy_to_clipboard", menuItem: self.menuCopy)
+        syncMenuShortcut(config, action: "paste_from_clipboard", menuItem: self.menuPaste)
         syncMenuShortcut(config, action: "paste_from_selection", menuItem: self.menuPasteSelection)
         syncMenuShortcut(config, action: "select_all", menuItem: self.menuSelectAll)
         syncMenuShortcut(config, action: "start_search", menuItem: self.menuFind)
@@ -1372,17 +1366,8 @@ extension AppDelegate {
         reloadDockMenu()
     }
 
-    @MainActor private func syncMenuShortcut(
-        _ config: Ghostty.Config,
-        action: String,
-        menuItem: NSMenuItem?,
-        fallback: (key: String, modifiers: NSEvent.ModifierFlags)? = nil
-    ) {
-        menuShortcutManager.syncMenuShortcut(
-            config,
-            action: action,
-            menuItem: menuItem,
-            fallback: fallback)
+    @MainActor private func syncMenuShortcut(_ config: Ghostty.Config, action: String, menuItem: NSMenuItem?) {
+        menuShortcutManager.syncMenuShortcut(config, action: action, menuItem: menuItem)
     }
 
     @MainActor func performGhosttyBindingMenuKeyEquivalent(with event: NSEvent) -> Bool {
