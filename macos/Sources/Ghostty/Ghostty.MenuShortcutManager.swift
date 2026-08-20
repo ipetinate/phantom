@@ -20,13 +20,37 @@ extension Ghostty {
 
         /// Syncs a single menu shortcut for the given action. The action string is the same
         /// action string used for the Ghostty configuration.
-        func syncMenuShortcut(_ config: Ghostty.Config, action: String?, menuItem: NSMenuItem?) {
+        /// - Parameter fallback: what to use when the configuration has no
+        ///   answer. Supplied for the standard editing commands, whose menu
+        ///   action works through the first responder whether or not the
+        ///   terminal binds the same keys.
+        func syncMenuShortcut(
+            _ config: Ghostty.Config,
+            action: String?,
+            menuItem: NSMenuItem?,
+            fallback: (key: String, modifiers: NSEvent.ModifierFlags)? = nil
+        ) {
             guard let menu = menuItem else { return }
+            guard !updateMenuShortcut(config, action: action, menuItem: menu) else { return }
 
-            if !updateMenuShortcut(config, action: action, menuItem: menu) {
-                menu.keyEquivalent = ""
-                menu.keyEquivalentModifierMask = []
-            }
+            /// **This is where ⌘Z went.** `keyboardShortcut(for:)` answers nil
+            /// for an action bound more than once, and `undo` is bound twice by
+            /// default — `super+z` and `super+shift+t`. Clearing on that nil
+            /// left the item with no shortcut at all, and the nib ships none
+            /// of its own: `MainMenu.xib` gives Undo the `undo:` action and an
+            /// empty modifier mask, expecting this sync to supply the keys.
+            ///
+            /// Measured through the accessibility API on a running build:
+            /// every synced item whose action has two bindings — Undo, Copy,
+            /// Paste — reported no command character, while Select All, whose
+            /// action has one, kept its ⌘A.
+            ///
+            /// The item still *worked* when clicked, because `undo:` reaches
+            /// the editor through the first responder. Only the keystroke was
+            /// missing, which is why two earlier attempts at this bug examined
+            /// the action and found nothing wrong with it.
+            menu.keyEquivalent = fallback?.key ?? ""
+            menu.keyEquivalentModifierMask = fallback?.modifiers ?? []
         }
 
         /// Attempts to perform a menu key equivalent only for menu items that represent
