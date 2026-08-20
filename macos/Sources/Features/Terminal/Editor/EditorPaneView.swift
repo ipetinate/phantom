@@ -118,6 +118,13 @@ struct EditorPaneView: View {
                 }
             )
             .id(document.id)
+        } else if let media = center.selected?.media {
+            /// A media tab has no `DocumentView`, and that is what keeps a
+            /// PDF out of reach of `didOpen`, of the dirty flag and of
+            /// `save()` — none of that machinery is built for it in the first
+            /// place.
+            MediaPaneView(document: media, theme: theme)
+                .id(media.id)
         } else {
             Color.clear
         }

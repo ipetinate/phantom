@@ -45,6 +45,18 @@ enum FileOpenGuard {
     /// it — and small enough that loading never blocks noticeably.
     static let maxBytes = 10 * 1024 * 1024
 
+    /// Past this a media file is declined too, and it is a different number
+    /// on purpose.
+    ///
+    /// `maxBytes` is calibrated for text, where the cost is decoding the whole
+    /// file into an `NSTextStorage` and highlighting it. A viewer pays almost
+    /// none of that — `PDFView` renders pages lazily and `NSImageView` holds
+    /// one decoded bitmap — while the files are routinely bigger: a Retina
+    /// screenshot is several megabytes, a phone photo fifteen, a scanned
+    /// contract forty. Ten megabytes would refuse ordinary files for a cost
+    /// that is not being paid.
+    static let maxMediaBytes = 128 * 1024 * 1024
+
     /// How much of the file to inspect when deciding whether it is text.
     ///
     /// A prefix rather than the whole file: this runs before opening, and
@@ -60,6 +72,20 @@ enum FileOpenGuard {
         if size > maxBytes { return .tooLarge(bytes: size) }
         if prefix.contains(0) { return .binary }
         return .open
+    }
+
+    /// Size is the only thing that can refuse a media file.
+    ///
+    /// No sniff: a NUL in the first few bytes is what an image *is*. Running
+    /// the text guard over a PNG is how they came to be refused as binaries in
+    /// the first place.
+    static func mediaVerdict(size: Int) -> Verdict {
+        size > maxMediaBytes ? .tooLarge(bytes: size) : .open
+    }
+
+    static func mediaVerdict(for url: URL) -> Verdict {
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        return mediaVerdict(size: size)
     }
 
     /// Reads just enough of `url` to decide.

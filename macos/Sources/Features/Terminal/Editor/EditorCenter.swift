@@ -17,6 +17,16 @@ final class EditorCenter: ObservableObject {
     /// and selection is testable without a file existing.
     @Published private(set) var documents: [String: EditorDocument] = [:]
 
+    /// Open media files, by path.
+    ///
+    /// A second map rather than one map of something that could be either.
+    /// Two homogeneous maps mean `saveAll` iterating `documents.values` can
+    /// never reach a PDF, and the type system never offers `save()` on one —
+    /// where an enum over both kinds would put an arm to fill in at every
+    /// existing lookup, each one an invitation to write into a file that
+    /// cannot take it.
+    @Published private(set) var media: [String: MediaDocument] = [:]
+
     /// What the terminal's own tab is labelled with.
     ///
     /// Kept here rather than read from the window at render time because the
@@ -50,6 +60,28 @@ final class EditorCenter: ObservableObject {
         tabs.selectedPath.flatMap { documents[$0] }
     }
 
+    /// Which kind of thing the selected tab is, as a value the view merely
+    /// renders — so the routing can be asserted without a window.
+    enum OpenPane {
+        case text(EditorDocument)
+        case media(MediaDocument)
+
+        var text: EditorDocument? {
+            if case .text(let document) = self { return document } else { return nil }
+        }
+
+        var media: MediaDocument? {
+            if case .media(let document) = self { return document } else { return nil }
+        }
+    }
+
+    var selected: OpenPane? {
+        guard let path = tabs.selectedPath else { return nil }
+        if let document = documents[path] { return .text(document) }
+        if let document = media[path] { return .media(document) }
+        return nil
+    }
+
     /// The file to come back to when alternating away from the terminal.
     private var lastSelectedFile: String?
 
@@ -80,6 +112,17 @@ final class EditorCenter: ObservableObject {
         reviewBase: String? = nil
     ) -> Bool {
         let path = url.path
+
+        /// Before anything is read, and before the already-open check below,
+        /// which keys on the wrong map for a media file.
+        ///
+        /// `reveal`, `showing` and `reviewBase` are ignored rather than
+        /// stored: there is no caret to move and nothing to diff. Clicking a
+        /// PNG in the Git panel passes `.diff`, and it has to land on the
+        /// viewer anyway.
+        if let kind = EditorMediaKind.resolve(fileName: url.lastPathComponent) {
+            return openMedia(url, path: path, kind: kind)
+        }
 
         if let existing = documents[path] {
             if let reveal { existing.reveal = (id: UUID().uuidString, range: reveal) }
@@ -134,6 +177,32 @@ final class EditorCenter: ObservableObject {
         }
     }
 
+    /// Opens a media file: a tab, a viewer, and none of the machinery a text
+    /// document needs.
+    ///
+    /// No watcher, no dirty-dot observer and no `didOpen` — the absences are
+    /// the point. A language server has nothing to say about a PNG, and
+    /// `EditorTabSet` is keyed by path and knows nothing of documents, so the
+    /// tab, its label and its icon come out right with no work at all.
+    private func openMedia(_ url: URL, path: String, kind: EditorMediaKind) -> Bool {
+        if media[path] != nil {
+            tabs.select(path)
+            lastSelectedFile = path
+            return true
+        }
+
+        let verdict = FileOpenGuard.mediaVerdict(for: url)
+        guard verdict.canOpen else {
+            openFailure = OpenFailure(url: url, verdict: verdict)
+            return false
+        }
+
+        media[path] = MediaDocument(url: url, kind: kind)
+        tabs.open(path)
+        lastSelectedFile = path
+        return true
+    }
+
     /// A tab the reader tried to close while it still had edits.
     ///
     /// Raised instead of acting, so the *view* asks and this stays testable
@@ -172,6 +241,7 @@ final class EditorCenter: ObservableObject {
         documents[path]?.stopWatching()
         documents.removeValue(forKey: path)
         documentObservers.removeValue(forKey: path)
+        media.removeValue(forKey: path)
         tabs.close(path)
     }
 
@@ -193,6 +263,7 @@ final class EditorCenter: ObservableObject {
         documents.values.forEach { $0.stopWatching() }
         documents.removeAll()
         documentObservers.removeAll()
+        media.removeAll()
         tabs.closeAll()
     }
 
@@ -209,9 +280,14 @@ final class EditorCenter: ObservableObject {
     /// existed, watched a stale inode, and failed on save. A folder is not
     /// a document here, so it never matches by itself; the files under it
     /// are the ones that have to move.
-    private func documentPaths(under path: String) -> [String] {
+    /// Over both maps. Reading only `documents` here is how a media tab would
+    /// be left pointing at a path that no longer exists after its folder was
+    /// renamed — the exact bug the folder-repath tests were written for,
+    /// reopened for a new type.
+    private func openPaths(under path: String) -> [String] {
         let prefix = path + "/"
-        return documents.keys.filter { $0 == path || $0.hasPrefix(prefix) }
+        let paths = Array(documents.keys) + Array(media.keys)
+        return paths.filter { $0 == path || $0.hasPrefix(prefix) }
     }
 
     /// A file or folder renamed or moved in the file explorer while open
@@ -222,11 +298,15 @@ final class EditorCenter: ObservableObject {
     func repath(from oldPath: String, to newPath: String) {
         guard oldPath != newPath else { return }
 
-        for path in documentPaths(under: oldPath) {
+        for path in openPaths(under: oldPath) {
             let moved = path == oldPath
                 ? newPath
                 : newPath + String(path.dropFirst(oldPath.count))
-            repathDocument(from: path, to: moved)
+            if documents[path] != nil {
+                repathDocument(from: path, to: moved)
+            } else {
+                repathMedia(from: path, to: moved)
+            }
         }
     }
 
@@ -277,6 +357,27 @@ final class EditorCenter: ObservableObject {
         }
     }
 
+    /// Moves an open media tab, which is the whole of its bookkeeping: no
+    /// watcher to re-arm, no observer to rebind, and nothing to tell a
+    /// language server.
+    ///
+    /// The kind is resolved again from the new name, so renaming a `.png` to
+    /// `.pdf` shows a PDF. A rename *out* of media keeps the old kind rather
+    /// than converting the tab — the reader can close it and open it again,
+    /// and turning a viewer into an editor under them would be a stranger
+    /// answer than leaving it alone.
+    private func repathMedia(from oldPath: String, to newPath: String) {
+        guard let document = media.removeValue(forKey: oldPath) else { return }
+
+        let name = (newPath as NSString).lastPathComponent
+        media[newPath] = MediaDocument(
+            url: URL(fileURLWithPath: newPath),
+            kind: EditorMediaKind.resolve(fileName: name) ?? document.kind)
+
+        tabs.repath(from: oldPath, to: newPath)
+        if lastSelectedFile == oldPath { lastSelectedFile = newPath }
+    }
+
     /// A file or folder deleted in the file explorer stops being a tab, and
     /// the language server stops hearing about it.
     ///
@@ -284,8 +385,11 @@ final class EditorCenter: ObservableObject {
     /// tabs now point into the Trash, and leaving them open means the next
     /// save recreates a file in a directory the user just threw away.
     func didDelete(path: String) {
-        for open in documentPaths(under: path) {
-            LSPCenter.shared.didClose(path: open)
+        for open in openPaths(under: path) {
+            /// Only for the ones a server was ever told about. A media file
+            /// was never announced, and announcing its closure would be the
+            /// first the server ever heard of it.
+            if documents[open] != nil { LSPCenter.shared.didClose(path: open) }
             close(open)
         }
     }
