@@ -320,3 +320,117 @@ struct PrettierProjectTests {
         return url
     }
 }
+
+/// `package.yaml`, the twentieth name in Prettier's own list.
+///
+/// It was the one this app did not have. Checked against the official list at
+/// prettier.io/docs/configuration, which puts it at the same precedence as
+/// `package.json` — both are "the `prettier` key in a package manifest".
+struct PrettierPackageYAMLTests {
+    private func inTemporaryDirectory(_ body: (URL) throws -> Void) throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("prettier-yaml-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try body(root)
+    }
+
+    private func write(_ text: String, named name: String, in directory: URL) throws -> String {
+        let url = directory.appendingPathComponent(name)
+        try Data(text.utf8).write(to: url)
+        return url.path
+    }
+
+    @Test func aTopLevelPrettierKeyDeclaresTheProject() throws {
+        try inTemporaryDirectory { root in
+            let manifest = try write(
+                "name: x\nprettier:\n  semi: false\n",
+                named: "package.yaml",
+                in: root)
+
+            #expect(PrettierProject.configuration(in: root) == manifest)
+        }
+    }
+
+    /// The value may be a string naming another file, exactly as in
+    /// `package.json`. What is being asked is whether Prettier was declared.
+    @Test func theValueIsNotInspected() throws {
+        try inTemporaryDirectory { root in
+            _ = try write("prettier: ./my-config.json\n", named: "package.yaml", in: root)
+            #expect(PrettierProject.configuration(in: root) != nil)
+        }
+    }
+
+    /// The distinction JSON gives for free: a dev dependency is indented under
+    /// another key, and it is not a declaration that this project is
+    /// configured here. Reading it as one would reformat files in a repo that
+    /// merely has Prettier in its lockfile.
+    @Test func adependencyIsNotADeclaration() throws {
+        try inTemporaryDirectory { root in
+            _ = try write(
+                "name: x\ndevDependencies:\n  prettier: ^3.6.0\n  eslint: ^9\n",
+                named: "package.yaml",
+                in: root)
+
+            #expect(PrettierProject.configuration(in: root) == nil)
+        }
+    }
+
+    @Test(arguments: [
+        "prettier:",
+        "prettier: {}",
+        "prettier :",
+        "\"prettier\":",
+        "'prettier':",
+    ])
+    func theShapesThatCount(line: String) {
+        #expect(PrettierProject.declaresPrettierKey(line), "\(line)")
+    }
+
+    @Test(arguments: [
+        "  prettier:",
+        "\tprettier:",
+        "prettierrc:",
+        "prettier",
+        "my-prettier:",
+        "# prettier:",
+    ])
+    func theShapesThatDoNot(line: String) {
+        #expect(!PrettierProject.declaresPrettierKey(line), "\(line)")
+    }
+
+    /// `package.json` still wins when both are present, which is the order the
+    /// documentation lists them in.
+    @Test func packageJSONComesFirst() throws {
+        try inTemporaryDirectory { root in
+            let json = try write(#"{"prettier":{}}"#, named: "package.json", in: root)
+            _ = try write("prettier:\n", named: "package.yaml", in: root)
+
+            #expect(PrettierProject.configuration(in: root) == json)
+        }
+    }
+
+    /// Every name the documentation lists is one this app looks for. The count
+    /// is spelled out so adding a name to the table without adding it here
+    /// fails rather than passing quietly.
+    @Test func theWholeDocumentedListIsCovered() {
+        let dedicated = Set(PrettierProject.configurationNames)
+
+        for name in [
+            ".prettierrc",
+            ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml", ".prettierrc.json5",
+            ".prettierrc.js", "prettier.config.js", ".prettierrc.ts", "prettier.config.ts",
+            ".prettierrc.mjs", "prettier.config.mjs", ".prettierrc.mts", "prettier.config.mts",
+            ".prettierrc.cjs", "prettier.config.cjs", ".prettierrc.cts", "prettier.config.cts",
+            ".prettierrc.toml",
+        ] {
+            #expect(dedicated.contains(name), "\(name) is not looked for")
+        }
+
+        /// The two manifests are not in that list because their mere presence
+        /// means nothing — the `prettier` key is what counts.
+        #expect(dedicated.count == 18)
+        #expect(!dedicated.contains("package.json"))
+        #expect(!dedicated.contains("package.yaml"))
+    }
+}
