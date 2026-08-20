@@ -67,9 +67,25 @@ final class CodeTextStorage {
     /// that, deleting the closing `*/` of a comment would leave the text
     /// grey: the tokens for it simply stop being produced, and attributes
     /// nobody clears are attributes that stay.
-    func highlight(_ storage: NSTextStorage, in range: NSRange) {
+    ///
+    /// That reset is right for every attribute this pass owns and wrong for
+    /// every attribute it doesn't, which is what `preserving` is for. A
+    /// diagnostic underline belongs to another pass entirely, and editing a
+    /// line wiped it: the recolour of the edited region took the underline
+    /// style with it and, worse, the underline *colour*, which is the whole
+    /// of the severity — a warning and an error look the same once the colour
+    /// is gone. The keys arrive as a value rather than as knowledge, so this
+    /// type still knows nothing about diagnostics: only that some attributes
+    /// in the range are somebody else's, and are to be put back.
+    func highlight(
+        _ storage: NSTextStorage,
+        in range: NSRange,
+        preserving: Set<NSAttributedString.Key> = [.underlineStyle, .underlineColor]
+    ) {
         let safe = NSIntersectionRange(range, NSRange(location: 0, length: storage.length))
         guard safe.length > 0 else { return }
+
+        let borrowed = runs(of: preserving, in: storage, over: safe)
 
         storage.beginEditing()
         storage.setAttributes(
@@ -90,7 +106,33 @@ final class CodeTextStorage {
                 range: clipped
             )
         }
+
+        for run in borrowed {
+            storage.addAttribute(run.key, value: run.value, range: run.range)
+        }
         storage.endEditing()
+    }
+
+    /// Where each of `keys` is set inside `range`, read before the reset so it
+    /// can be written back after it.
+    ///
+    /// One enumeration per key over the recolour range — never the document,
+    /// which is the whole point of highlighting a range in the first place.
+    private func runs(
+        of keys: Set<NSAttributedString.Key>,
+        in storage: NSTextStorage,
+        over range: NSRange
+    ) -> [(key: NSAttributedString.Key, value: Any, range: NSRange)] {
+        guard !keys.isEmpty else { return [] }
+
+        var found: [(key: NSAttributedString.Key, value: Any, range: NSRange)] = []
+        for key in keys {
+            storage.enumerateAttribute(key, in: range, options: []) { value, subrange, _ in
+                guard let value else { return }
+                found.append((key: key, value: value, range: subrange))
+            }
+        }
+        return found
     }
 
     /// The range to recolor after an edit.
