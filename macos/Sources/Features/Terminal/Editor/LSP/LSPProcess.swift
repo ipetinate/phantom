@@ -572,8 +572,25 @@ final class LSPProcess: @unchecked Sendable {
             return standardInput
         }
 
-        try writeQueue.sync {
-            try handle.write(contentsOf: data)
+        /// **Queued, never waited on.** `FileHandle.write` blocks while the
+        /// pipe is full, and a pipe fills whenever the server stops draining
+        /// it — which servers do, for seconds at a time, while they work.
+        /// `zls` resolving a `build.zig` graph is the case that was reported:
+        /// installing it, opening a Zig file and freezing the whole window
+        /// until the app was force-quit.
+        ///
+        /// This runs from `LSPCenter`, which is `@MainActor`, so `sync` here
+        /// meant the main thread waited on a pipe an external process had
+        /// stopped reading. Nothing about the size of the message made that
+        /// safe: full-document sync sends the whole file on every keystroke,
+        /// so 64KB of buffer is a few edits of an ordinary source file.
+        ///
+        /// Order is still guaranteed — `writeQueue` is serial — and a failed
+        /// write is no longer thrown to the caller. It could not be usefully
+        /// handled there anyway: a request whose bytes never arrived resolves
+        /// through its own timeout, and a notification has no reply to miss.
+        writeQueue.async {
+            try? handle.write(contentsOf: data)
         }
     }
 
