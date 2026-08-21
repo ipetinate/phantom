@@ -1,55 +1,127 @@
 import AppKit
 import SwiftUI
 
-/// An image, fitted to the pane.
-struct ImageViewerView: View {
-    let url: URL
-
-    @State private var image: NSImage?
-    @State private var attempted = false
-
-    var body: some View {
-        Group {
-            if let image {
-                FittedImageView(image: image)
-            } else if attempted {
-                MediaUnreadableView(message: "Couldn't read this image.")
-            } else {
-                /// One body evaluation before `onAppear` runs. Clear rather
-                /// than a spinner: reading a local file is not a wait.
-                Color.clear
-            }
-        }
-        /// Loaded in the view, not in `MediaDocument`: the document stays a
-        /// decision and the view is what touches the disk. It also puts the
-        /// failure where it reads best, in the pane instead of an alert.
-        .onAppear {
-            image = NSImage(contentsOf: url)
-            attempted = true
-        }
-    }
-}
-
-/// `NSImageView` rather than SwiftUI's `Image(nsImage:)`, for two behaviours
-/// that are one property each here.
+/// The image, fitted to the pane it is given and never larger.
 ///
-/// `scaleProportionallyDown` fits a 4000px screenshot to the pane while
-/// leaving a 16px favicon at 16px, instead of blowing it up into a blurry
-/// wall. And `animates` makes a GIF move — SwiftUI's `Image` holds still,
-/// which reads as a broken file.
-private struct FittedImageView: NSViewRepresentable {
+/// `NSImageView` rather than SwiftUI's `Image(nsImage:)` for one behaviour that
+/// is a property here and awkward there: `animates`, which makes a GIF move. An
+/// animation that holds still reads as a broken file.
+struct ImageViewerView: NSViewRepresentable {
     let image: NSImage
+    let zoom: CGFloat
 
-    func makeNSView(context: Context) -> NSImageView {
-        let view = NSImageView()
-        view.imageScaling = .scaleProportionallyDown
-        view.imageAlignment = .alignCenter
-        view.animates = true
+    func makeNSView(context: Context) -> ImageCanvasView {
+        let view = ImageCanvasView()
         view.image = image
+        view.zoom = zoom
         return view
     }
 
-    func updateNSView(_ view: NSImageView, context: Context) {
+    func updateNSView(_ view: ImageCanvasView, context: Context) {
         view.image = image
+        view.zoom = zoom
+    }
+
+    /// The proposal, never the image's size.
+    ///
+    /// This is the fix for the bug that took the window off the edge of the
+    /// screen: without it SwiftUI asks the view how big it would like to be,
+    /// `NSImageView` answers with the size of the image, and a 2048-pixel
+    /// screenshot became a 2048-point pane that dragged the window out with it.
+    /// An unspecified or infinite dimension falls back to something small, so
+    /// the parent's frame is what decides — an infinite answer here would put
+    /// the same bug back in a different place.
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: ImageCanvasView,
+        context: Context
+    ) -> CGSize? {
+        CGSize(width: finite(proposal.width), height: finite(proposal.height))
+    }
+
+    private func finite(_ value: CGFloat?) -> CGFloat {
+        guard let value, value.isFinite, value > 0 else { return 1 }
+        return value
+    }
+}
+
+/// Scrolls only when the reader has zoomed past what fits, and centres the
+/// image the rest of the time.
+///
+/// The centring is why there is a container between the scroll view and the
+/// image: a document view exactly the size of a small image sits in the corner,
+/// while one grown to the size of the viewport can hold it in the middle. And
+/// because the container is never smaller than the viewport, "does this scroll"
+/// answers itself — the scrollers auto-hide when there is nothing to reach.
+final class ImageCanvasView: NSView {
+    private let scrollView = NSScrollView()
+    private let container = NSView()
+    private let imageView = NSImageView()
+
+    var image: NSImage? {
+        didSet {
+            guard image !== oldValue else { return }
+            imageView.image = image
+            needsLayout = true
+        }
+    }
+
+    var zoom: CGFloat = MediaZoom.fit {
+        didSet {
+            guard zoom != oldValue else { return }
+            needsLayout = true
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        /// Proportionally, not axes-independently: the frame is computed with
+        /// the image's aspect already in it, and rounding it to whole points
+        /// can leave the two off by a fraction. Letterboxing by half a point is
+        /// invisible; a stretched image is not.
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        imageView.animates = true
+
+        container.addSubview(imageView)
+        scrollView.documentView = container
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.useThinScrollers()
+        addSubview(scrollView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not from a nib") }
+
+    /// Nothing, deliberately. The one thing this view must never do is ask for
+    /// room of its own.
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+
+    override func layout() {
+        super.layout()
+        scrollView.frame = bounds
+
+        let available = bounds.size
+        guard let size = image?.size, size.width > 0, size.height > 0 else {
+            container.frame = NSRect(origin: .zero, size: available)
+            imageView.frame = .zero
+            return
+        }
+
+        let display = MediaZoom.displaySize(image: size, available: available, zoom: zoom)
+        let canvas = MediaZoom.canvasSize(image: size, available: available, zoom: zoom)
+
+        container.frame = NSRect(origin: .zero, size: canvas)
+        imageView.frame = NSRect(
+            x: ((canvas.width - display.width) / 2).rounded(),
+            y: ((canvas.height - display.height) / 2).rounded(),
+            width: display.width.rounded(),
+            height: display.height.rounded())
     }
 }

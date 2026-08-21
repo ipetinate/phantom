@@ -40,39 +40,12 @@ struct EditorPresentationControl: View {
                 }
             }
             .padding(4)
-            .background(background)
+            .editorOverlayChrome(isHovered: isHovered)
             .opacity(isHovered ? 1 : 0.78)
             .onHover { isHovered = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovered)
             .padding(6)
         }
-    }
-
-    /// Always drawn, which is the whole difference between a control you
-    /// can find and one you have to know about.
-    ///
-    /// It used to appear only on hover, so at rest the glyphs floated
-    /// unbacked over whatever the editor happened to be drawing — and the
-    /// place it sits is beside the minimap, which is the busiest, most
-    /// multicoloured strip in the window. Contrast cannot come from the
-    /// glyph alone when the thing behind it is arbitrary.
-    ///
-    /// `.regularMaterial` rather than `.thinMaterial`: thin lets the code
-    /// underneath read straight through, which is the property that made
-    /// this hard to see. The extra wash on hover is the affordance now,
-    /// rather than the background's whole existence.
-    private var background: some View {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(.regularMaterial)
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(isHovered ? 0.22 : 0.14), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.28), radius: 3, y: 1)
     }
 
     private func button(for option: EditorPresentation) -> some View {
