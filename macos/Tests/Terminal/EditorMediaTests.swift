@@ -281,20 +281,27 @@ struct EditorMediaOpenTests {
     }
 }
 
-/// The presentation model was left alone, and these are the sentences that
-/// stay true because of it.
+/// The presentation model has grown since, and these are the sentences that
+/// media did not need it to change.
 ///
 /// The alternative design put a `.media` case in `EditorPresentation`, which
 /// would have cost `nearest(to:)` its guarantee — "never nil, because
 /// `.source` is always in the list" — for every document in the app, to serve
-/// one that is not a document at all.
+/// one that is not a document at all. A PNG and a PDF still get their own tab
+/// and still need no presentation of their own.
+///
+/// `.image` and `.table` arrived later and are not that case in disguise: an
+/// SVG and a CSV keep their source, so both are still `EditorDocument`s and
+/// `.source` is still in every list. The count below moves when a
+/// presentation is added, which is the point of writing it down — a case
+/// added without a switch extended is a button that draws the wrong pane.
 struct MediaLeftThePresentationModelAloneTests {
-    @Test func thereAreStillFourPresentations() {
-        #expect(EditorPresentation.allCases.count == 4)
+    @Test func thereAreSixPresentations() {
+        #expect(EditorPresentation.allCases.count == 6)
     }
 
     @Test func sourceIsStillAlwaysAvailable() {
-        for name in ["a.png", "contract.pdf", "notes.md", "main.swift"] {
+        for name in ["a.png", "contract.pdf", "notes.md", "main.swift", "logo.svg", "rows.csv"] {
             let options = EditorPresentationOptions.resolve(fileName: name, hasChanges: false)
             #expect(options.available.first == .source, "\(name)")
         }

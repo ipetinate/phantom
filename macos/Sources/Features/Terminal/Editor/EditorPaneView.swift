@@ -362,6 +362,12 @@ private struct DocumentView: View {
         case .preview:
             previewPane
 
+        case .image:
+            svgPane
+
+        case .table:
+            tablePane
+
         case .split:
             /// The control goes in as the container's **accessory** rather
             /// than over the top of it. Both want the same corner, and
@@ -397,7 +403,7 @@ private struct DocumentView: View {
     private var drawsControlOverContent: Bool {
         switch presentationOptions.nearest(to: document.presentation) {
         case .split, .diff: false
-        case .source, .preview: true
+        case .source, .preview, .image, .table: true
         }
     }
 
@@ -469,6 +475,21 @@ private struct DocumentView: View {
             scrollSyncSide: .second,
             anchors: previewAnchors
         )
+    }
+
+    /// The SVG as a picture rather than as markup.
+    ///
+    /// `currentText` rather than the URL, for the same reason the preview
+    /// takes it: an unsaved edit is part of the document, and rendering the
+    /// file instead would show the reader a version they have already moved
+    /// on from.
+    private var svgPane: some View {
+        EditorSVGPane(text: document.currentText, background: theme.background)
+    }
+
+    /// The CSV as the grid it stands for.
+    private var tablePane: some View {
+        CSVTableView(text: document.currentText, theme: theme, configuration: configuration)
     }
 
     /// Where the preview drew each block, so a scroll on one side can be

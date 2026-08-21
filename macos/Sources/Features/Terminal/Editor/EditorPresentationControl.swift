@@ -74,6 +74,8 @@ struct EditorPresentationControl: View {
         switch option {
         case .source: "chevron.left.forwardslash.chevron.right"
         case .preview: "doc.richtext"
+        case .image: "photo"
+        case .table: "tablecells"
         /// Lines of text with a change marked against them, which is what a
         /// source file's diff actually shows. Not `plus.forwardslash.minus`,
         /// which was here first and reads as a percent sign, and not a swap
@@ -88,6 +90,8 @@ struct EditorPresentationControl: View {
         switch option {
         case .source: "Source"
         case .preview: "Preview"
+        case .image: "Image"
+        case .table: "Table"
         case .diff: "Changes"
         case .split: "Split"
         }
