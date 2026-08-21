@@ -69,9 +69,12 @@ and not a new app.
 | Editor | Return continues a Markdown list, and ends an empty one | Unreleased | 0.8.0-beta |
 | Editor | Scroll sync between raw and rendered Markdown | Unverified | v0.6.0 |
 | Editor | Move a line or a selected block, ⇧⌥↑ and ⇧⌥↓ | Unreleased | 0.8.0-beta |
-| Editor | Image and PDF viewers | Unreleased | 0.8.0-beta |
+| Editor | Image and PDF viewers, fitted to the pane | Unreleased | 0.8.0-beta |
+| Editor | Zoom by button or ⌘+scroll, 10% to 800%, 100% exact | Unreleased | 0.8.0-beta |
+| Editor | Page thumbnails beside a PDF, where the minimap sits | Unreleased | 0.8.0-beta |
+| Editor | An SVG opens as a picture, with its markup one press away | Unreleased | 0.8.0-beta |
+| Editor | A CSV opens as a table, with its text one press away | Unreleased | 0.8.0-beta |
 | Editor | Multi-cursor | Planned | — |
-| Editor | CSV viewer | Planned | — |
 | Language | Language servers, 21 binaries | Shipped | v0.2.0 |
 | Language | Hover, definition, references, rename | Shipped | v0.2.0 |
 | Language | Completion list with icons and detail | Shipped | v0.5.0 |
