@@ -351,7 +351,7 @@ struct FileExplorerView: View {
             // being a control you are editing rather than a place you are
             // looking at. The selected row already says where focus is.
             .backport.focusEffectDisabled()
-            .backport.onKeyPress { press in handleKeyPress(press) }
+            .backport.onKeyPress { press in handleKeyPress(press, using: proxy) }
             .dropDestination(for: URL.self) { urls, _ in
                 handleDrop(urls, into: model.root?.path ?? "")
                 return true
@@ -371,8 +371,18 @@ struct FileExplorerView: View {
             return
         }
 
+        openFile(row.node.url)
+    }
+
+    /// Opens a file the same way whether a click or Space asked for it.
+    ///
+    /// Shared rather than repeated because "the same action a click performs"
+    /// is the whole specification of Space here: this decides nothing itself,
+    /// so the destination setting, the app fallback and the terminal it lands
+    /// beside can only ever be answered once.
+    private func openFile(_ url: URL) {
         FileOpener.prompt(
-            for: row.node.url,
+            for: url,
             in: selectedTab?.window,
             currentTerminal: surface(for: selectedTab),
             spawnTerminal: onSpawnTerminal,
@@ -447,9 +457,13 @@ struct FileExplorerView: View {
         }
     }
 
-    /// The keys the explorer answers for while it has focus: the configured
-    /// create shortcuts, Return to rename the selection, Delete to trash it.
-    private func handleKeyPress(_ press: BackportKeyPress) -> BackportKeyPressResult {
+    /// The keys the explorer answers for while it has focus: the arrows and
+    /// Space to walk the tree, the configured create shortcuts, Return to
+    /// rename the selection, Delete to trash it.
+    private func handleKeyPress(
+        _ press: BackportKeyPress,
+        using proxy: ScrollViewProxy
+    ) -> BackportKeyPressResult {
         guard model.editing == nil else { return .ignored }
         let modifiers = PhantomShortcut.modifiers(from: press.modifiers)
 
@@ -467,6 +481,14 @@ struct FileExplorerView: View {
             break
         }
 
+        /// Bare keys only. An arrow carries the function-key flag and nothing
+        /// else here, so `modifiers` — already narrowed to the four a shortcut
+        /// can hold — is empty for the presses this owns, and ⇧⌥↑ goes on
+        /// reaching the editor's Move Line Up.
+        if modifiers.isEmpty, let key = FileTreeNavigation.Key(character: press.key) {
+            return navigate(key, using: proxy)
+        }
+
         if press.key == KeyEquivalent.return.character {
             guard let selection = model.selection else { return .ignored }
             model.beginRename(path: selection)
@@ -478,6 +500,45 @@ struct FileExplorerView: View {
             return .handled
         }
         return .ignored
+    }
+
+    /// Walks the tree: `FileTreeNavigation` decides, this spends the answer.
+    ///
+    /// The rows handed over are the ones on screen — matches while a search is
+    /// on — because every one of these keys is about what the reader can see.
+    private func navigate(
+        _ key: FileTreeNavigation.Key,
+        using proxy: ScrollViewProxy
+    ) -> BackportKeyPressResult {
+        let navigation = FileTreeNavigation(
+            rows: visibleRows,
+            expanded: model.expanded,
+            selection: model.selection
+        )
+
+        switch navigation.command(for: key) {
+        case .nothing:
+            break
+        case .select(let path):
+            model.select(path)
+            /// Unanimated, unlike every other scroll here: a held arrow key
+            /// repeats every few dozen milliseconds, and a fifth of a second
+            /// of easing per step leaves the list trailing the row it is
+            /// supposed to be following. Minimal for the reason on
+            /// `currentDirectory` — a step through a list should move it as
+            /// little as it takes to see the row.
+            proxy.scrollTo(path)
+        case .expand(let node), .collapse(let node):
+            model.toggle(node)
+        case .open(let node):
+            openFile(node.url)
+        }
+
+        /// Handled even when nothing moved. These keys belong to the tree
+        /// while the tree has focus, and letting a clamped ↓ through would
+        /// scroll the list out from under the selection the reader is
+        /// stepping through — the one thing they are watching.
+        return .handled
     }
 
     /// Both commits ask the model whether the edit they belong to is still

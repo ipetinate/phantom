@@ -51,6 +51,7 @@ and not a new app.
 | Files | File explorer with a directory watcher | Shipped | v0.2.0 |
 | Files | File icon themes loaded from disk | Shipped | v0.2.0 |
 | Files | Remappable shortcuts, more than one per command | Shipped | v0.7.0 |
+| Files | Keyboard navigation in the tree: arrows, Space, Return | Unreleased | 0.8.0-beta |
 | Editor | Code editor inside the terminal pane | Shipped | v0.2.0 |
 | Editor | Syntax highlighting, 19 languages | Shipped | v0.2.0 |
 | Editor | Minimap, gutter, current-line band | Shipped | v0.2.0 |
