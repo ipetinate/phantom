@@ -369,13 +369,17 @@ private struct DocumentView: View {
             tablePane
 
         case .split:
-            /// The control goes in as the container's **accessory** rather
-            /// than over the top of it. Both want the same corner, and
-            /// drawn independently the container's direction toggle lands
-            /// on top of this control's split button — two split glyphs
-            /// overlapping, which is exactly what the accessory parameter
-            /// exists to prevent.
-            SplitPaneContainer(model: splitModel) {
+            /// The direction toggle rides *inside* the presentation control's
+            /// box rather than being the container's own copy beside it: two
+            /// backings inches apart in one corner read as two controls to
+            /// learn, and the loose one was photographed sitting on the
+            /// minimap. The gap inside the box is what marks it as a
+            /// different kind of action.
+            SplitPaneContainer(
+                model: splitModel,
+                showsDirectionToggle: false,
+                accessoryTrailingInset: splitAccessoryTrailingInset
+            ) {
                 sourcePane
             } second: {
                 /// Whichever alternative this file offers. A document never
@@ -386,7 +390,7 @@ private struct DocumentView: View {
                     previewPane
                 }
             } accessory: {
-                presentationControl
+                presentationControlWithSplitToggle
             }
             /// Only the preview split configures the link here. The diff
             /// configures its own, and both switch it off on the way out —
@@ -430,15 +434,43 @@ private struct DocumentView: View {
     private var presentationControl: some View {
         EditorPresentationControl(
             options: presentationOptions,
-            presentation: Binding(
-                /// Through `nearest` on the way out, so a diff that stops
-                /// existing — the change was just committed — reads as
-                /// source instead of pointing at a presentation this file
-                /// no longer has.
-                get: { presentationOptions.nearest(to: document.presentation) },
-                set: { document.presentation = $0 }
-            )
+            presentation: presentationBinding
         )
+    }
+
+    /// The same control with the split-direction toggle in its box, for the
+    /// two places a split is on screen and the toggle must exist somewhere.
+    private var presentationControlWithSplitToggle: some View {
+        EditorPresentationControl(
+            options: presentationOptions,
+            presentation: presentationBinding,
+            extra: { SplitDirectionToggle(model: splitModel) }
+        )
+    }
+
+    private var presentationBinding: Binding<EditorPresentation> {
+        Binding(
+            /// Through `nearest` on the way out, so a diff that stops
+            /// existing — the change was just committed — reads as
+            /// source instead of pointing at a presentation this file
+            /// no longer has.
+            get: { presentationOptions.nearest(to: document.presentation) },
+            set: { document.presentation = $0 }
+        )
+    }
+
+    /// What the split's corner controls have to clear, which depends on the
+    /// arrangement: stacked, the first pane spans the top-right corner, and
+    /// when the source is drawn with a minimap that is exactly where it
+    /// lives. Side by side, the corner belongs to the second pane — a
+    /// preview or a diff, neither of which has one. The scroller is under
+    /// the corner either way.
+    private var splitAccessoryTrailingInset: CGFloat {
+        let stacked = splitModel.direction == .vertical
+        let minimap = stacked && configuration.showsMinimap
+            ? CodeTextView.minimapColumnWidth
+            : 0
+        return minimap + ThinScroller.trackWidth
     }
 
     @ViewBuilder
@@ -453,7 +485,7 @@ private struct DocumentView: View {
                 font: configuration.font,
                 model: splitModel,
                 reloadKey: "\(context.change.index)\(context.change.worktree)\(document.isDirty)",
-                accessory: { presentationControl }
+                accessory: { presentationControlWithSplitToggle }
             )
         } else {
             /// Reachable for an instant: the control was drawn from a status
