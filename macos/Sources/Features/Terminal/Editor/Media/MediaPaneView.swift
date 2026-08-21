@@ -3,7 +3,7 @@ import PDFKit
 import SwiftUI
 
 /// The pane a media tab draws: the editor's own background, the viewer, and the
-/// two pieces of chrome around it.
+/// chrome around it.
 ///
 /// Outside `Editor/Engine/` deliberately — `PDFKit` is not in the import set
 /// that `EditorEngineBoundaryTests` allows the engine, and the Markdown preview
@@ -20,26 +20,30 @@ struct MediaPaneView: View {
     @State private var image: NSImage?
     @State private var pdf: PDFDocument?
     @State private var bytes: Int?
-    @State private var zoom: CGFloat = MediaZoom.fit
+    @State private var level: MediaZoom.Level = MediaZoom.fit
     @State private var attempted = false
 
     var body: some View {
         ZStack {
             Color(nsColor: theme.background)
 
-            /// The pane's own size, read rather than stored: the scale in the
-            /// corner is a fact about how big the image is *here*, and holding
-            /// it in state would mean a size and a readout that can disagree.
+            /// The pane's own size, read rather than stored: what "fit" means
+            /// is a fact about how much room there is *now*, and holding it in
+            /// state would mean a size and a readout that can disagree.
             GeometryReader { proxy in
-                ZStack(alignment: .topTrailing) {
-                    viewer(in: proxy.size)
+                let available = viewerSize(in: proxy.size)
 
-                    if canZoom {
-                        MediaZoomControl(zoom: $zoom)
+                ZStack(alignment: .topTrailing) {
+                    viewer(in: proxy.size, available: available)
+
+                    if isLoaded {
+                        zoomControl(in: available)
+                            .padding(.trailing, chromeInset)
                     }
                 }
                 .overlay(alignment: .bottomTrailing) {
-                    MediaInfoBar(text: info(in: proxy.size))
+                    MediaInfoBar(text: info(in: available))
+                        .padding(.trailing, chromeInset)
                 }
             }
         }
@@ -49,13 +53,18 @@ struct MediaPaneView: View {
         .onAppear(perform: load)
     }
 
+    // MARK: The viewer
+
     @ViewBuilder
-    private func viewer(in available: CGSize) -> some View {
+    private func viewer(in pane: CGSize, available: CGSize) -> some View {
         switch document.kind {
         case .image:
             if let image {
-                ImageViewerView(image: image, zoom: zoom)
-                    .frame(width: available.width, height: available.height)
+                ImageViewerView(
+                    image: image,
+                    level: level,
+                    onZoomStep: { step($0, in: available) })
+                    .frame(width: pane.width, height: pane.height)
             } else if attempted {
                 unreadable("Couldn't read this image.")
             } else {
@@ -64,8 +73,12 @@ struct MediaPaneView: View {
 
         case .pdf:
             if let pdf {
-                PDFViewerView(document: pdf, background: theme.background, zoom: zoom)
-                    .frame(width: available.width, height: available.height)
+                PDFViewerView(
+                    document: pdf,
+                    background: theme.background,
+                    level: level,
+                    onZoomStep: { step($0, in: available) })
+                    .frame(width: pane.width, height: pane.height)
             } else if attempted {
                 unreadable("Couldn't read this PDF. It may be encrypted.")
             } else {
@@ -79,51 +92,111 @@ struct MediaPaneView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Only once something is on screen to zoom. Buttons that act on nothing
-    /// are worse than an empty corner.
-    private var canZoom: Bool {
-        image != nil || pdf != nil
-    }
+    private var isLoaded: Bool { image != nil || pdf != nil }
 
     private func load() {
         switch document.kind {
         case .image: image = NSImage(contentsOf: document.url)
         case .pdf: pdf = PDFDocument(url: document.url)
         }
-        bytes = try? document.url
-            .resourceValues(forKeys: [.fileSizeKey]).fileSize
+        bytes = try? document.url.resourceValues(forKeys: [.fileSizeKey]).fileSize
         attempted = true
     }
+
+    // MARK: Zoom
+
+    /// The size the *viewer* has, which is not the size of the pane once a rail
+    /// has taken a strip of it — and fitting measured against the wrong one is
+    /// off by the width of the rail.
+    private func viewerSize(in pane: CGSize) -> CGSize {
+        CGSize(width: max(0, pane.width - railWidth), height: pane.height)
+    }
+
+    private var railWidth: CGFloat {
+        guard document.kind == .pdf, let pages = pdf?.pageCount, pages > 1 else { return 0 }
+        return MediaPaneMetrics.railWidth
+    }
+
+    /// Clear of the rail and of the scroller, the same two things the editor's
+    /// own control has to clear.
+    private var chromeInset: CGFloat {
+        railWidth + ThinScroller.trackWidth
+    }
+
+    /// What is being scaled: the image, or a PDF's first page — whose size in
+    /// points is what `PDFView`'s own scale factor is a proportion of, so the
+    /// same arithmetic answers for both.
+    private var subjectSize: CGSize {
+        switch document.kind {
+        case .image: return image?.size ?? .zero
+        case .pdf: return pdf?.page(at: 0)?.bounds(for: .mediaBox).size ?? .zero
+        }
+    }
+
+    private func zoomControl(in available: CGSize) -> some View {
+        let subject = subjectSize
+
+        return MediaZoomControl(
+            canZoomIn: MediaZoom.canZoomIn(level, image: subject, available: available),
+            canZoomOut: MediaZoom.canZoomOut(level, image: subject, available: available),
+            isFitted: level == .fit,
+            zoomIn: { level = MediaZoom.zoomedIn(from: level, image: subject, available: available) },
+            zoomOut: { level = MediaZoom.zoomedOut(from: level, image: subject, available: available) },
+            fit: { level = MediaZoom.fit })
+    }
+
+    /// One step of ⌘+scroll.
+    ///
+    /// The size arrives captured in the closure rather than held in state: the
+    /// closure is rebuilt on every layout pass, so it always carries the
+    /// current one, and storing it would mean writing state from inside a
+    /// layout. It goes through the same ladder as the buttons, so a scroll and
+    /// a press cannot disagree about what a step is.
+    private func step(_ direction: Int, in available: CGSize) {
+        let subject = subjectSize
+        level = direction > 0
+            ? MediaZoom.zoomedIn(from: level, image: subject, available: available)
+            : MediaZoom.zoomedOut(from: level, image: subject, available: available)
+    }
+
+    // MARK: The readout
 
     /// The line in the bottom corner.
     ///
     /// The resolution comes from the bitmap rather than from `NSImage.size`,
-    /// which is in points — for a file carrying a DPI those two differ, and the
+    /// which is in points — for a file carrying a DPI those differ, and the
     /// honest answer to "what resolution is this" is the pixels it has.
     ///
-    /// The percentage is only offered for an image, where it can be computed
-    /// from sizes this view already knows. `PDFView` holds its own scale and
-    /// reading it back out would mean writing state during a layout pass, so a
-    /// PDF says what it is and how many pages, and nothing it cannot stand
-    /// behind.
+    /// An image reports the percentage it is drawn at even when fitted, because
+    /// that number is computed here and is exact. A **fitted** PDF says "Fit"
+    /// instead: `PDFView` works out its own fitting, with its own margins, and
+    /// a percentage I calculated separately would be close but not true. Once a
+    /// scale is asked for they agree again, because then it is the number that
+    /// was set.
     private func info(in available: CGSize) -> String {
         let format = (document.url.pathExtension as NSString).uppercased
 
         switch document.kind {
         case .image:
             guard let image else { return MediaInfo.line(format: format, bytes: bytes) }
-            let representation = image.representations.first
-            let pixels = representation.map {
+            let pixels = image.representations.first.map {
                 CGSize(width: $0.pixelsWide, height: $0.pixelsHigh)
             }
             return MediaInfo.line(
                 format: format,
                 pixels: pixels ?? image.size,
                 bytes: bytes,
-                scale: MediaZoom.scale(image: image.size, available: available, zoom: zoom))
+                scale: MediaZoom.scale(level, image: image.size, available: available))
 
         case .pdf:
-            return MediaInfo.line(format: format, bytes: bytes, pages: pdf?.pageCount)
+            var scale: CGFloat?
+            if case .scale(let asked) = level { scale = asked }
+            return MediaInfo.line(
+                format: format,
+                bytes: bytes,
+                pages: pdf?.pageCount,
+                scale: scale,
+                fitted: level == .fit)
         }
     }
 }
@@ -132,25 +205,24 @@ struct MediaPaneView: View {
 /// control uses, because that is where this window keeps the controls that act
 /// on how a file is being shown.
 struct MediaZoomControl: View {
-    @Binding var zoom: CGFloat
+    let canZoomIn: Bool
+    let canZoomOut: Bool
+    let isFitted: Bool
+    let zoomIn: () -> Void
+    let zoomOut: () -> Void
+    let fit: () -> Void
 
     @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 1) {
-            button("minus.magnifyingglass", "Zoom Out", enabled: MediaZoom.canZoomOut(zoom)) {
-                zoom = MediaZoom.zoomedOut(from: zoom)
-            }
-            button("plus.magnifyingglass", "Zoom In", enabled: MediaZoom.canZoomIn(zoom)) {
-                zoom = MediaZoom.zoomedIn(from: zoom)
-            }
+            button("minus.magnifyingglass", "Zoom Out", enabled: canZoomOut, action: zoomOut)
+            button("plus.magnifyingglass", "Zoom In", enabled: canZoomIn, action: zoomIn)
             button(
                 "arrow.down.forward.and.arrow.up.backward",
                 "Fit to Pane",
-                enabled: zoom != MediaZoom.fit
-            ) {
-                zoom = MediaZoom.fit
-            }
+                enabled: !isFitted,
+                action: fit)
         }
         .padding(4)
         .editorOverlayChrome(isHovered: isHovered)

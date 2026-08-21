@@ -3,96 +3,133 @@ import Foundation
 @testable import Ghostty
 import Testing
 
-/// How big a media file is drawn, which is where the window-resizing bug was.
+/// How big a media file is drawn: the window-resizing bug, and what a
+/// percentage means.
 struct MediaZoomTests {
     private let pane = CGSize(width: 800, height: 600)
+    private let huge = CGSize(width: 2048, height: 2048)
+    private let tiny = CGSize(width: 16, height: 16)
 
-    /// The regression, stated as the property that was violated: at rest,
-    /// nothing is ever asked to be bigger than the space it has. This is what
-    /// took the app's window past the edge of the screen.
-    @Test func atRestNothingIsEverLargerThanThePane() {
+    // MARK: The bug
+
+    /// The regression, stated as the property that was violated: **fitted,
+    /// nothing is ever larger than the space it has.** This is what took the
+    /// app's window past the edge of the screen.
+    @Test func fittedNothingIsEverLargerThanThePane() {
         let images: [CGSize] = [
-            CGSize(width: 2048, height: 2048),
+            huge,
             CGSize(width: 4000, height: 900),
             CGSize(width: 900, height: 4000),
-            CGSize(width: 16, height: 16),
+            tiny,
             CGSize(width: 801, height: 601),
         ]
 
         for image in images {
-            let display = MediaZoom.displaySize(image: image, available: pane, zoom: MediaZoom.fit)
+            let display = MediaZoom.displaySize(image: image, available: pane, level: .fit)
             #expect(display.width <= pane.width + 0.01, "\(image) is wider than the pane")
             #expect(display.height <= pane.height + 0.01, "\(image) is taller than the pane")
         }
     }
 
     @Test func aLargeImageIsFittedOnItsTighterAxis() {
-        let display = MediaZoom.displaySize(
-            image: CGSize(width: 2048, height: 2048), available: pane, zoom: MediaZoom.fit)
-
-        #expect(display.height == 600)
-        #expect(display.width == 600)
+        let display = MediaZoom.displaySize(image: huge, available: pane, level: .fit)
+        #expect(display == CGSize(width: 600, height: 600))
     }
 
-    /// A favicon stays a favicon. Fitting is capped at its true size, so the
+    /// A favicon stays a favicon: fitting is capped at its true size, so the
     /// alternative — filling the pane with sixteen blurry pixels — cannot
     /// happen.
-    @Test func aSmallImageIsNotBlownUpToFill() {
-        let display = MediaZoom.displaySize(
-            image: CGSize(width: 16, height: 16), available: pane, zoom: MediaZoom.fit)
-
-        #expect(display == CGSize(width: 16, height: 16))
+    @Test func fittingNeverBlowsASmallImageUp() {
+        #expect(MediaZoom.displaySize(image: tiny, available: pane, level: .fit) == tiny)
+        #expect(MediaZoom.scale(.fit, image: tiny, available: pane) == 1)
     }
 
-    @Test func zoomMultipliesWhatFittingWouldHaveGiven() {
-        let small = MediaZoom.displaySize(
-            image: CGSize(width: 16, height: 16), available: pane, zoom: 2)
-        #expect(small == CGSize(width: 32, height: 32))
+    // MARK: 100% is the original size
 
-        let large = MediaZoom.displaySize(
-            image: CGSize(width: 2048, height: 2048), available: pane, zoom: 2)
-        #expect(large == CGSize(width: 1200, height: 1200))
+    /// The point of the whole rework. A percentage is absolute, so asking for
+    /// 100% of a 2048-pixel image gives 2048 points **and scrolls** — where the
+    /// first version could only offer multiples of whatever fitting happened to
+    /// give, and so could never be asked for 1:1 at all.
+    @Test func oneHundredPercentIsTheImagesOwnSize() {
+        #expect(MediaZoom.displaySize(image: huge, available: pane, level: .scale(1)) == huge)
+        #expect(MediaZoom.displaySize(image: tiny, available: pane, level: .scale(1)) == tiny)
     }
 
-    @Test func theScaleIsHowMuchOfItsTrueSizeIsOnScreen() {
-        #expect(MediaZoom.scale(
-            image: CGSize(width: 1600, height: 1200), available: pane, zoom: MediaZoom.fit) == 0.5)
-        #expect(MediaZoom.scale(
-            image: CGSize(width: 100, height: 100), available: pane, zoom: MediaZoom.fit) == 1)
+    @Test func aPercentageIsNotCappedTheWayFittingIs() {
+        let display = MediaZoom.displaySize(image: tiny, available: pane, level: .scale(4))
+        #expect(display == CGSize(width: 64, height: 64))
+    }
+
+    @Test func theScaleIsWhatWasAskedFor() {
+        #expect(MediaZoom.scale(.scale(2), image: huge, available: pane) == 2)
+        #expect(MediaZoom.scale(.fit, image: CGSize(width: 1600, height: 1200),
+                                available: pane) == 0.5)
+    }
+
+    // MARK: Both limits
+
+    @Test func zoomingInStopsAtTheCeiling() {
+        var level = MediaZoom.fit
+        for _ in 0..<30 { level = MediaZoom.zoomedIn(from: level, image: tiny, available: pane) }
+
+        #expect(level == .scale(MediaZoom.maximum))
+        #expect(!MediaZoom.canZoomIn(level, image: tiny, available: pane))
+    }
+
+    @Test func zoomingOutStopsAtTheFloor() {
+        var level = MediaZoom.fit
+        for _ in 0..<30 { level = MediaZoom.zoomedOut(from: level, image: tiny, available: pane) }
+
+        #expect(level == .scale(MediaZoom.minimum))
+        #expect(!MediaZoom.canZoomOut(level, image: tiny, available: pane))
+    }
+
+    @Test func aScaleFromOutsideTheLimitsIsBroughtInside() {
+        #expect(MediaZoom.scale(.scale(400), image: tiny, available: pane) == MediaZoom.maximum)
+        #expect(MediaZoom.scale(.scale(0.0001), image: tiny, available: pane) == MediaZoom.minimum)
+    }
+
+    @Test func bothDirectionsAreOfferedFromFit() {
+        #expect(MediaZoom.canZoomIn(.fit, image: huge, available: pane))
+        #expect(MediaZoom.canZoomOut(.fit, image: huge, available: pane))
     }
 
     // MARK: The ladder
 
-    /// Fixed stops, so two presses in and two out land exactly back — which a
-    /// multiplier does not guarantee once floating point is involved.
+    /// Absolute stops, so two presses in and two out land exactly back — which
+    /// a multiplier does not guarantee once floating point is involved.
     @Test func zoomingInAndBackOutReturnsToWhereItStarted() {
-        var zoom = MediaZoom.fit
-        zoom = MediaZoom.zoomedIn(from: zoom)
-        zoom = MediaZoom.zoomedIn(from: zoom)
-        zoom = MediaZoom.zoomedOut(from: zoom)
-        zoom = MediaZoom.zoomedOut(from: zoom)
+        var level = MediaZoom.Level.scale(1)
+        level = MediaZoom.zoomedIn(from: level, image: huge, available: pane)
+        level = MediaZoom.zoomedIn(from: level, image: huge, available: pane)
+        level = MediaZoom.zoomedOut(from: level, image: huge, available: pane)
+        level = MediaZoom.zoomedOut(from: level, image: huge, available: pane)
 
-        #expect(zoom == MediaZoom.fit)
+        #expect(level == .scale(1))
     }
 
-    @Test func theLadderStopsAtBothEnds() {
-        var zoom = MediaZoom.fit
-        for _ in 0..<20 { zoom = MediaZoom.zoomedIn(from: zoom) }
-        #expect(zoom == MediaZoom.ladder[MediaZoom.ladder.count - 1])
-        #expect(!MediaZoom.canZoomIn(zoom))
+    /// Fitting a large image lands *between* stops, and a press has to take the
+    /// next one from there rather than from 100% — otherwise zooming in on a
+    /// screenshot fitted at 29% jumps straight past a third to full size.
+    @Test func aPressStepsFromWhereTheImageActuallyIsNotFromTheLastStop() {
+        let fitted = MediaZoom.scale(.fit, image: huge, available: pane)
+        #expect(fitted < 0.5)
 
-        for _ in 0..<40 { zoom = MediaZoom.zoomedOut(from: zoom) }
-        #expect(zoom == MediaZoom.ladder[0])
-        #expect(!MediaZoom.canZoomOut(zoom))
+        let inwards = MediaZoom.zoomedIn(from: .fit, image: huge, available: pane)
+        #expect(MediaZoom.scale(inwards, image: huge, available: pane) == 1.0 / 3)
+
+        let outwards = MediaZoom.zoomedOut(from: .fit, image: huge, available: pane)
+        #expect(MediaZoom.scale(outwards, image: huge, available: pane) == 0.25)
     }
 
-    @Test func bothDirectionsAreOfferedInTheMiddle() {
-        #expect(MediaZoom.canZoomIn(MediaZoom.fit))
-        #expect(MediaZoom.canZoomOut(MediaZoom.fit))
+    @Test func oneHundredPercentIsOnTheLadderSoItCanBeReachedByPressing() {
+        #expect(MediaZoom.ladder.contains(1))
     }
 
-    @Test func fitIsOnTheLadderSoTheButtonsAgreeWithTheRestPosition() {
-        #expect(MediaZoom.ladder.contains(MediaZoom.fit))
+    @Test func theLadderRunsFromTheFloorToTheCeiling() {
+        #expect(MediaZoom.ladder.first == MediaZoom.minimum)
+        #expect(MediaZoom.ladder.last == MediaZoom.maximum)
+        #expect(MediaZoom.ladder == MediaZoom.ladder.sorted())
     }
 
     // MARK: Centring, and nonsense input
@@ -100,30 +137,40 @@ struct MediaZoomTests {
     /// The canvas is never smaller than the pane, which is what holds a small
     /// image in the middle instead of pinning it to a corner.
     @Test func theCanvasIsNeverSmallerThanThePane() {
-        let canvas = MediaZoom.canvasSize(
-            image: CGSize(width: 16, height: 16), available: pane, zoom: MediaZoom.fit)
-        #expect(canvas == pane)
+        #expect(MediaZoom.canvasSize(image: tiny, available: pane, level: .fit) == pane)
     }
 
     @Test func theCanvasGrowsOnlyOnTheAxisThatOverflows() {
         let canvas = MediaZoom.canvasSize(
-            image: CGSize(width: 2048, height: 100), available: pane, zoom: 8)
+            image: CGSize(width: 2048, height: 100), available: pane, level: .scale(1))
         #expect(canvas.width > pane.width)
         #expect(canvas.height == pane.height)
     }
 
     /// A zero-sized image is what a half-decoded file gives back, and a NaN
-    /// here would reach a frame and take AppKit down with it.
+    /// reaching a frame takes AppKit down with it.
     @Test func anEmptyImageOrPaneProducesNothingStrange() {
         for (image, available) in [
             (CGSize.zero, pane),
             (CGSize(width: 100, height: 100), CGSize.zero),
             (CGSize.zero, CGSize.zero),
         ] {
-            let display = MediaZoom.displaySize(image: image, available: available, zoom: 2)
-            #expect(display.width.isFinite)
-            #expect(display.height.isFinite)
+            for level in [MediaZoom.Level.fit, .scale(2)] {
+                let display = MediaZoom.displaySize(
+                    image: image, available: available, level: level)
+                #expect(display.width.isFinite)
+                #expect(display.height.isFinite)
+            }
         }
+    }
+
+    /// A PDF is scaled by the same arithmetic, with its first page's size in
+    /// place of the image's — which is what `PDFView`'s own scale factor is a
+    /// proportion of, so 100% means the same thing in both.
+    @Test func aPageIsScaledLikeAnImage() {
+        let page = CGSize(width: 612, height: 792)
+        #expect(MediaZoom.scale(.scale(1), image: page, available: pane) == 1)
+        #expect(MediaZoom.scale(.fit, image: page, available: pane) < 1)
     }
 }
 
@@ -140,19 +187,18 @@ struct MediaInfoTests {
         #expect(line.contains("2048 × 1024"))
         #expect(line.contains("29%"))
 
-        /// The size is formatted for the machine's locale — "1.2 MB" here,
-        /// "1,2 MB" on this one — which is what macOS does everywhere else and
-        /// worth keeping. So the assertion is the unit and the digit, not the
-        /// separator: pinning the exact string made this fail in pt-BR.
+        /// The size is formatted for the machine's locale — "1.2 MB" in one and
+        /// "1,2 MB" in another — which is what macOS does everywhere else and
+        /// worth keeping. So the assertion is the unit, not the separator:
+        /// pinning the exact string made this fail in pt-BR.
         #expect(line.contains("MB"))
-        #expect(line.contains("1"))
     }
 
-    /// Absent facts leave no gap. A file whose size could not be read draws
-    /// one separator fewer, not an empty slot between two of them.
+    /// Absent facts leave no gap. A file whose size could not be read draws one
+    /// separator fewer, not an empty slot between two of them.
     @Test func whatCannotBeReadIsLeftOutRatherThanBlank() {
-        let parts = MediaInfo.parts(format: "png", pixels: nil, bytes: nil, pages: nil, scale: nil)
-        #expect(parts == ["PNG"])
+        #expect(MediaInfo.parts(
+            format: "png", pixels: nil, bytes: nil, pages: nil, scale: nil) == ["PNG"])
         #expect(!MediaInfo.line(format: "png").contains("·"))
     }
 
@@ -163,17 +209,28 @@ struct MediaInfoTests {
             format: "pdf", pixels: nil, bytes: nil, pages: 12, scale: nil).contains("12 pages"))
     }
 
+    /// A fitted PDF says the word rather than a number, because the number
+    /// would be one this code did not set.
+    @Test func aFittedFileSaysFitAndAScaledOneSaysThePercentage() {
+        let fitted = MediaInfo.parts(
+            format: "pdf", pixels: nil, bytes: nil, pages: 3, scale: nil, fitted: true)
+        #expect(fitted.contains("Fit"))
+
+        let scaled = MediaInfo.parts(
+            format: "pdf", pixels: nil, bytes: nil, pages: 3, scale: 1.5, fitted: true)
+        #expect(scaled.contains("150%"))
+        #expect(!scaled.contains("Fit"), "a scale that was asked for is not a fit")
+    }
+
     /// A big image in a small pane lands under one percent of its true size,
     /// where rounding to whole percent would report "0%".
     @Test func aVerySmallScaleStillSaysSomething() {
-        let parts = MediaInfo.parts(
-            format: "png", pixels: nil, bytes: nil, pages: nil, scale: 0.043)
-        #expect(parts.contains("4.3%"))
+        #expect(MediaInfo.parts(
+            format: "png", pixels: nil, bytes: nil, pages: nil, scale: 0.043).contains("4.3%"))
     }
 
     @Test func aZeroSizeOrPageCountIsNotWorthSaying() {
-        let parts = MediaInfo.parts(
-            format: "pdf", pixels: CGSize.zero, bytes: 0, pages: 0, scale: nil)
-        #expect(parts == ["PDF"])
+        #expect(MediaInfo.parts(
+            format: "pdf", pixels: CGSize.zero, bytes: 0, pages: 0, scale: nil) == ["PDF"])
     }
 }

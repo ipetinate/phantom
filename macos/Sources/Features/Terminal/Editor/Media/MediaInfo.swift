@@ -13,7 +13,8 @@ enum MediaInfo {
         pixels: CGSize?,
         bytes: Int?,
         pages: Int?,
-        scale: CGFloat?
+        scale: CGFloat?,
+        fitted: Bool = false
     ) -> [String] {
         var parts: [String] = []
 
@@ -34,6 +35,12 @@ enum MediaInfo {
 
         if let scale, scale > 0 {
             parts.append(percentage(scale))
+        } else if fitted {
+            /// Said in words rather than as a number, and only where the number
+            /// would be a guess: a fitted `PDFView` works out its own scale,
+            /// with its own margins, so a percentage calculated separately here
+            /// would be close and not true.
+            parts.append("Fit")
         }
 
         return parts
@@ -44,10 +51,17 @@ enum MediaInfo {
         pixels: CGSize? = nil,
         bytes: Int? = nil,
         pages: Int? = nil,
-        scale: CGFloat? = nil
+        scale: CGFloat? = nil,
+        fitted: Bool = false
     ) -> String {
-        parts(format: format, pixels: pixels, bytes: bytes, pages: pages, scale: scale)
-            .joined(separator: "  ·  ")
+        parts(
+            format: format,
+            pixels: pixels,
+            bytes: bytes,
+            pages: pages,
+            scale: scale,
+            fitted: fitted
+        ).joined(separator: "  ·  ")
     }
 
     /// Rounded to whole percent, except below ten where a large image fitted
