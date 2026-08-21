@@ -63,7 +63,8 @@ struct MediaPaneView: View {
                 ImageViewerView(
                     image: image,
                     level: level,
-                    onZoomStep: { step($0, in: available) })
+                    onZoomStep: { step($0, in: available) },
+                    onZoomScale: { scale(by: $0, in: available) })
                     .frame(width: pane.width, height: pane.height)
             } else if attempted {
                 unreadable("Couldn't read this image.")
@@ -77,7 +78,8 @@ struct MediaPaneView: View {
                     document: pdf,
                     background: theme.background,
                     level: level,
-                    onZoomStep: { step($0, in: available) })
+                    onZoomStep: { step($0, in: available) },
+                    onZoomScale: { scale(by: $0, in: available) })
                     .frame(width: pane.width, height: pane.height)
             } else if attempted {
                 unreadable("Couldn't read this PDF. It may be encrypted.")
@@ -159,6 +161,13 @@ struct MediaPaneView: View {
             : MediaZoom.zoomedOut(from: level, image: subject, available: available)
     }
 
+    /// A pinch. Continuous rather than laddered — a gesture that snapped
+    /// between stops under the fingers would feel broken.
+    private func scale(by factor: CGFloat, in available: CGSize) {
+        level = MediaZoom.scaled(
+            by: factor, from: level, image: subjectSize, available: available)
+    }
+
     // MARK: The readout
 
     /// The line in the bottom corner.
@@ -217,14 +226,27 @@ struct MediaZoomControl: View {
     var body: some View {
         HStack(spacing: 1) {
             button("minus.magnifyingglass", "Zoom Out", enabled: canZoomOut, action: zoomOut)
+                .keyboardShortcut("-", modifiers: .command)
             button("plus.magnifyingglass", "Zoom In", enabled: canZoomIn, action: zoomIn)
+                .keyboardShortcut("+", modifiers: .command)
             button(
                 "arrow.down.forward.and.arrow.up.backward",
                 "Fit to Pane",
                 enabled: !isFitted,
                 action: fit)
+                .keyboardShortcut("0", modifiers: .command)
         }
         .padding(4)
+        /// ⌘= is ⌘+ without the shift, and it is what the key actually
+        /// types on layouts where + is the shifted character — Preview
+        /// answers to both, so both are claimed. A hidden button because a
+        /// shortcut needs something to hang on and this one has no face.
+        .background {
+            Button(action: zoomIn) { EmptyView() }
+                .keyboardShortcut("=", modifiers: .command)
+                .disabled(!canZoomIn)
+                .hidden()
+        }
         .editorOverlayChrome(isHovered: isHovered)
         .opacity(isHovered ? 1 : 0.78)
         .onHover { isHovered = $0 }

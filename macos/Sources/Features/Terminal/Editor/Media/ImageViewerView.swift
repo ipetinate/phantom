@@ -11,12 +11,14 @@ struct ImageViewerView: NSViewRepresentable {
     let image: NSImage
     let level: MediaZoom.Level
     let onZoomStep: (Int) -> Void
+    var onZoomScale: (CGFloat) -> Void = { _ in }
 
     func makeNSView(context: Context) -> ImageCanvasView {
         let view = ImageCanvasView()
         view.image = image
         view.level = level
         view.onZoomStep = onZoomStep
+        view.onZoomScale = onZoomScale
         return view
     }
 
@@ -24,6 +26,7 @@ struct ImageViewerView: NSViewRepresentable {
         view.image = image
         view.level = level
         view.onZoomStep = onZoomStep
+        view.onZoomScale = onZoomScale
     }
 
     /// The proposal, never the image's size.
@@ -75,6 +78,10 @@ final class ImageCanvasView: NSView {
 
     var onZoomStep: ((Int) -> Void)? {
         didSet { scrollView.onZoomStep = onZoomStep }
+    }
+
+    var onZoomScale: ((CGFloat) -> Void)? {
+        didSet { scrollView.onZoomScale = onZoomScale }
     }
 
     override init(frame frameRect: NSRect) {
@@ -137,6 +144,18 @@ final class ImageCanvasView: NSView {
 /// on the containing view would simply never be called.
 final class ZoomingScrollView: NSScrollView {
     var onZoomStep: ((Int) -> Void)?
+    var onZoomScale: ((CGFloat) -> Void)?
+
+    /// The pinch, as the continuous change it is on the trackpad. The
+    /// magnification is a delta around zero, so the factor a step applies
+    /// is one plus it.
+    override func magnify(with event: NSEvent) {
+        guard let onZoomScale else {
+            super.magnify(with: event)
+            return
+        }
+        onZoomScale(1 + event.magnification)
+    }
 
     private var accumulated: CGFloat = 0
 

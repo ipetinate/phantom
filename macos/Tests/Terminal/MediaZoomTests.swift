@@ -234,3 +234,39 @@ struct MediaInfoTests {
             format: "pdf", pixels: CGSize.zero, bytes: 0, pages: 0, scale: nil) == ["PDF"])
     }
 }
+
+/// The pinch, as arithmetic.
+struct MediaPinchTests {
+    private let pane = CGSize(width: 800, height: 600)
+    private let image = CGSize(width: 400, height: 300)
+
+    /// Continuous, not laddered: a pinch lands wherever the fingers left it.
+    @Test func aPinchScalesFromWhereTheImageIs() {
+        let level = MediaZoom.scaled(by: 1.5, from: .scale(1), image: image, available: pane)
+        #expect(level == .scale(1.5))
+    }
+
+    /// From fit, the gesture picks up at the fitted scale — the same rule
+    /// the buttons follow, so the three inputs never disagree about where
+    /// the image currently is.
+    @Test func aPinchFromFitStartsAtTheFittedScale() {
+        let big = CGSize(width: 1600, height: 1200)
+        let level = MediaZoom.scaled(by: 2, from: .fit, image: big, available: pane)
+        #expect(level == .scale(1))
+    }
+
+    @Test func aPinchIsClampedAtBothEnds() {
+        #expect(MediaZoom.scaled(by: 100, from: .scale(1), image: image, available: pane)
+            == .scale(MediaZoom.maximum))
+        #expect(MediaZoom.scaled(by: 0.001, from: .scale(1), image: image, available: pane)
+            == .scale(MediaZoom.minimum))
+    }
+
+    /// A magnification of NaN or zero is what a degenerate gesture event
+    /// carries, and it must not poison the level.
+    @Test func aNonsenseFactorChangesNothing() {
+        #expect(MediaZoom.scaled(by: .nan, from: .scale(2), image: image, available: pane)
+            == .scale(2))
+        #expect(MediaZoom.scaled(by: 0, from: .fit, image: image, available: pane) == .fit)
+    }
+}

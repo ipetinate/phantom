@@ -108,7 +108,6 @@ struct EditorPresentationControl<Extra: View>: View {
     }
 }
 
-
 extension EditorPresentationControl where Extra == EmptyView {
     init(options: EditorPresentationOptions, presentation: Binding<EditorPresentation>) {
         self.init(options: options, presentation: presentation, extra: { EmptyView() })

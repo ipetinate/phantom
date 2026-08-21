@@ -15,6 +15,7 @@ struct PDFViewerView: NSViewRepresentable {
     let background: NSColor
     let level: MediaZoom.Level
     let onZoomStep: (Int) -> Void
+    var onZoomScale: (CGFloat) -> Void = { _ in }
 
     func makeNSView(context: Context) -> PDFPaneView {
         let view = PDFPaneView()
@@ -28,6 +29,7 @@ struct PDFViewerView: NSViewRepresentable {
 
     private func apply(to view: PDFPaneView) {
         view.onZoomStep = onZoomStep
+        view.onZoomScale = onZoomScale
         view.background = background
         view.show(document)
         view.apply(level)
@@ -51,6 +53,10 @@ final class PDFPaneView: NSView {
 
     var onZoomStep: ((Int) -> Void)? {
         didSet { pdfView.onZoomStep = onZoomStep }
+    }
+
+    var onZoomScale: ((CGFloat) -> Void)? {
+        didSet { pdfView.onZoomScale = onZoomScale }
     }
 
     var background: NSColor = .textBackgroundColor {
@@ -133,6 +139,18 @@ final class PDFPaneView: NSView {
 /// the class that sees them first.
 final class ZoomingPDFView: PDFView {
     var onZoomStep: ((Int) -> Void)?
+    var onZoomScale: ((CGFloat) -> Void)?
+
+    /// The pinch. `PDFView` would handle this itself, and letting it would
+    /// fork the truth: its internal scale would move while the level this
+    /// pane holds — and the readout drawn from it — stayed put.
+    override func magnify(with event: NSEvent) {
+        guard let onZoomScale else {
+            super.magnify(with: event)
+            return
+        }
+        onZoomScale(1 + event.magnification)
+    }
 
     private var accumulated: CGFloat = 0
     private static let step: CGFloat = 12

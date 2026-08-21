@@ -105,6 +105,20 @@ enum MediaZoom {
             height: max(display.height, available.height))
     }
 
+    /// A continuous change — the trackpad pinch — applied to wherever the
+    /// file is drawn now. Unlike a press it does not snap to the ladder:
+    /// a gesture that jumped between stops under the fingers would feel
+    /// broken, and the clamp is what keeps the two ends honest.
+    static func scaled(
+        by factor: CGFloat,
+        from level: Level,
+        image: CGSize,
+        available: CGSize
+    ) -> Level {
+        guard factor.isFinite, factor > 0 else { return level }
+        return .scale(clamped(scale(level, image: image, available: available) * factor))
+    }
+
     private static func clamped(_ scale: CGFloat) -> CGFloat {
         guard scale.isFinite else { return 1 }
         return min(maximum, max(minimum, scale))
