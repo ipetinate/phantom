@@ -523,8 +523,19 @@ private struct WorktreeRow: View {
                         Image(systemName: "lock")
                             .font(.system(size: 8))
                             .foregroundStyle(.secondary)
-                            .help(lockHelp)
                     }
+                }
+
+                /// On the row, not in a tooltip. The padlock is a good
+                /// glance-level marker and a bad explanation: a lock is a
+                /// state somebody chose, and what a reader needs from it is
+                /// what it does to them — which they will otherwise meet as
+                /// a remove that fails for no visible reason.
+                if worktree.isLocked {
+                    Text(WorktreeLockNote.text(reason: worktree.lockReason))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if !tabs.isEmpty {
@@ -629,13 +640,6 @@ private struct WorktreeRow: View {
     /// The badge says *that* it is locked; git's own reason says why, and it
     /// is the thing that decides whether the lock still applies — "on the
     /// external drive" reads very differently once the drive is back.
-    private var lockHelp: String {
-        guard let reason = worktree.lockReason else {
-            return "Locked — git will not prune or remove this worktree"
-        }
-        return "Locked: \(reason)"
-    }
-
     @ViewBuilder
     private var menu: some View {
         Button("New Terminal Here") { onNewTerminal(worktree.path) }
