@@ -78,10 +78,13 @@ struct SidebarPaneTests {
     /// Git ships its own artwork instead of an SF Symbol, so the tab bar
     /// has to go through `SidebarPaneIcon` rather than reading `symbol`
     /// directly — a nil here is the contract that keeps it honest.
-    @Test func gitIsTheOnlyPaneWithoutASymbol() {
+    /// Git and worktrees ship their own artwork instead of an SF Symbol, so
+    /// the tab bar has to go through `SidebarPaneIcon` rather than reading
+    /// `symbol` directly — a nil here is the contract that keeps it honest.
+    @Test func thePanesWithTheirOwnArtworkHaveNoSymbol() {
         #expect(SidebarPane.git.symbol == nil)
+        #expect(SidebarPane.worktrees.symbol == nil)
         #expect(SidebarPane.terminals.symbol != nil)
         #expect(SidebarPane.files.symbol != nil)
-        #expect(SidebarPane.worktrees.symbol != nil)
     }
 }

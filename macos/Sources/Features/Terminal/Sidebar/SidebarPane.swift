@@ -26,13 +26,13 @@ enum SidebarPane: String, CaseIterable, Identifiable, Codable {
     }
 
     /// SF Symbol for the tab bar, or nil for a panel that ships its own
-    /// artwork (see `SidebarPaneIcon`).
+    /// artwork (see `SidebarPaneIcon`) — git and worktrees both do.
     var symbol: String? {
         switch self {
         case .terminals: return "terminal"
         case .files: return "folder"
         case .git: return nil
-        case .worktrees: return "arrow.triangle.branch"
+        case .worktrees: return nil
         }
     }
 
@@ -76,6 +76,8 @@ struct SidebarPaneIcon: View {
         if let symbol = pane.symbol {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .medium))
+        } else if pane == .worktrees {
+            WorktreeIcon(size: size + 2)
         } else {
             GitIcon(size: size + 1)
         }
