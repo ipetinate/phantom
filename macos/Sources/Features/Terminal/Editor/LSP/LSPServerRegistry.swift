@@ -817,10 +817,36 @@ enum LSPServerRegistry {
     /// does not. `.mod` and `.sum` belong to plenty of things that are not
     /// Go — a Fortran module, a checksum list — and matching on the
     /// extension started gopls for every one of them.
+    ///
+    /// The `rc` files are the opposite problem: they have no extension at
+    /// all, so nothing here could match them but their name. Each is
+    /// **allowed** to hold YAML instead of JSON, and each is called JSON
+    /// anyway — the ambiguity is real and it is not evenly weighted. A JSON
+    /// `.prettierrc` is what the tooling writes and what almost every
+    /// project contains; a YAML one is a choice somebody made. Calling them
+    /// JSON serves the common file and mis-serves the rare one visibly,
+    /// with diagnostics that say the document is not JSON. Calling them
+    /// YAML would mis-serve the common one, and a project that wants the
+    /// other answer can spell the extension: `.prettierrc.yaml` resolves
+    /// through the extension table, above, with nothing needed here.
+    ///
+    /// Deciding by content instead is the answer this cannot have. Both
+    /// tables are consulted from a name — `CodeLanguage.resolve(fileName:)`
+    /// is handed no path at all — and this type opens no files, which is
+    /// the property that lets a view ask it what a language would need
+    /// before anything has happened.
+    ///
+    /// `.npmrc` is not here, and not by oversight: it is INI.
     private static let languageIDByFileName: [String: String] = [
         "go.mod": "go",
         "go.sum": "go",
         "go.work": "go",
+        ".prettierrc": "json",
+        ".babelrc": "json",
+        ".eslintrc": "json",
+        ".jscsrc": "json",
+        ".jshintrc": "json",
+        ".swcrc": "json",
     ]
 
     static func languageID(forPath path: String) -> String? {

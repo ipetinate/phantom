@@ -1545,6 +1545,18 @@ final class LSPCenter: ObservableObject {
             return nil
         }
 
+        /// After the handshake and before the first `didOpen`, so the first
+        /// JSON file opened is already matched against a schema rather than
+        /// being validated bare and revalidated a moment later.
+        ///
+        /// `try?`, and the server is left running either way: a JSON file
+        /// without its schema is the brace matcher this build already
+        /// shipped, and refusing to start over a notification would take
+        /// that away too.
+        if let associations = JSONSchemaAssociations.payload(for: definition) {
+            try? process.notify(JSONSchemaAssociations.notification, params: associations)
+        }
+
         status[key] = .running
         servers[key] = process
         listen(to: process, key: key)
