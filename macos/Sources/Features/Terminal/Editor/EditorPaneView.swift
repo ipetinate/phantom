@@ -758,7 +758,16 @@ private struct DocumentView: View {
         /// view — same file, same text, same tab — so without this the
         /// banner would be decided once, when the tab was opened, and be
         /// wrong from then on.
-        .onChange(of: terminalDirectory) { _ in resolveDivergence() }
+        ///
+        /// `task(id:)` rather than `onChange`, and the document's own path in
+        /// the key as well. It runs on appear *and* on every change of the
+        /// key, which is what makes the answer impossible to leave stale:
+        /// with `onChange` alone the tab bar — which computes the same
+        /// verdict from the same directory — drew its divergence mark while
+        /// this banner stayed absent, one view refreshed and the other not.
+        .task(id: DivergenceKey(document: document.url.path, terminal: terminalDirectory)) {
+            resolveDivergence()
+        }
         .onChange(of: splitModel.direction) { splitDirectionRaw = $0.storageKey }
         .onDisappear { lsp.didClose(path: document.url.path) }
         .onChange(of: lsp.diagnostics[document.url.path] ?? []) { _ in
@@ -1407,6 +1416,12 @@ private struct DocumentView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(Color.secondary.opacity(0.12))
+    }
+
+    /// Both halves of the question, so a change to either re-asks it.
+    private struct DivergenceKey: Equatable {
+        let document: String
+        let terminal: String?
     }
 
     private func resolveDivergence() {
