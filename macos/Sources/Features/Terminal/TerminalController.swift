@@ -1381,6 +1381,17 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         layout.onNewOpenCodeTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningOpenCode: true)
         }
+        layout.onNewWorktreeTab = { [weak self] directory in
+            self?.newSidebarTab(in: nil, workingDirectory: directory)
+        }
+        layout.onNewWorktreeAgentTab = { [weak self] directory, agent in
+            self?.newSidebarTab(
+                in: nil,
+                runningClaude: agent == .claude,
+                runningCodex: agent == .codex,
+                runningOpenCode: agent == .opencode,
+                workingDirectory: directory)
+        }
         self.sidebarLayout = layout
 
         let sidebarHosting = NSHostingView(rootView: SidebarView(
@@ -1719,12 +1730,18 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         runningClaude: Bool = false,
         runningCodex: Bool = false,
         runningOpenCode: Bool = false,
-        inheritingPane: Bool = false
+        inheritingPane: Bool = false,
+        workingDirectory: String? = nil
     ) -> Ghostty.SurfaceView? {
         guard let window else { return nil }
 
         var baseConfig = Ghostty.SurfaceConfiguration()
-        baseConfig.workingDirectory = sidebarNewTabDirectory(in: group)
+
+        /// An explicit directory wins over every group rule: the caller that
+        /// passes one — the worktree panel — is naming the whole point of
+        /// the tab, and a project group's root silently overriding it would
+        /// open the terminal outside the worktree it says it is in.
+        baseConfig.workingDirectory = workingDirectory ?? sidebarNewTabDirectory(in: group)
 
         guard let controller = Self.newTab(ghostty, from: window, withBaseConfig: baseConfig)
         else { return nil }

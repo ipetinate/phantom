@@ -18,6 +18,7 @@ struct SettingsRootView: View {
         case keyboardShortcuts
         case languageServers
         case agents
+        case worktrees
 
         var id: String { rawValue }
 
@@ -32,6 +33,7 @@ struct SettingsRootView: View {
             case .keyboardShortcuts: return "Keyboard Shortcuts"
             case .languageServers: return "Language Servers"
             case .agents: return "Agents"
+            case .worktrees: return "Worktrees"
             }
         }
 
@@ -46,6 +48,7 @@ struct SettingsRootView: View {
             case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
             case .agents: return "sparkles"
+            case .worktrees: return "arrow.triangle.branch"
             }
         }
     }
@@ -85,6 +88,8 @@ struct SettingsRootView: View {
                 LanguageServersSettingsView()
             case .agents:
                 AgentsSettingsView()
+            case .worktrees:
+                WorktreesSettingsView()
             }
         }
         .frame(minWidth: 960, minHeight: 600)
@@ -130,6 +135,7 @@ struct SidebarSettingsView: View {
 
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
+    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
 
     @AppStorage("SidebarShowDirectory") private var showDirectory = true
     @AppStorage("SidebarShowGitBranch") private var showGitBranch = true
@@ -167,6 +173,8 @@ struct SidebarSettingsView: View {
                 Toggle("File Explorer", isOn: $showFilesPane)
                     .toggleStyle(.switch)
                 Toggle("Git", isOn: $showGitPane)
+                    .toggleStyle(.switch)
+                Toggle("Worktrees", isOn: $showWorktreesPane)
                     .toggleStyle(.switch)
             } header: {
                 Text("Panels")

@@ -220,6 +220,14 @@ final class ThemePalette: ObservableObject {
         colors.count > 5 ? Color(nsColor: colors[5]) : nil
     }
 
+    /// ANSI index 1 (Red) — the theme's own danger colour, so a destructive
+    /// control warms to the palette the reader chose instead of to the one
+    /// SwiftUI ships. Themes are picked for their reds as much as anything
+    /// else; a system red beside a Dracula sidebar reads as a foreign object.
+    var danger: Color? {
+        colors.count > 1 ? Color(nsColor: colors[1]) : nil
+    }
+
     /// Whether the theme reads as light, which decides whether app windows
     /// take light or dark chrome regardless of the system setting.
     var isLightBackground: Bool {

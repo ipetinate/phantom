@@ -8,11 +8,11 @@ import SwiftUI
 /// one in `SidebarTitlebarChrome`. Nothing in the AppKit hierarchy
 /// (`TerminalController.makeSidebarSplitView`) has to change.
 ///
-/// A worktree panel is the planned next one.
 enum SidebarPane: String, CaseIterable, Identifiable, Codable {
     case terminals
     case files
     case git
+    case worktrees
 
     var id: String { rawValue }
 
@@ -21,6 +21,7 @@ enum SidebarPane: String, CaseIterable, Identifiable, Codable {
         case .terminals: return "Terminals"
         case .files: return "Files"
         case .git: return "Git"
+        case .worktrees: return "Worktrees"
         }
     }
 
@@ -31,6 +32,7 @@ enum SidebarPane: String, CaseIterable, Identifiable, Codable {
         case .terminals: return "terminal"
         case .files: return "folder"
         case .git: return nil
+        case .worktrees: return "arrow.triangle.branch"
         }
     }
 
@@ -43,6 +45,7 @@ enum SidebarPane: String, CaseIterable, Identifiable, Codable {
         case .terminals: return nil
         case .files: return "SidebarShowFilesPane"
         case .git: return "SidebarShowGitPane"
+        case .worktrees: return "SidebarShowWorktreesPane"
         }
     }
 

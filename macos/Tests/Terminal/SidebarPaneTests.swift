@@ -17,17 +17,20 @@ struct SidebarPaneTests {
     /// Wrapped in a saved/restored snapshot: these read the real user
     /// defaults, and a test must not leave the user's panels switched off
     /// behind it.
-    private func withPanes(files: Bool?, git: Bool?, _ body: () -> Void) {
+    private func withPanes(files: Bool?, git: Bool?, worktrees: Bool? = nil, _ body: () -> Void) {
         let defaults = UserDefaults.standard
         let savedFiles = defaults.object(forKey: "SidebarShowFilesPane")
         let savedGit = defaults.object(forKey: "SidebarShowGitPane")
+        let savedWorktrees = defaults.object(forKey: "SidebarShowWorktreesPane")
         defer {
             defaults.set(savedFiles, forKey: "SidebarShowFilesPane")
             defaults.set(savedGit, forKey: "SidebarShowGitPane")
+            defaults.set(savedWorktrees, forKey: "SidebarShowWorktreesPane")
         }
 
         defaults.set(files, forKey: "SidebarShowFilesPane")
         defaults.set(git, forKey: "SidebarShowGitPane")
+        defaults.set(worktrees, forKey: "SidebarShowWorktreesPane")
         body()
     }
 
@@ -40,8 +43,8 @@ struct SidebarPaneTests {
     }
 
     @Test func aDisabledPaneDropsOutOfTheTabOrder() {
-        withPanes(files: false, git: true) {
-            #expect(SidebarPane.enabled == [.terminals, .git])
+        withPanes(files: false, git: true, worktrees: true) {
+            #expect(SidebarPane.enabled == [.terminals, .git, .worktrees])
             #expect(SidebarPane.showsTabBar)
         }
     }
@@ -50,7 +53,7 @@ struct SidebarPaneTests {
     /// hides and the sidebar goes back to being the plain terminal list it
     /// started as.
     @Test func turningEveryExtraOffHidesTheTabBar() {
-        withPanes(files: false, git: false) {
+        withPanes(files: false, git: false, worktrees: false) {
             #expect(SidebarPane.enabled == [.terminals])
             #expect(!SidebarPane.showsTabBar)
         }
@@ -59,7 +62,7 @@ struct SidebarPaneTests {
     /// Terminals is the sidebar's reason to exist; the settings UI must
     /// never offer a switch for it.
     @Test func terminalsCannotBeHidden() {
-        withPanes(files: false, git: false) {
+        withPanes(files: false, git: false, worktrees: false) {
             #expect(SidebarPane.terminals.isEnabled)
             #expect(!SidebarPane.terminals.canBeHidden)
             #expect(SidebarPane.terminals.defaultsKey == nil)
@@ -79,5 +82,6 @@ struct SidebarPaneTests {
         #expect(SidebarPane.git.symbol == nil)
         #expect(SidebarPane.terminals.symbol != nil)
         #expect(SidebarPane.files.symbol != nil)
+        #expect(SidebarPane.worktrees.symbol != nil)
     }
 }

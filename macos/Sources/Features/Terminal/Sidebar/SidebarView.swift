@@ -147,6 +147,7 @@ struct SidebarView: View {
     /// to `UserDefaults` directly, which SwiftUI has no way to observe.
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
+    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
     @AppStorage("SidebarShowClaude") private var showClaude = true
     @AppStorage("SidebarShowCodex") private var showCodex = true
 
@@ -156,6 +157,7 @@ struct SidebarView: View {
             case .terminals: return true
             case .files: return showFilesPane
             case .git: return showGitPane
+            case .worktrees: return showWorktreesPane
             }
         }
     }
@@ -193,6 +195,12 @@ struct SidebarView: View {
                     onOpenInEditor: onOpenInEditor,
                     onOpenDiff: onOpenDiff,
                     onOpenBranchDiff: onOpenBranchDiff
+                )
+            case .worktrees:
+                WorktreePanelView(
+                    tabManager: tabManager,
+                    onNewTerminal: layout.onNewWorktreeTab,
+                    onNewAgentTab: layout.onNewWorktreeAgentTab
                 )
             }
         }
@@ -289,6 +297,7 @@ struct SidebarTitlebarChrome: View {
     /// settings must not leave its buttons behind in the titlebar.
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
+    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
     @AppStorage("SidebarShowClaude") private var showClaude = true
     @AppStorage("SidebarShowCodex") private var showCodex = true
     @AppStorage("SidebarShowOpenCode") private var showOpenCode = true
@@ -304,6 +313,7 @@ struct SidebarTitlebarChrome: View {
         switch layout.selectedPane {
         case .files where !showFilesPane: return .terminals
         case .git where !showGitPane: return .terminals
+        case .worktrees where !showWorktreesPane: return .terminals
         default: return layout.selectedPane
         }
     }
@@ -380,6 +390,7 @@ struct SidebarTitlebarChrome: View {
                 switch visiblePane {
                 case .files: FileExplorerRefresh.shared.request()
                 case .git: GitPanelRefresh.shared.request()
+                case .worktrees: WorktreePanelRefresh.shared.request()
                 case .terminals: break
                 }
             }
@@ -1261,18 +1272,26 @@ private struct SidebarTabRow: View {
                     ))
                     .lineLimit(1)
 
-                HStack(spacing: 4) {
+                WrapLayout(horizontalSpacing: 4, verticalSpacing: 3) {
                     if let editor = editorName {
                         metaChip(icon: "square.and.pencil", text: editor)
                     }
 
-                    if showDirectory, let dir = tab.directoryName {
+                    /// The project for a worktree tab, the folder for every
+                    /// other: a worktree's folder is `<repo>-<branch>` and
+                    /// would say the branch twice.
+                    if showDirectory, let dir = tab.worktreeRepo ?? tab.directoryName {
                         metaChip(text: dir)
                     }
 
                     if showGitBranch, let branch = tab.gitBranch {
+                        /// The glyph carries the signal, not the colour:
+                        /// colour alone is ambiguous — the accent wash is
+                        /// used elsewhere on this row — while a branch
+                        /// network says "worktree" and nothing else.
                         metaChip(
-                            gitIcon: true,
+                            gitIcon: !tab.isInManagedWorktree,
+                            worktreeIcon: tab.isInManagedWorktree,
                             text: branch,
                             dirty: showGitStatus && tab.isDirty == true
                         )
@@ -1298,7 +1317,10 @@ private struct SidebarTabRow: View {
                         Text(" ").font(.system(size: 9))
                     }
                 }
-                .frame(height: isCompact ? 14 : 18)
+                /// A floor, not a ceiling: long branch and folder names wrap
+                /// onto further lines instead of ellipsizing away the exact
+                /// part that tells two refactor branches apart.
+                .frame(minHeight: isCompact ? 14 : 18)
             }
 
             Spacer(minLength: 0)
@@ -1482,6 +1504,7 @@ private struct SidebarTabRow: View {
     private func metaChip(
         icon: String? = nil,
         gitIcon: Bool = false,
+        worktreeIcon: Bool = false,
         text: String,
         dirty: Bool = false
     ) -> some View {
@@ -1489,7 +1512,14 @@ private struct SidebarTabRow: View {
         // layout box is taller than the text's, so letting each size itself
         // pushes the label and the dirty dot visibly below the icon.
         HStack(alignment: .center, spacing: 3) {
-            if gitIcon {
+            if worktreeIcon {
+                /// The branch mark swapped for the worktree mark, rather
+                /// than a second element on a row that already has enough:
+                /// folder plus branch does not distinguish a worktree,
+                /// because the main checkout shows both too.
+                WorktreeIcon(size: 9)
+                    .frame(height: chipLineHeight)
+            } else if gitIcon {
                 GitIcon(size: 8)
                     .frame(height: chipLineHeight)
             } else if let icon {
@@ -1498,8 +1528,8 @@ private struct SidebarTabRow: View {
                     .frame(height: chipLineHeight)
             }
             Text(text)
-                .lineLimit(1)
-                .frame(height: chipLineHeight)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minHeight: chipLineHeight)
             if dirty {
                 Circle()
                     .fill(.yellow)
@@ -1515,7 +1545,9 @@ private struct SidebarTabRow: View {
             RoundedRectangle(cornerRadius: 4)
                 .fill(.quaternary.opacity(0.6))
         )
-        .help(dirty ? "Uncommitted changes" : "")
+        .help(worktreeIcon
+            ? (dirty ? "Worktree · uncommitted changes" : "Worktree")
+            : (dirty ? "Uncommitted changes" : ""))
     }
 
     /// The clickable PR tag: opens the branch's open pull request.
