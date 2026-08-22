@@ -15,8 +15,27 @@ import SwiftUI
 struct EditorPaneTabBar: View {
     @ObservedObject var center: EditorCenter
 
+    /// Where the terminal under this bar is, so a tab can be marked when it
+    /// is showing a file from a checkout the terminal has left.
+    @ObservedObject var terminalDirectory: EditorTerminalDirectory
+
+    /// The open files that are in another worktree of the terminal's
+    /// repository, by path.
+    ///
+    /// Resolved into state rather than asked per row while rendering. The
+    /// answer costs a walk up to `.git` and a couple of small reads *per
+    /// tab*, and this bar redraws for reasons that have nothing to do with
+    /// worktrees — the shell rewriting the window title is enough, which
+    /// during a build is several times a second. Recomputed on the only two
+    /// things that can change it: the terminal moving, and the set of open
+    /// tabs.
+    @State private var divergent: Set<String> = []
+
     var body: some View {
         content
+            .onAppear(perform: resolveDivergence)
+            .onChange(of: terminalDirectory.path) { _ in resolveDivergence() }
+            .onChange(of: center.tabs) { _ in resolveDivergence() }
             // Always full width, never an opinion about it.
             //
             // With no file open the body below is *empty*, and an
@@ -36,6 +55,7 @@ struct EditorPaneTabBar: View {
                     tabs: center.tabs.tabs,
                     selection: center.tabs.selection,
                     needsDirectory: { center.tabs.needsDirectory(for: $0) },
+                    isDivergent: { divergent.contains($0.path) },
                     onSelect: { center.select($0) },
                     onClose: { center.requestClose($0) },
                     terminalTitle: center.terminalTitle,
@@ -44,5 +64,16 @@ struct EditorPaneTabBar: View {
                 Divider()
             }
         }
+    }
+
+    private func resolveDivergence() {
+        let directory = terminalDirectory.path
+        divergent = Set(
+            center.tabs.tabs
+                .map(\.path)
+                .filter {
+                    WorktreeDivergence.verdict(
+                        documentPath: $0, terminalDirectory: directory) != nil
+                })
     }
 }

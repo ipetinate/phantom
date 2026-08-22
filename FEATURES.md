@@ -24,7 +24,7 @@ and not a new app.
 
 `Shipped` is in a published release. `Unreleased` is built and on the open PR.
 `Unverified` is built and covered by tests but never opened in a window.
-`Planned` has not started.
+`In progress` is being built on a local branch. `Planned` has not started.
 
 | Area | Feature | State | Version |
 |---|---|---|---|
@@ -41,13 +41,18 @@ and not a new app.
 | Agents | Ended sessions are not resumed on the next launch | Shipped | v0.7.0 |
 | Agents | Agent processes are killed when a tab or window closes | Shipped | v0.7.0 |
 | Agents | Follow the agent as it edits files | Planned | — |
+| Agents | An MCP server exposing the terminals: list, read output, open tabs | Planned | 0.10.0 |
 | Git | Repository status panel | Shipped | v0.2.0 |
 | Git | Diff, split horizontal and vertical | Shipped | v0.6.0 |
 | Git | File context menu | Shipped | v0.7.0 |
 | Git | Add to .gitignore, tracked files included | Shipped | v0.7.0 |
 | Git | Branch review: commits and files against the base | Unverified | 0.8.0-beta |
 | Git | Search inside the git panel | Planned | — |
-| Git | Worktrees | Planned | — |
+| Git | Worktrees: pane, create, adopt, clean up, setup hooks | Unreleased | 0.9.0-dev |
+| Git | Worktrees: one section per repository in a workspace | Unreleased | 0.9.0-dev |
+| Git | Switch a terminal's worktree from its row, group or toolbar | Unreleased | 0.9.0-dev |
+| Git | Open editor tabs follow the switch; unsaved ones stay behind | Unreleased | 0.9.0-dev |
+| Git | A file from a worktree its terminal left says so, read-only when it has no counterpart | Unreleased | 0.9.0-dev |
 | Files | File explorer with a directory watcher | Shipped | v0.2.0 |
 | Files | File icon themes loaded from disk | Shipped | v0.2.0 |
 | Files | Remappable shortcuts, more than one per command | Shipped | v0.7.0 |
@@ -75,6 +80,7 @@ and not a new app.
 | Editor | Page thumbnails beside a PDF, where the minimap sits | Unreleased | 0.8.0-beta |
 | Editor | An SVG opens as a picture, with its markup one press away | Unreleased | 0.8.0-beta |
 | Editor | A CSV opens as a table, with its text one press away | Unreleased | 0.8.0-beta |
+| Editor | Attach the editor line to the agent prompt, ⌘K and ⇧⌘K | Unreleased | 0.9.0-dev |
 | Editor | Multi-cursor | Planned | — |
 | Language | Language servers, 21 binaries | Shipped | v0.2.0 |
 | Language | Hover, definition, references, rename | Shipped | v0.2.0 |

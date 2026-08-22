@@ -19,6 +19,26 @@ final class SidebarTabModel: ObservableObject, Identifiable {
     @Published private(set) var needsAttention = false
     @Published private(set) var gitBranch: String?
     @Published private(set) var repoRoot: String?
+
+    /// Whether the tab's cwd sits inside the managed worktree root — the fact
+    /// the branch chip's glyph changes on. An O(1) string check,
+    /// deliberately: it is refreshed on the same paths as the branch, one of
+    /// which is a 5-second timer that promises to run no git.
+    @Published private(set) var isInManagedWorktree = false
+
+    /// The repository a worktree tab belongs to, for the chip that would
+    /// otherwise repeat the branch.
+    ///
+    /// The folder of a worktree is `<repo>-<branch>`, so its last component
+    /// says the branch twice and the project once, jumbled. This is the
+    /// project on its own, read from the main checkout.
+    ///
+    /// Resolved **only** for tabs inside the managed root, and the cost is
+    /// worth saying out loud: it is two reads of a small file on the same
+    /// path as the 5-second metadata timer. That path promises no *git
+    /// subprocess*, and it still keeps that promise — but it is no longer
+    /// free, and it is bounded to worktree tabs on purpose.
+    @Published private(set) var worktreeRepo: String?
     @Published private(set) var agentState: AgentTabState?
 
     /// The agent whose session is up in this tab, which `agentState` cannot
@@ -80,6 +100,11 @@ final class SidebarTabModel: ObservableObject, Identifiable {
     func setGit(branch: String?, root: String?) {
         if gitBranch != branch { gitBranch = branch }
         if repoRoot != root { repoRoot = root }
+    }
+
+    func setInManagedWorktree(_ value: Bool, repo: String?) {
+        if isInManagedWorktree != value { isInManagedWorktree = value }
+        if worktreeRepo != repo { worktreeRepo = repo }
     }
 
     func setAgentState(_ value: AgentTabState?) {

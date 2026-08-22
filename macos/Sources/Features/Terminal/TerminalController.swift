@@ -78,6 +78,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     /// Search across the folder the explorer is showing, opened with ⇧⌘F.
     let workspaceSearch = WorkspaceSearchCenter()
+
+    /// Where this window's terminal is, for the pane above it. See
+    /// ``EditorTerminalDirectory``.
+    let editorTerminalDirectory = EditorTerminalDirectory()
+    private var editorTerminalDirectoryCancellable: AnyCancellable?
     private var editorHostingView: NSView?
 
     /// The terminal half of the right pane, hidden while the editor has
@@ -1381,6 +1386,20 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         layout.onNewOpenCodeTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningOpenCode: true)
         }
+        layout.onNewWorktreeTab = { [weak self] directory in
+            self?.newSidebarTab(in: nil, workingDirectory: directory)
+        }
+        layout.onNewWorktreeTabInGroup = { [weak self] group, directory in
+            self?.newSidebarTab(in: group, workingDirectory: directory)
+        }
+        layout.onNewWorktreeAgentTab = { [weak self] directory, agent in
+            self?.newSidebarTab(
+                in: nil,
+                runningClaude: agent == .claude,
+                runningCodex: agent == .codex,
+                runningOpenCode: agent == .opencode,
+                workingDirectory: directory)
+        }
         self.sidebarLayout = layout
 
         let sidebarHosting = NSHostingView(rootView: SidebarView(
@@ -1456,7 +1475,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         let chromeHosting = NSHostingView(rootView: SidebarTitlebarChrome(
             store: .shared,
-            layout: layout
+            layout: layout,
+            tabManager: tabManager,
+            editorCenter: editorCenter
         ).interfaceFont())
         chromeHosting.translatesAutoresizingMaskIntoConstraints = false
         self.sidebarChromeView = chromeHosting
@@ -1542,7 +1563,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // between views with no common ancestor raises, and raising here
         // leaves the app running with no window at all.
         let tabBarHosting = NSHostingView(
-            rootView: EditorPaneTabBar(center: editorCenter).interfaceFont()
+            rootView: EditorPaneTabBar(
+                center: editorCenter,
+                terminalDirectory: editorTerminalDirectory
+            ).interfaceFont()
         )
         tabBarHosting.translatesAutoresizingMaskIntoConstraints = false
         // Layer-backed and coloured by `syncSidebarBackground`, exactly like
@@ -1579,6 +1603,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         let editorHosting = NSHostingView(
             rootView: EditorPaneView(
                 center: editorCenter,
+                terminalDirectory: editorTerminalDirectory,
                 search: workspaceSearch
             ).interfaceFont()
         )
@@ -1719,12 +1744,18 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         runningClaude: Bool = false,
         runningCodex: Bool = false,
         runningOpenCode: Bool = false,
-        inheritingPane: Bool = false
+        inheritingPane: Bool = false,
+        workingDirectory: String? = nil
     ) -> Ghostty.SurfaceView? {
         guard let window else { return nil }
 
         var baseConfig = Ghostty.SurfaceConfiguration()
-        baseConfig.workingDirectory = sidebarNewTabDirectory(in: group)
+
+        /// An explicit directory wins over every group rule: the caller that
+        /// passes one — the worktree panel — is naming the whole point of
+        /// the tab, and a project group's root silently overriding it would
+        /// open the terminal outside the worktree it says it is in.
+        baseConfig.workingDirectory = workingDirectory ?? sidebarNewTabDirectory(in: group)
 
         guard let controller = Self.newTab(ghostty, from: window, withBaseConfig: baseConfig)
         else { return nil }
@@ -2537,6 +2568,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // We always cancel our event listener
         surfaceAppearanceCancellables.removeAll()
 
+        followWorkingDirectory(of: to)
+
         // When our focus changes, we update our window appearance based on the
         // currently focused surface.
         guard let focusedSurface else { return }
@@ -2551,6 +2584,29 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             .dropFirst()
             .sink { [weak self, weak focusedSurface] _ in self?.syncAppearanceOnPropertyChange(focusedSurface) }
             .store(in: &surfaceAppearanceCancellables)
+    }
+
+    /// Keeps the editor's idea of where its terminal is in step with the
+    /// shell's.
+    ///
+    /// Subscribed here rather than read on demand because the interesting
+    /// change is one nothing else in this window notices: a `cd` from one
+    /// worktree of a repository to another leaves the title, the tab and the
+    /// surface tree exactly as they were, and the only signal is the OSC 7
+    /// the shell sends. The pane's divergence banner is that signal made
+    /// visible.
+    ///
+    /// A nil surface leaves the last answer standing. Focus moving away is
+    /// not the terminal moving — most often it has moved *into the editor* —
+    /// and clearing the directory there would take the banner down at
+    /// precisely the moment the reader looked at the file it is about.
+    private func followWorkingDirectory(of surface: Ghostty.SurfaceView?) {
+        guard let surface else { return }
+        editorTerminalDirectoryCancellable = surface.$pwd
+            .removeDuplicates()
+            .sink { [weak self] pwd in
+                self?.editorTerminalDirectory.path = (pwd?.isEmpty ?? true) ? nil : pwd
+            }
     }
 
     private func syncAppearanceOnPropertyChange(_ surface: Ghostty.SurfaceView?) {

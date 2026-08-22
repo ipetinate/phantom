@@ -11,6 +11,11 @@ import SwiftUI
 /// app, and this file is where the two meet.
 struct EditorPaneView: View {
     @ObservedObject var center: EditorCenter
+
+    /// Where this pane's terminal is, which is what makes an open file's own
+    /// worktree worth mentioning. See ``EditorTerminalDirectory``.
+    @ObservedObject var terminalDirectory: EditorTerminalDirectory
+
     @ObservedObject private var palette: ThemePalette = .shared
 
     @AppStorage(EditorSettings.fontSizeKey) private var fontSize = EditorSettings.defaultFontSize
@@ -44,6 +49,9 @@ struct EditorPaneView: View {
     /// sheet. Kept here rather than in the document view because following
     /// one of them opens a *different* document, which is this view's job.
     @State private var references: [LSPReference] = []
+
+    /// The ⇧⌘K request, alive while its picker sheet is on screen.
+    @State private var attachRequest: AgentAttachRequest?
 
     var body: some View {
         content
@@ -94,6 +102,47 @@ struct EditorPaneView: View {
                     )
                 }
             }
+            .sheet(item: $attachRequest) { request in
+                AgentAttachPicker(request: request) { attachRequest = nil }
+            }
+    }
+
+    /// Trades a tab showing one checkout's file for the same file in the
+    /// checkout the terminal is in now.
+    ///
+    /// Opened before the old tab is asked to close, and the order is the
+    /// point. Closing first would move the selection to a neighbouring tab,
+    /// and the reader would watch an unrelated file appear on their way to
+    /// the one they asked for. Opening first lands them on the new file and
+    /// leaves the close as bookkeeping behind it.
+    ///
+    /// `requestClose` rather than `close`, so a document with unsaved edits
+    /// still gets its "save first?" question. That is the case this whole
+    /// banner exists for: the reason a dirty document stayed behind is that
+    /// its edits belong to the branch being left, and discarding them
+    /// silently on the way out would be exactly the loss
+    /// ``WorktreeDocumentMigration`` refused to risk.
+    private func followTerminal(from path: String, to counterpart: String) {
+        guard center.open(URL(fileURLWithPath: counterpart)) else { return }
+        center.requestClose(path)
+    }
+
+    /// ⌘K: the reference goes to this tab's own terminal, and the pane flips
+    /// to it — a reference typed into a hidden prompt looks like the key did
+    /// nothing, and seeing it land is what tells the reader they can keep
+    /// typing their question.
+    private func attachToOwnTerminal(document: EditorDocument, range: NSRange, text: String) {
+        guard let surface = AgentAttach.ownSurface() else {
+            NSSound.beep()
+            return
+        }
+        let lines = EditorLineReference.lines(in: text as NSString, selection: range)
+        let reference = EditorLineReference.reference(
+            filePath: document.url.path,
+            lines: lines,
+            cwd: AgentAttach.ownCwd())
+        AgentAttach.send(reference, into: surface)
+        center.selectTerminal()
     }
 
     @ViewBuilder
@@ -104,9 +153,13 @@ struct EditorPaneView: View {
                 theme: theme,
                 configuration: configuration,
                 lsp: lsp,
+                terminalDirectory: terminalDirectory.path,
                 onSave: { center.saveSelected() },
                 onSaveAll: { center.saveAll() },
                 onCloseTab: { center.requestCloseSelected() },
+                onFollowTerminal: { counterpart in
+                    followTerminal(from: document.url.path, to: counterpart)
+                },
                 onSearchWorkspace: {
                     search.present(root: (document.url.deletingLastPathComponent()).path)
                 },
@@ -115,6 +168,14 @@ struct EditorPaneView: View {
                 },
                 onShowReferences: { found in
                     references = found.map(LSPReference.init)
+                },
+                onAttachLine: { range, text in
+                    attachToOwnTerminal(document: document, range: range, text: text)
+                },
+                onAttachLinePicker: { range, text in
+                    attachRequest = AgentAttachRequest(
+                        filePath: document.url.path,
+                        lines: EditorLineReference.lines(in: text as NSString, selection: range))
                 }
             )
             .id(document.id)
@@ -219,12 +280,27 @@ private struct DocumentView: View {
     let theme: CodeTheme
     let configuration: CodeEditorConfiguration
     @ObservedObject var lsp: LSPCenter
+
+    /// The working directory of the terminal this pane belongs to, or nil
+    /// while it has not reported one. A plain value rather than the
+    /// observable it came from: what this view does with it is compare it
+    /// against a path, and taking it as a value is what lets the comparison
+    /// be re-run on exactly the changes that matter.
+    let terminalDirectory: String?
+
     let onSave: () -> Void
     let onSaveAll: () -> Void
     let onCloseTab: () -> Void
+
+    /// Asked to swap this tab for the same file in the terminal's checkout,
+    /// with the path to open. Offered only when that file exists.
+    let onFollowTerminal: (String) -> Void
+
     let onSearchWorkspace: () -> Void
     let onOpenLocation: (LSPLocation) -> Void
     let onShowReferences: ([LSPLocation]) -> Void
+    let onAttachLine: (NSRange, String) -> Void
+    let onAttachLinePicker: (NSRange, String) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
 
@@ -289,6 +365,15 @@ private struct DocumentView: View {
     /// so it is shared by every split and outlives the launch — someone who
     /// reads diffs stacked wants the next one stacked too.
     @AppStorage("EditorSplitDirection") private var splitDirectionRaw = SplitViewDirection.horizontal.storageKey
+
+    /// Whether this document is from a worktree its terminal has left, and
+    /// what there is to be done about it.
+    ///
+    /// Held in state and recomputed on the two things that can change it,
+    /// rather than asked while rendering. The answer costs a walk up to
+    /// `.git` and a couple of small reads, and this view redraws on every
+    /// git poll and every diagnostic a language server sends.
+    @State private var divergence: WorktreeDivergence.Verdict?
 
     /// The arrangement of whatever split this document is showing.
     ///
@@ -575,6 +660,12 @@ private struct DocumentView: View {
             /// a `class` attribute, and it turns back off by itself when that
             /// server stops.
             completesInsideClassAttribute: lsp.completesClassAttributes(forPath: document.url.path),
+            /// Read-only for the one case that cannot be saved anywhere
+            /// useful — see ``WorktreeDivergence/Verdict/isReadOnly``. Not a
+            /// flag of its own: the same fact that puts the banner up decides
+            /// this, so the two can never drift into a banner that says
+            /// read-only over a buffer that accepts typing.
+            isEditable: divergence?.isReadOnly != true,
             theme: theme,
             configuration: configuration,
             onEdit: { edited in
@@ -601,7 +692,9 @@ private struct DocumentView: View {
             onSave: { saveWithFormatting() },
             onSaveAll: onSaveAll,
             onCloseTab: onCloseTab,
-            onSearchWorkspace: onSearchWorkspace
+            onSearchWorkspace: onSearchWorkspace,
+            onAttachLine: onAttachLine,
+            onAttachLinePicker: onAttachLinePicker
         )
     }
 
@@ -609,6 +702,10 @@ private struct DocumentView: View {
         VStack(spacing: 0) {
             if document.hasConflict {
                 conflictBanner
+            }
+
+            if let divergence {
+                divergenceBanner(divergence)
             }
 
             if let status = serverStatus, status.isFailure, let server = lsp.definition(forPath: document.url.path) {
@@ -652,6 +749,24 @@ private struct DocumentView: View {
             if let root = EditorChangeLookup.repositoryRoot(forPath: document.url.path) {
                 git.requestStatus(root: root)
             }
+
+            resolveDivergence()
+        }
+        /// The only thing that can make an open document diverge, and the
+        /// only thing that can heal it: the terminal moving. A `cd` between
+        /// two worktrees of one repository changes nothing else about this
+        /// view — same file, same text, same tab — so without this the
+        /// banner would be decided once, when the tab was opened, and be
+        /// wrong from then on.
+        ///
+        /// `task(id:)` rather than `onChange`, and the document's own path in
+        /// the key as well. It runs on appear *and* on every change of the
+        /// key, which is what makes the answer impossible to leave stale:
+        /// with `onChange` alone the tab bar — which computes the same
+        /// verdict from the same directory — drew its divergence mark while
+        /// this banner stayed absent, one view refreshed and the other not.
+        .task(id: DivergenceKey(document: document.url.path, terminal: terminalDirectory)) {
+            resolveDivergence()
         }
         .onChange(of: splitModel.direction) { splitDirectionRaw = $0.storageKey }
         .onDisappear { lsp.didClose(path: document.url.path) }
@@ -1041,6 +1156,11 @@ private struct DocumentView: View {
     /// has no formatter is an ordinary state, and a modal saying so on every
     /// ⌘S would train the reader to dismiss alerts without reading them.
     private func formatDocument(announcing: Bool) async {
+        /// Read-only means read-only, and formatting is the one write that
+        /// does not begin with a keystroke. A non-editable text view refuses
+        /// typing, but ⌘S with format-on-save turned on would still rewrite
+        /// the file from underneath the banner saying it cannot be edited.
+        guard divergence?.isReadOnly != true else { return }
         if await formatWithPrettier(announcing: announcing) { return }
         await formatWithLanguageServer(announcing: announcing)
     }
@@ -1181,6 +1301,10 @@ private struct DocumentView: View {
     /// only touched the tabs you happened to have open would leave the
     /// project broken in exactly the places you were not looking.
     private func rename(at offset: Int, to name: String) {
+        /// The other write that does not come from typing. A rename reaches
+        /// this document through the server's edit list rather than through
+        /// the keyboard, so the non-editable text view does not stop it.
+        guard divergence?.isReadOnly != true else { return }
         Task {
             let revision = document.revision
             let byFile = await lsp.rename(
@@ -1292,6 +1416,78 @@ private struct DocumentView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(Color.secondary.opacity(0.12))
+    }
+
+    /// Both halves of the question, so a change to either re-asks it.
+    private struct DivergenceKey: Equatable {
+        let document: String
+        let terminal: String?
+    }
+
+    private func resolveDivergence() {
+        divergence = WorktreeDivergence.verdict(
+            documentPath: document.url.path, terminalDirectory: terminalDirectory)
+    }
+
+    /// Shown when this tab is looking at one checkout's file above another
+    /// checkout's shell — the state ``WorktreeDocumentMigration`` leaves a
+    /// document in when it stays behind.
+    ///
+    /// Worth saying out loud because nothing else on screen says it. The tab
+    /// shows a file name, the text is the text, and the branch the reader
+    /// believes they are on is the one their prompt names — which is now a
+    /// different branch from the one they are editing. Both names are given
+    /// rather than only the document's: "this is from `feat-a`" answers
+    /// nothing on its own, and it is the pair that identifies the mistake
+    /// somebody is about to make.
+    ///
+    /// Two sentences and at most two buttons, matching `conflictBanner`'s
+    /// weight, because it is the same kind of news: something happened
+    /// underneath you, here is what it was, here is the way out.
+    private func divergenceBanner(_ divergence: WorktreeDivergence.Verdict) -> some View {
+        HStack(spacing: 8) {
+            WorktreeIcon(size: 12)
+                .foregroundStyle(.orange)
+
+            Text(divergenceSummary(divergence))
+                .font(palette.font(size: 11))
+
+            Spacer(minLength: 0)
+
+            /// Offered only when there is a file to offer. On the
+            /// `stayMissing` side of this there is no copy in the terminal's
+            /// checkout — that is *why* the tab stayed behind — and a button
+            /// that opened an empty buffer at that path would create the
+            /// file on the first save.
+            if let counterpart = divergence.counterpart {
+                Button("Open in \(divergence.terminalName)") {
+                    onFollowTerminal(counterpart)
+                }
+                .font(palette.font(size: 11))
+            }
+
+            Button("Close") { onCloseTab() }
+                .font(palette.font(size: 11))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.15))
+        .help(divergence.documentRoot)
+    }
+
+    /// The sentence, in the two shapes the situation comes in.
+    ///
+    /// The read-only one says *why* it is read-only rather than only that it
+    /// is. "Read-only" alone reads as a permissions problem the reader could
+    /// go and fix; naming the branch that has no such file is what makes it
+    /// obviously not one.
+    private func divergenceSummary(_ divergence: WorktreeDivergence.Verdict) -> String {
+        if divergence.isReadOnly {
+            return "This file is from \(divergence.documentName) and doesn't exist in "
+                + "\(divergence.terminalName), where the terminal is now — read-only."
+        }
+        return "This file is from \(divergence.documentName). The terminal has moved to "
+            + "\(divergence.terminalName)."
     }
 
     /// Shown only when both sides have changes, which is the one case that

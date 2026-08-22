@@ -372,6 +372,9 @@ final class SidebarTabManager: ObservableObject {
 
         let git = Self.gitInfo(for: pwd)
         model.setGit(branch: git?.branch, root: git?.root)
+        model.setInManagedWorktree(
+            GitWorktreeMembership.contains(pwd: pwd, root: WorktreeSettings.managedRoot),
+            repo: Self.worktreeRepo(forRepoRoot: git?.root, pwd: pwd))
         if let git {
             GitStatusCenter.shared.requestRefresh(root: git.root, branch: git.branch)
             let info = GitStatusCenter.shared.info(forRoot: git.root)
@@ -383,6 +386,21 @@ final class SidebarTabManager: ObservableObject {
         } else {
             model.setRepoStatus(isDirty: nil, prNumber: nil, prURL: nil)
         }
+    }
+
+    /// The project a worktree tab belongs to, or nil for a tab that is not in
+    /// one.
+    ///
+    /// Guarded by the string check first, so the two small file reads
+    /// `GitCommonDir` does only happen for tabs actually inside the managed
+    /// root — which keeps the 5-second timer's cost where it was for
+    /// everybody else.
+    private static func worktreeRepo(forRepoRoot root: String?, pwd: String?) -> String? {
+        guard GitWorktreeMembership.contains(pwd: pwd, root: WorktreeSettings.managedRoot),
+              let root, !root.isEmpty,
+              let mainCheckout = GitCommonDir.resolve(from: root)
+        else { return nil }
+        return WorktreePath.repoName(mainCheckout: mainCheckout)
     }
 
     /// Surface publishers update the model directly — no list refresh.
@@ -434,6 +452,9 @@ final class SidebarTabManager: ObservableObject {
         for model in models {
             let git = Self.gitInfo(for: model.pwd)
             model.setGit(branch: git?.branch, root: git?.root)
+            model.setInManagedWorktree(
+                GitWorktreeMembership.contains(pwd: model.pwd, root: WorktreeSettings.managedRoot),
+                repo: Self.worktreeRepo(forRepoRoot: git?.root, pwd: model.pwd))
             if let git {
                 GitStatusCenter.shared.requestRefresh(root: git.root, branch: git.branch)
             }

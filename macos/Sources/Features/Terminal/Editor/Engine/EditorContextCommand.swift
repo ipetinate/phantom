@@ -48,6 +48,7 @@ enum EditorContextCommand: Equatable, CaseIterable {
     case findReferences
     case rename
     case format
+    case attachLine
     case cut
     case copy
     case paste
@@ -67,6 +68,7 @@ enum EditorContextCommand: Equatable, CaseIterable {
         case .findReferences: "findReferences"
         case .rename: "renameSymbol"
         case .format: "formatDocument"
+        case .attachLine: "attachLineToAgent"
         case .cut, .copy, .paste, .selectAll: nil
         }
     }
@@ -77,6 +79,7 @@ enum EditorContextCommand: Equatable, CaseIterable {
         case .findReferences: "Find All References"
         case .rename: "Rename Symbol…"
         case .format: "Format Document"
+        case .attachLine: "Attach Line to Agent"
         case .cut: "Cut"
         case .copy: "Copy"
         case .paste: "Paste"
@@ -92,7 +95,7 @@ enum EditorContextCommand: Equatable, CaseIterable {
     /// it. Select All apart from the clipboard, as `TextEdit` has it.
     var group: Int {
         switch self {
-        case .goToDefinition, .findReferences, .rename, .format: 0
+        case .goToDefinition, .findReferences, .rename, .format, .attachLine: 0
         case .cut, .copy, .paste: 1
         case .selectAll: 2
         }
@@ -116,6 +119,7 @@ enum EditorContextCommand: Equatable, CaseIterable {
         case .findReferences: "g"
         case .rename: "r"
         case .format: "f"
+        case .attachLine: "k"
         case .cut: "x"
         case .copy: "c"
         case .paste: "v"
@@ -134,6 +138,9 @@ enum EditorContextCommand: Equatable, CaseIterable {
         /// `performKeyEquivalent`.
         case .format: [.command, .shift]
 
+        /// ⌘K, the Cursor and VS Code habit for "add this to the chat".
+        case .attachLine: [.command]
+
         case .cut, .copy, .paste, .selectAll: [.command]
         }
     }
@@ -150,7 +157,7 @@ enum EditorContextCommand: Equatable, CaseIterable {
         case .copy: #selector(NSText.copy(_:))
         case .paste: #selector(NSText.paste(_:))
         case .selectAll: #selector(NSText.selectAll(_:))
-        case .goToDefinition, .findReferences, .rename, .format: nil
+        case .goToDefinition, .findReferences, .rename, .format, .attachLine: nil
         }
     }
 }

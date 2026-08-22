@@ -18,6 +18,7 @@ struct SettingsRootView: View {
         case keyboardShortcuts
         case languageServers
         case agents
+        case worktrees
 
         var id: String { rawValue }
 
@@ -32,6 +33,7 @@ struct SettingsRootView: View {
             case .keyboardShortcuts: return "Keyboard Shortcuts"
             case .languageServers: return "Language Servers"
             case .agents: return "Agents"
+            case .worktrees: return "Worktrees"
             }
         }
 
@@ -46,6 +48,7 @@ struct SettingsRootView: View {
             case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
             case .agents: return "sparkles"
+            case .worktrees: return "arrow.triangle.branch"
             }
         }
     }
@@ -85,6 +88,8 @@ struct SettingsRootView: View {
                 LanguageServersSettingsView()
             case .agents:
                 AgentsSettingsView()
+            case .worktrees:
+                WorktreesSettingsView()
             }
         }
         .frame(minWidth: 960, minHeight: 600)
@@ -130,6 +135,7 @@ struct SidebarSettingsView: View {
 
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
+    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
 
     @AppStorage("SidebarShowDirectory") private var showDirectory = true
     @AppStorage("SidebarShowGitBranch") private var showGitBranch = true
@@ -137,14 +143,17 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarShowPullRequest") private var showPullRequest = true
     @AppStorage("SidebarShowDevServer") private var showDevServer = true
     @AppStorage("SidebarShowPlan") private var showPlan = true
+    @AppStorage("SidebarTabShowWorktree") private var tabShowWorktree = true
     @AppStorage("SidebarTabAlwaysShowActions") private var tabAlwaysShowActions = false
 
     @AppStorage("SidebarGroupShowPullRequests") private var groupShowPullRequests = true
     @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = true
     @AppStorage("SidebarGroupShowNewTerminal") private var groupShowNewTerminal = true
+    @AppStorage("SidebarGroupShowWorktree") private var groupShowWorktree = true
     @AppStorage("SidebarGroupShowCount") private var groupShowCount = true
     @AppStorage("SidebarGroupAlwaysShowActions") private var groupAlwaysShowActions = false
 
+    @AppStorage("SidebarChromeShowWorktree") private var chromeShowWorktree = true
     @AppStorage("SidebarChromeAlwaysShowActions") private var chromeAlwaysShowActions = false
 
     var body: some View {
@@ -168,6 +177,8 @@ struct SidebarSettingsView: View {
                     .toggleStyle(.switch)
                 Toggle("Git", isOn: $showGitPane)
                     .toggleStyle(.switch)
+                Toggle("Worktrees", isOn: $showWorktreesPane)
+                    .toggleStyle(.switch)
             } header: {
                 Text("Panels")
             } footer: {
@@ -177,6 +188,8 @@ struct SidebarSettingsView: View {
             }
 
             Section {
+                Toggle("Show New Terminal in Worktree", isOn: $chromeShowWorktree)
+                    .toggleStyle(.switch)
                 Toggle("Always Show Toolbar Icons", isOn: $chromeAlwaysShowActions)
                     .toggleStyle(.switch)
             } header: {
@@ -200,12 +213,14 @@ struct SidebarSettingsView: View {
                     .toggleStyle(.switch)
                 Toggle("Show Plan Tag", isOn: $showPlan)
                     .toggleStyle(.switch)
+                Toggle("Show Switch Worktree", isOn: $tabShowWorktree)
+                    .toggleStyle(.switch)
                 Toggle("Always Show Tab Actions", isOn: $tabAlwaysShowActions)
                     .toggleStyle(.switch)
             } header: {
                 Text("Tab Info")
             } footer: {
-                Text("A tab's agent buttons appear on hover — turn the last one on to keep them visible. Which agents they offer is in Agents. The plan tag only ever shows while the Claude session that wrote the plan is running in that tab.")
+                Text("A tab's agent buttons appear on hover — turn the last one on to keep them visible. Which agents they offer is in Agents. The plan tag only ever shows while the Claude session that wrote the plan is running in that tab. Switch Worktree appears only on a terminal sitting at a prompt, because it types a cd into it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -216,6 +231,8 @@ struct SidebarSettingsView: View {
                 Toggle("Show New Claude Session", isOn: $groupShowClaude)
                     .toggleStyle(.switch)
                 Toggle("Show New Terminal", isOn: $groupShowNewTerminal)
+                    .toggleStyle(.switch)
+                Toggle("Show New Terminal in Worktree", isOn: $groupShowWorktree)
                     .toggleStyle(.switch)
                 Toggle("Show Terminal Count", isOn: $groupShowCount)
                     .toggleStyle(.switch)

@@ -36,6 +36,18 @@ final class SidebarLayoutModel: ObservableObject {
     /// Creates a new terminal tab that immediately starts an OpenCode session.
     var onNewOpenCodeTab: () -> Void = {}
 
+    /// Opens a terminal — or a terminal already running an agent — with its
+    /// cwd inside a chosen worktree. Wired by the controller like the
+    /// callbacks above; the worktree pane is the only caller.
+    var onNewWorktreeTab: (String) -> Void = { _ in }
+    var onNewWorktreeAgentTab: (String, CodingAgent) -> Void = { _, _ in }
+
+    /// The same, from inside a group's header — where the terminal has to
+    /// land *in that group*. Pressing a button on a group and watching the
+    /// terminal appear at the bottom of the list, outside it, is the
+    /// gesture doing half of what it said.
+    var onNewWorktreeTabInGroup: (SidebarGroup, String) -> Void = { _, _ in }
+
     /// Which panel the sidebar is showing.
     ///
     /// Per-window, and deliberately **not** persisted. Every terminal tab is
