@@ -402,6 +402,23 @@ final class WorktreeCenter: ObservableObject {
         )
     }
 
+    /// Lifts the lock that keeps a worktree from being pruned or removed.
+    ///
+    /// A worktree on removable media or a network mount is locked so a
+    /// disconnected volume is not pruned as if its folder had been deleted.
+    /// The protection is the point, which is why lifting it is its own
+    /// gesture rather than a flag on the remove: git refuses a locked
+    /// worktree even when the remove is forced once, and the user who meant
+    /// to take it has to say so about the lock first.
+    func unlock(path: String, commonRoot: String, completion: @escaping @MainActor (Bool) -> Void) {
+        perform(
+            Operation(label: "Unlocking worktree…", name: "Unlock Worktree"),
+            commonRoot: commonRoot,
+            steps: [["worktree", "unlock", path]],
+            completion: completion
+        )
+    }
+
     /// Drops the administrative entries of worktrees whose folders are gone.
     func prune(commonRoot: String, completion: @escaping @MainActor (Bool) -> Void) {
         perform(

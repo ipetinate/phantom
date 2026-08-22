@@ -405,6 +405,63 @@ struct WorktreeMutationTests {
         #expect(!repo.paths().contains(path))
     }
 
+    // MARK: Locking
+
+    /// Proved as a pair, because an unlock on its own proves nothing: git
+    /// reports success for it whether or not anything was standing in the
+    /// way. So first the refusal the lock exists to produce — and note that
+    /// `remove` refuses even though the pane can force it, since a single
+    /// `--force` does not override a lock — then the same remove going
+    /// through, with the unlock as the only thing that changed between them.
+    @Test @MainActor func unlockingClearsTheRemovalGitRefused() async {
+        let repo = Repo()
+        let path = repo.addWorktree("pinned", branch: "feat/x")
+        repo.git("worktree", "lock", path)
+
+        let center = WorktreeCenter.shared
+        center.lastError = nil
+
+        let refused = await mutate { done in
+            center.remove(path: path, force: true, commonRoot: repo.root, completion: done)
+        }
+        #expect(!refused)
+        #expect(repo.paths().contains(path))
+        #expect(center.lastError?.failure.raw.contains("locked") == true)
+
+        let unlocked = await mutate { done in
+            center.unlock(path: path, commonRoot: repo.root, completion: done)
+        }
+        #expect(unlocked)
+        #expect(center.lastError == nil)
+        #expect(WorktreeCenter.loadList(commonRoot: repo.root)?.contains { $0.isLocked } == false)
+
+        let removed = await mutate { done in
+            center.remove(path: path, force: false, commonRoot: repo.root, completion: done)
+        }
+        #expect(removed)
+        #expect(!repo.paths().contains(path))
+    }
+
+    /// Unlocking something nobody locked is git's to refuse, and the pane
+    /// has to say so rather than report a success it did not have — the
+    /// gesture is offered on a row whose lock somebody else may have lifted
+    /// in a terminal a second earlier.
+    @Test @MainActor func unlockingAnUnlockedWorktreeSurfacesGitsRefusal() async {
+        let repo = Repo()
+        let path = repo.addWorktree("open", branch: "feat/x")
+
+        let center = WorktreeCenter.shared
+        center.lastError = nil
+        let succeeded = await mutate { done in
+            center.unlock(path: path, commonRoot: repo.root, completion: done)
+        }
+
+        #expect(!succeeded)
+        #expect(center.lastError?.operation == "Unlock Worktree")
+        #expect(center.lastError?.failure.raw.contains("not locked") == true)
+        #expect(center.lastError?.failure.title.isEmpty == false)
+    }
+
     // MARK: The lock
 
     /// A second mutation arriving while one is running is refused, and —

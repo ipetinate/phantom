@@ -105,10 +105,18 @@ struct GitBranchReviewView: View {
                     commitList(review)
                     fileList(review, base: base)
                 }
-            } else if review.branch == nil {
-                note("HEAD is detached, so there is no branch to compare.")
+            } else if let branch = review.branch {
+                /// Both halves of what ``GitBranchReviewLoader/resolveBase(in:branch:)``
+                /// came back empty-handed about, because either alone reads
+                /// as a bug in the pane: no `origin/HEAD` to fall back on,
+                /// and no ``GitBranchReviewLoader/wellKnownBases`` name that
+                /// isn't this branch — the search steps over a candidate
+                /// equal to the current branch, so `main` cannot be its own
+                /// base. Publishing answers the first: `origin/main` then
+                /// exists and resolves, being a different ref from `main`.
+                note("No remote default branch, and no main or master other than \(branch) — nothing here to compare against. Publish it with git push -u origin \(branch), or pick a base explicitly.")
             } else {
-                note("No base branch was found to compare against.")
+                note("HEAD is detached, so there is no branch to compare.")
             }
         }
         .padding(.horizontal, 6)
