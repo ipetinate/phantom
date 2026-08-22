@@ -167,7 +167,7 @@ class AppDelegate: NSObject,
         // directory, which would leave the settings window editing a file the
         // renderer never reads.
         let configPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"]
-            ?? GuiConfigStore.bootstrapMainConfigPath()
+            ?? GuiConfigStore.bootstrap()
         ghostty = Ghostty.App(configPath: configPath)
         super.init()
 

@@ -108,19 +108,56 @@ final class SidebarTabManager: ObservableObject {
 
     /// All windows participating in this sidebar: our tab group once
     /// joined, else the seed (parent) group plus ourselves, else just us.
+    ///
+    /// Every answer is filtered to windows that are still open. AppKit keeps
+    /// a closed window alive for as long as something holds its controller —
+    /// which, with an agent running in it, is exactly what happens — and both
+    /// sources here will go on handing those windows back: a closed window
+    /// can still be listed by the tab group it belonged to, and `seedTabGroup`
+    /// holds another window's group outright. A row built from one of those is
+    /// a tab that no longer exists, drawn in a window that never owned it, and
+    /// acting on it re-shows the corpse. See `select`, and
+    /// `PhantomSessionStore.isOpen` for the predicate and what it had to learn.
     private var groupWindows: [NSWindow] {
         guard let window else { return [] }
 
         if let own = window.tabGroup?.windows, own.count > 1 {
             seedTabGroup = nil
-            return own
+            return Self.rowWindows(in: own, own: window)
         }
 
         if let seeded = seedTabGroup?.windows, !seeded.isEmpty {
-            return seeded.contains(window) ? seeded : seeded + [window]
+            let live = Self.rowWindows(in: seeded, own: window)
+            return live.contains(window) ? live : live + [window]
         }
 
-        return window.tabGroup?.windows ?? [window]
+        return Self.rowWindows(in: window.tabGroup?.windows ?? [window], own: window)
+    }
+
+    /// The windows in a group this sidebar may draw a row for.
+    ///
+    /// The sidebar's own window is always one of them, whatever the predicate
+    /// says: it is the window the list is drawn in, and during initialization
+    /// it is not on screen yet, so asking whether it is open answers no about
+    /// a window that plainly exists — and the sidebar would populate empty.
+    ///
+    /// Every other window has to still be open. See `groupWindows` for why
+    /// closed ones keep turning up here, and `select` for what a row built
+    /// from one of them does when it is clicked.
+    static func rowWindows(in group: [NSWindow], own: NSWindow) -> [NSWindow] {
+        group.filter { $0 === own || isLiveTab($0) }
+    }
+
+    /// Whether a window is a tab a row may stand for and act on.
+    ///
+    /// Two terms, and the second is the one the window cannot answer: a husk
+    /// that has been shown again reports `isVisible` like anything else, so
+    /// only its controller knows it was closed. See
+    /// `BaseTerminalController.hasClosed`.
+    static func isLiveTab(_ window: NSWindow) -> Bool {
+        guard (window.windowController as? BaseTerminalController)?.hasClosed != true
+        else { return false }
+        return PhantomSessionStore.isOpen(window)
     }
 
     private func setupObservers() {
@@ -274,7 +311,13 @@ final class SidebarTabManager: ObservableObject {
             seen.insert(identifier)
 
             let model: SidebarTabModel
-            if let existing = modelsById[identifier] {
+            /// Keyed by `ObjectIdentifier`, which is the window's address, so
+            /// a window freed and a new one allocated in its place answer to
+            /// the same key. The stored model would then be reused for a
+            /// different window while still pointing at the old one, and every
+            /// row action would land on whatever that address is now. Cheap to
+            /// rule out, and impossible to debug once it happens.
+            if let existing = modelsById[identifier], existing.window === tabWindow {
                 model = existing
             } else {
                 model = SidebarTabModel(window: tabWindow)
@@ -472,7 +515,19 @@ final class SidebarTabManager: ObservableObject {
     }
 
     /// Activates the given tab (window) within the group.
+    ///
+    /// Only if that window is still open. `makeKeyAndOrderFront` does not
+    /// refuse a closed window — it *re-shows* it, and what comes back is a
+    /// husk: `windowWillClose` has already cleared the content view and
+    /// dropped the sidebar chrome, so the reader clicking a tab gets a bare
+    /// window arriving from nowhere instead of the tab they asked for. A row
+    /// that has outlived its window is stale rather than actionable, so the
+    /// list is re-formed instead and the row goes away.
     func select(_ model: SidebarTabModel) {
+        guard Self.isLiveTab(model.window) else {
+            refresh()
+            return
+        }
         model.window.makeKeyAndOrderFront(nil)
     }
 

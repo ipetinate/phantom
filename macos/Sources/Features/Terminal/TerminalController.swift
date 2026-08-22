@@ -1261,9 +1261,20 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // use whatever the latest app-level config is.
         let config = ghostty.config
 
+        /// Registering a terminal window here is what makes a second restore
+        /// possible at all — AppKit rebuilding the session on top of the one
+        /// `PhantomSessionStore` has — so the window is never offered to it.
+        /// Read from the store
+        /// rather than written as `false` because that is where the choice of
+        /// owner is made and argued — see
+        /// `PhantomSessionStore.ownsTerminalRestoration`. Upstream's rule
+        /// about windows running a command survives in the second term, for
+        /// whenever the first one stops being true.
+        let macOSMayRestore = !PhantomSessionStore.ownsTerminalRestoration && restorable
+
         // Setting all three of these is required for restoration to work.
-        window.isRestorable = restorable
-        if restorable {
+        window.isRestorable = macOSMayRestore
+        if macOSMayRestore {
             window.restorationClass = TerminalWindowRestoration.self
             window.identifier = .init(String(describing: TerminalWindowRestoration.self))
         }
@@ -2284,6 +2295,16 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     override func windowWillClose(_ notification: Notification) {
         super.windowWillClose(notification)
+
+        /// A window the reader has closed must stop being offered back to
+        /// them. The Dock's tile menu and the Window menu list the app's
+        /// windows, and a closed one that is still retained stays on both —
+        /// so the reader picks a tab they remember, AppKit orders that window
+        /// front, and what arrives is the husk described on
+        /// `BaseTerminalController.hasClosed`: no content view, no sidebar, a
+        /// bare frame standing next to their real windows. Excluding it is the
+        /// only say we have over those two menus, which AppKit builds itself.
+        notification.object.flatMap { $0 as? NSWindow }?.isExcludedFromWindowsMenu = true
 
         // A closed window leaves the session store too.
         PhantomSessionStore.shared.scheduleSave()

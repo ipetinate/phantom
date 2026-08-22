@@ -173,14 +173,17 @@ class TerminalWindowRestoration: NSObject, NSWindowRestoration {
             return
         }
 
-        // If our own session store has a saved session, stand macOS's
-        // restore down entirely: it is unreliable at capturing every window
-        // that was open at quit time, while ours is authoritative. The
-        // store is seeded with whatever macOS restored on the first launch
-        // after this landed, and takes over from there. See
-        // `PhantomSessionStore`.
-        if PhantomSessionStore.shared.hasSavedSession {
-            AppDelegate.logger.warning("skip restoration: restoring from own session store")
+        /// Nothing this build wrote arrives here — a terminal window is no
+        /// longer registered for restoration — so what this answers is a
+        /// saved-state bundle left behind by an older one, whose windows
+        /// would otherwise land on top of the session `PhantomSessionStore`
+        /// has already brought back. Conditional on nothing: the previous
+        /// spelling asked whether the store had a session on disk yet, which
+        /// gave a different answer depending on which of the two restores
+        /// happened to run first. See
+        /// `PhantomSessionStore.ownsTerminalRestoration`.
+        if PhantomSessionStore.ownsTerminalRestoration {
+            AppDelegate.logger.warning("skip restoration: the session store owns terminal windows")
             completionHandler(nil, nil)
             return
         }
