@@ -112,9 +112,23 @@ struct GitBranchReviewView: View {
                 /// and no ``GitBranchReviewLoader/wellKnownBases`` name that
                 /// isn't this branch — the search steps over a candidate
                 /// equal to the current branch, so `main` cannot be its own
-                /// base. Publishing answers the first: `origin/main` then
-                /// exists and resolves, being a different ref from `main`.
-                note("No remote default branch, and no main or master other than \(branch) — nothing here to compare against. Publish it with git push -u origin \(branch), or pick a base explicitly.")
+                /// base.
+                ///
+                /// The advice is conditioned rather than given flat, because
+                /// it only works one way round. Publishing `main` produces
+                /// `origin/main`, a different ref from `main`, which
+                /// `wellKnownBases` then resolves. Publishing `feature-x` in
+                /// a repository that has no main or master at all produces
+                /// `origin/feature-x` — the branch's own remote counterpart,
+                /// which is not a base — and leaves this note exactly where
+                /// it was.
+                ///
+                /// It deliberately does not offer to pick a base. The loader
+                /// takes one, but nothing in the app passes it: the single
+                /// call site is `load(in: root)`. Naming an affordance that
+                /// does not exist sends the reader looking for a control
+                /// that was never built.
+                note("No remote default branch, and no main or master other than \(branch) — nothing here to compare against. If \(branch) is this project's base, publishing it with git push -u origin \(branch) gives the review something to compare with.")
             } else {
                 note("HEAD is detached, so there is no branch to compare.")
             }
