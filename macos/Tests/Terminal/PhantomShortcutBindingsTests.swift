@@ -44,8 +44,25 @@ struct PhantomShortcutMapTests {
         #expect(map.action(for: shortcut("f", [.command, .shift])) == nil)
     }
 
-    @Test func goToDefinitionShipsWithNoShortcutAtAll() {
-        #expect(PhantomShortcutMap.defaults.shortcuts(for: .goToDefinition).isEmpty)
+    /// It shipped with none, which read as an oversight rather than as the
+    /// decision an empty list is meant to be — and it was the only one of the
+    /// three symbol commands not reachable from the keyboard.
+    @Test func goToDefinitionShipsOnTheSameModifiersAsTheOtherSymbolCommands() {
+        let definition = PhantomShortcutMap.defaults.primary(for: .goToDefinition)
+        let references = PhantomShortcutMap.defaults.primary(for: .findReferences)
+        let rename = PhantomShortcutMap.defaults.primary(for: .renameSymbol)
+
+        #expect(definition == PhantomShortcut(key: "j", modifiers: [.command, .control]))
+        #expect(definition?.modifiers == references?.modifiers)
+        #expect(definition?.modifiers == rename?.modifiers)
+    }
+
+    /// ⌃⌘D is what the word suggests and what macOS spends on Look Up in
+    /// every text view, this one included.
+    @Test func goToDefinitionStaysOffTheLookUpChord() {
+        #expect(
+            !PhantomShortcutAction.goToDefinition.defaultShortcuts.contains(
+                PhantomShortcut(key: "d", modifiers: [.command, .control])))
     }
 
     /// A menu item shows exactly one key equivalent, so "the one to show"
@@ -133,7 +150,7 @@ struct PhantomShortcutMapTests {
         #expect(!ids.contains(PhantomShortcutAction.newFile.id))
         #expect(!ids.contains(PhantomShortcutAction.newFolder.id))
         #expect(ids.contains(PhantomShortcutAction.formatDocument.id))
-        #expect(!ids.contains(PhantomShortcutAction.goToDefinition.id), "no default, so nothing to bind")
+        #expect(ids.contains(PhantomShortcutAction.goToDefinition.id))
     }
 
     @Test func aCommandsExtraBindingsFollowItsPrimary() {

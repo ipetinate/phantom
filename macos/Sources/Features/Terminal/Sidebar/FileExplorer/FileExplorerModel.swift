@@ -185,6 +185,9 @@ final class FileExplorerModel: ObservableObject {
     private let watcher = DirectoryWatcher()
     private var store = FileExplorerStateStore.shared
 
+    /// Kept alive for the model's lifetime; see `adoptStoredPreferences`.
+    private var defaultsObserver: NSObjectProtocol?
+
     init() {
         watcher.onChange = { [weak self] changed in
             guard let self else { return }
@@ -192,6 +195,45 @@ final class FileExplorerModel: ObservableObject {
                 self.load(path)
             }
         }
+
+        /// Settings shows the same two preferences and writes them straight
+        /// to `UserDefaults`, which publishes nothing to an instance that
+        /// read them once in this initializer. Without this the two
+        /// surfaces disagree the moment either is used: the switch in
+        /// Settings moves, the tree does not, and the gear menu still shows
+        /// the old answer until the window is reopened.
+        ///
+        /// The notification fires on every defaults write in the process,
+        /// which is often — so the handler compares before it assigns, and
+        /// the two `didSet`s do their work only when something really
+        /// changed.
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: UserDefaults.standard,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.adoptStoredPreferences() }
+        }
+    }
+
+    deinit {
+        if let defaultsObserver {
+            NotificationCenter.default.removeObserver(defaultsObserver)
+        }
+    }
+
+    /// Takes whatever is in `UserDefaults` for the two preferences this
+    /// model shares with the Settings window.
+    ///
+    /// Assigning is enough: both properties write themselves back in
+    /// `didSet` — the same value, harmlessly — and reload what needs
+    /// reloading, which is exactly what an external change should do.
+    private func adoptStoredPreferences() {
+        let hidden = Self.storedShowHidden
+        if hidden != showHiddenFiles { showHiddenFiles = hidden }
+
+        let mode = WorkspaceRootMode.stored
+        if mode != rootMode { rootMode = mode }
     }
 
     // MARK: Root

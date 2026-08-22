@@ -18,6 +18,13 @@ final class SettingsWindowController: NSWindowController {
         )
         window.title = "Settings"
         window.titlebarAppearsTransparent = true
+
+        /// The window opens at its own floor, so it can be enlarged but never
+        /// shrunk. Deliberate: the widest pane is the shortcut table, which
+        /// wraps into unreadability below this. This is the *only* place the
+        /// minimum is declared — the panes used to repeat it as SwiftUI
+        /// `.frame(minWidth:minHeight:)`, one matching and one smaller and
+        /// therefore dead, which read as three different answers.
         window.contentMinSize = NSSize(width: 960, height: 600)
         window.isReleasedWhenClosed = false
         window.center()

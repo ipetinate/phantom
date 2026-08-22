@@ -84,9 +84,13 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
     ///
     /// An arrow key reports a character in the private use area, which is a
     /// perfectly good key to store and to match on but draws as a missing
-    /// glyph — an empty box where ↑ belongs. Only the four arrows are named
-    /// because they are the only function keys anything here binds; the rest
-    /// would be guesses.
+    /// glyph — an empty box where ↑ belongs. Return, Delete and Space are
+    /// worse than a box: they report characters that draw as *nothing*, so
+    /// the file explorer's own keys appeared in Settings and in the
+    /// collision warning as a blank where a shortcut belongs.
+    ///
+    /// Named one by one rather than derived, and only the keys something in
+    /// this app actually binds — the rest would be guesses.
     private var keyLabel: String {
         Self.functionKeyNames[key] ?? key.uppercased()
     }
@@ -103,6 +107,9 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
         downArrow: "↓",
         leftArrow: "←",
         rightArrow: "→",
+        "\r": "⏎",
+        "\u{7f}": "⌫",
+        " ": "␣",
     ]
 
     /// The stable form persisted and read back: "shift+command+n".

@@ -5,7 +5,14 @@ import SwiftUI
 /// A grid of the real artwork rather than a list of names: the thing being
 /// chosen is a picture, and a picker that describes pictures in words makes the
 /// reader open each one to find out what it is.
-struct IconSettingsView: View {
+///
+/// It used to be a settings pane of its own, which made a nine-item list carry
+/// one grid — and put the app's icon a pane away from every other thing that
+/// decides how Phantom looks. It is now reached from Appearance › App Icon,
+/// where the grid gets the room it needs without spending a row in the list.
+struct AppIconPickerView: View {
+    @Environment(\.dismiss) private var dismiss
+
     @State private var selection: PhantomAppIcon = PhantomAppIconStore.current
 
     /// Held as the raw name because `IconSegmentedControl` binds to a string,
@@ -24,47 +31,60 @@ struct IconSettingsView: View {
     private let columns = [GridItem(.adaptive(minimum: 96), spacing: 16)]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                style
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    style
 
-                // Grouped by family, and driven by `Family.allCases` so a new
-                // group is a new case rather than another block of this view.
-                ForEach(PhantomAppIcon.Family.allCases) { family in
-                    let icons = PhantomAppIcon.all(in: family)
-                    if !icons.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(family.title)
-                                .font(.headline)
+                    /// Grouped by family, and driven by `Family.allCases` so a
+                    /// new group is a new case rather than another block of
+                    /// this view.
+                    ForEach(PhantomAppIcon.Family.allCases) { family in
+                        let icons = PhantomAppIcon.all(in: family)
+                        if !icons.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(family.title)
+                                    .font(.headline)
 
-                            LazyVGrid(columns: columns, spacing: 16) {
-                                ForEach(icons) { icon in
-                                    IconOption(
-                                        icon: icon,
-                                        variant: variant,
-                                        isSelected: icon == selection,
-                                        onSelect: { choose(icon) }
-                                    )
+                                LazyVGrid(columns: columns, spacing: 16) {
+                                    ForEach(icons) { icon in
+                                        IconOption(
+                                            icon: icon,
+                                            variant: variant,
+                                            isSelected: icon == selection,
+                                            onSelect: { choose(icon) }
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                Text(
-                    """
-                    The icon is applied to the app on disk, so the Dock and the \
-                    app switcher follow immediately. A rebuild from source \
-                    resets it, and Phantom puts your choice back on the next \
-                    launch.
-                    """
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                    Text(
+                        """
+                        The icon is applied to the app on disk, so the Dock and the \
+                        app switcher follow immediately. A rebuild from source \
+                        resets it, and Phantom puts your choice back on the next \
+                        launch.
+                        """
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(20)
             }
-            .padding(20)
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(12)
         }
+        .frame(width: 620, height: 560)
         .alert(
             failure ?? "",
             isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })

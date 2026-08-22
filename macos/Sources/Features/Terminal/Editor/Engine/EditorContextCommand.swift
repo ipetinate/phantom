@@ -115,7 +115,7 @@ enum EditorContextCommand: Equatable, CaseIterable {
     /// tests hold both to the same table.
     var key: String {
         switch self {
-        case .goToDefinition: ""
+        case .goToDefinition: "j"
         case .findReferences: "g"
         case .rename: "r"
         case .format: "f"
@@ -129,7 +129,10 @@ enum EditorContextCommand: Equatable, CaseIterable {
 
     var modifiers: NSEvent.ModifierFlags {
         switch self {
-        case .goToDefinition: []
+        /// ⌃⌘J, on the same modifiers as the two below it — see
+        /// `PhantomShortcutAction.defaultShortcuts` for why not ⌃⌘D.
+        case .goToDefinition: [.command, .control]
+
         case .findReferences: [.command, .control]
         case .rename: [.command, .control]
 

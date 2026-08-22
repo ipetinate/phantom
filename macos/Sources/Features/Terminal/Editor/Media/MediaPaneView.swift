@@ -213,6 +213,21 @@ struct MediaPaneView: View {
 /// Zoom out, zoom in, and back to fitting — in the corner the presentation
 /// control uses, because that is where this window keeps the controls that act
 /// on how a file is being shown.
+///
+/// **⌘−, ⌘+ and ⌘0 shadow the terminal's font-size actions, on purpose.**
+/// They are Preview's keys for exactly this job, and an image viewer that
+/// answered anything else would be the surprising one. The pairing is safe for
+/// the same reason the editor's ⌘K is: these buttons exist in the window's
+/// view tree only while a media tab is the editor pane's selection, and
+/// `TerminalController` hides the terminal for precisely that span — so the
+/// two commands can never both be reachable, and resizing a font nobody can
+/// see is not a thing the reader is being denied.
+///
+/// Worth naming because `ShortcutCollisionChecker` cannot see it. It walks the
+/// menu and the fixed table, and a SwiftUI `keyboardShortcut` is in neither:
+/// record ⌘0 for an editor command and nothing will warn you. The general form
+/// of that gap is the checker's own doc comment; this is the instance that
+/// exists today, and it is scoped rather than overlooked.
 struct MediaZoomControl: View {
     let canZoomIn: Bool
     let canZoomOut: Bool
