@@ -378,6 +378,120 @@ final class EditorCenter: ObservableObject {
         if lastSelectedFile == oldPath { lastSelectedFile = newPath }
     }
 
+    // MARK: Following a terminal between worktrees
+
+    /// Every open tab, with the one fact the migration rule needs of it.
+    ///
+    /// In tab-bar order, so the popover's list of what stays behind reads
+    /// top-to-bottom the way the bar does. Media is included and is never
+    /// dirty — a PDF has no buffer to lose, so it simply follows.
+    var openForMigration: [(path: String, isDirty: Bool)] {
+        tabs.tabs.map { (path: $0.path, isDirty: $0.isDirty) }
+    }
+
+    /// Saves one open document, answering with something the caller can put
+    /// on the row that asked for it.
+    ///
+    /// A returned sentence rather than a `Bool` because the two callers that
+    /// want this are lists — the migration confirm and the removal flow —
+    /// and a failure there belongs beside the file that failed. A read-only
+    /// file and a full disk are both ordinary at exactly this moment, and an
+    /// alert on top of the list would cover the thing it is about.
+    ///
+    /// A path with no open document answers nil: a media tab has nothing to
+    /// save, and "nothing to do" is not a failure.
+    func save(_ path: String) -> String? {
+        guard let document = documents[path] else { return nil }
+        guard !document.save() else { return nil }
+        return document.loadError ?? "Couldn't save this file."
+    }
+
+    /// What would happen to the open tabs if this window's terminal moved
+    /// from one worktree to another.
+    ///
+    /// Asked before anything happens, because its answer is what the reader
+    /// is shown and asked to confirm. Deciding as we went would mean the
+    /// list on screen was a prediction rather than the plan.
+    func migrationPlan(
+        from sourceRoot: String, to targetRoot: String
+    ) -> [WorktreeDocumentMigration.Outcome] {
+        WorktreeDocumentMigration.plan(
+            documents: openForMigration, from: sourceRoot, to: targetRoot)
+    }
+
+    /// Carries out the `migrate` half of a plan. Everything else in it stays
+    /// exactly where it is, which is the promise the popover made.
+    ///
+    /// Takes a plan rather than two roots so that applying is only applying.
+    /// The chooser owns the plan and keeps it current — it recomputes while
+    /// open, which is what makes its Save buttons mean "bring this one with
+    /// me" — and this half stays a function of the decision that was
+    /// actually on screen when Continue was pressed.
+    func applyMigration(_ outcomes: [WorktreeDocumentMigration.Outcome]) {
+        for (from, to) in WorktreeDocumentMigration.migrations(in: outcomes) {
+            if documents[from] != nil {
+                migrateDocument(from: from, to: to)
+            } else {
+                repathMedia(from: from, to: to)
+            }
+        }
+    }
+
+    /// Reopens a clean document at the same relative path under another
+    /// worktree.
+    ///
+    /// Everything `repathDocument` does about bookkeeping, and the one thing
+    /// it must not do here: carry the buffer. A rename means one file
+    /// changed address, so the text travels with it. A worktree switch means
+    /// there are *two* files, and the one being shown is the other one — its
+    /// text has to come off the disk it lives on, or the tab would show one
+    /// branch's contents under the other branch's path and save it there on
+    /// the next ⌘S.
+    ///
+    /// Loaded before anything is torn down. `EditorDocument.load` is allowed
+    /// to refuse — the destination exists, which is all the plan checked, but
+    /// existing is not the same as readable — and a refusal after the old
+    /// document was already removed would close a tab as the way of
+    /// reporting it.
+    @discardableResult
+    private func migrateDocument(from oldPath: String, to newPath: String) -> Bool {
+        guard documents[oldPath] != nil,
+              case .success(let arrived) = EditorDocument.load(url: URL(fileURLWithPath: newPath))
+        else { return false }
+
+        guard let leaving = documents.removeValue(forKey: oldPath) else { return false }
+
+        let wasAnnounced = LSPCenter.shared.isOpen(path: oldPath)
+        leaving.stopWatching()
+        documentObservers.removeValue(forKey: oldPath)
+        if wasAnnounced { LSPCenter.shared.didClose(path: oldPath) }
+
+        /// The one thing that does travel: how the file was being looked at.
+        /// A reader who switched an SVG to its source is asking about this
+        /// file, not about this checkout of it.
+        arrived.presentation = leaving.presentation
+
+        documents[newPath] = arrived
+        arrived.startWatching()
+        documentObservers[newPath] = arrived.objectWillChange
+            .sink { [weak self, weak arrived] (_: Void) in
+                DispatchQueue.main.async {
+                    guard let self, let arrived else { return }
+                    self.tabs.setDirty(arrived.isDirty, for: newPath)
+                }
+            }
+
+        tabs.repath(from: oldPath, to: newPath)
+        tabs.setDirty(false, for: newPath)
+        if lastSelectedFile == oldPath { lastSelectedFile = newPath }
+
+        if wasAnnounced {
+            LSPCenter.shared.didOpen(path: newPath, text: arrived.currentText)
+        }
+
+        return true
+    }
+
     /// A file or folder deleted in the file explorer stops being a tab, and
     /// the language server stops hearing about it.
     ///
