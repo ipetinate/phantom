@@ -34,7 +34,8 @@ struct WorktreeEntryButton: View {
 
     let onMigrate: (GitWorktree, [WorktreeDocumentMigration.Outcome]) -> Void
     let onNewTerminal: (String) -> Void
-    let onCreateGroup: (GitWorktree) -> Void
+    /// Nil hides the grouping item — see `WorktreePopover.onCreateGroup`.
+    let onCreateGroup: ((GitWorktree) -> Void)?
     let onViewFile: (String) -> Void
 
     /// Whether the row's actions are showing at all. The three places each

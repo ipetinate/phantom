@@ -1389,6 +1389,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         layout.onNewWorktreeTab = { [weak self] directory in
             self?.newSidebarTab(in: nil, workingDirectory: directory)
         }
+        layout.onNewWorktreeTabInGroup = { [weak self] group, directory in
+            self?.newSidebarTab(in: group, workingDirectory: directory)
+        }
         layout.onNewWorktreeAgentTab = { [weak self] directory, agent in
             self?.newSidebarTab(
                 in: nil,

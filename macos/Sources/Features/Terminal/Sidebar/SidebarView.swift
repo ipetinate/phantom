@@ -207,6 +207,28 @@ struct SidebarView: View {
         }
     }
 
+    /// Built here rather than inline in `terminalList`.
+    ///
+    /// Thirteen arguments inside a `ForEach` inside a `VStack` inside a
+    /// `ScrollView` is past what the type checker will solve in the time it
+    /// allows itself — it gave up on the whole list, not on this call.
+    private func groupSection(_ section: Section) -> some View {
+        SidebarGroupSection(
+            group: section.group,
+            tabs: section.tabs,
+            tabManager: tabManager,
+            store: store,
+            dragState: dragState,
+            onNewTab: onNewTabInGroup,
+            onNewClaudeTab: onNewClaudeTabInGroup,
+            onNewCodexTab: onNewCodexTabInGroup,
+            onNewOpenCodeTab: onNewOpenCodeTabInGroup,
+            editorCenter: editorCenter,
+            onNewWorktreeTab: layout.onNewWorktreeTab,
+            onNewWorktreeTabInGroup: layout.onNewWorktreeTabInGroup
+        )
+    }
+
     private var terminalList: some View {
         VStack(spacing: 0) {
             ScrollView {
@@ -214,20 +236,8 @@ struct SidebarView: View {
 
                 VStack(spacing: SidebarMetrics.itemSpacing) {
                     ForEach(content.sections) { section in
-                        SidebarGroupSection(
-                            group: section.group,
-                            tabs: section.tabs,
-                            tabManager: tabManager,
-                            store: store,
-                            dragState: dragState,
-                            onNewTab: onNewTabInGroup,
-                            onNewClaudeTab: onNewClaudeTabInGroup,
-                            onNewCodexTab: onNewCodexTabInGroup,
-                            onNewOpenCodeTab: onNewOpenCodeTabInGroup,
-                            editorCenter: editorCenter,
-                            onNewWorktreeTab: layout.onNewWorktreeTab
-                        )
-                        .transition(.opacity)
+                        groupSection(section)
+                            .transition(.opacity)
                     }
 
                     // Same spacing as between groups: every item in the
@@ -306,6 +316,7 @@ struct SidebarTitlebarChrome: View {
 
     @State private var isCreatingGroup = false
     @State private var isHovered = false
+    @State private var groupingWorktree: GitWorktree?
 
     /// Mirrors `SidebarView`'s own fallback: a panel switched off in
     /// settings must not leave its buttons behind in the titlebar.
@@ -412,9 +423,22 @@ struct SidebarTitlebarChrome: View {
                     terminalPwds: tabManager.models.compactMap(\.pwd),
                     onMigrate: { _, _ in },
                     onNewTerminal: layout.onNewWorktreeTab,
-                    onCreateGroup: { _ in },
+                    onCreateGroup: { worktree in groupingWorktree = worktree },
                     onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
                     isRevealed: true)
+                /// Every terminal working in that worktree, not only the
+                /// selected one: the gesture is about the worktree.
+                .sheet(item: $groupingWorktree) { worktree in
+                    SidebarGroupEditor(
+                        group: nil,
+                        store: store,
+                        assignSurfaceIds: tabManager.models
+                            .filter { GitWorktreeMembership.contains(pwd: $0.pwd, root: worktree.path) }
+                            .compactMap(\.surfaceId),
+                        initialName: worktree.branch
+                            ?? (worktree.path as NSString).lastPathComponent
+                    )
+                }
             }
 
             SidebarChromeButton(icon: "folder.badge.plus", help: "New Group") {
@@ -603,6 +627,12 @@ private struct SidebarGroupSection: View {
     /// no terminals of its own beyond the one button below.
     @ObservedObject var editorCenter: EditorCenter
     let onNewWorktreeTab: (String) -> Void
+
+    /// The header's own button, which must put the terminal *in this group*.
+    /// Pressing a button on a group and watching the terminal appear at the
+    /// bottom of the list, outside it, is the gesture doing half of what it
+    /// said.
+    let onNewWorktreeTabInGroup: (SidebarGroup, String) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
 
@@ -793,8 +823,10 @@ private struct SidebarGroupSection: View {
                 editorCenter: editorCenter,
                 terminalPwds: tabManager.models.compactMap(\.pwd),
                 onMigrate: { _, _ in },
-                onNewTerminal: onNewWorktreeTab,
-                onCreateGroup: { _ in },
+                onNewTerminal: { path in onNewWorktreeTabInGroup(group, path) },
+                /// No grouping item from inside a group's own header — the
+                /// group is already here.
+                onCreateGroup: nil,
                 onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
                 isRevealed: alwaysShowActions || isHeaderHovered)
 
@@ -1243,9 +1275,8 @@ private struct SidebarTabRow: View {
     @ObservedObject var store: SidebarGroupStore
     @ObservedObject var dragState: SidebarDragState
 
-    /// Threaded down for one action: switching this terminal's worktree
-    /// moves the open documents with it, and the decision about which ones
-    /// can move is the editor's to answer.
+    /// The editor of the window drawing this row — a fallback only. What
+    /// this row's actions need is `tabEditorCenter`.
     @ObservedObject var editorCenter: EditorCenter
 
     /// Opens a terminal in a directory — the worktree panel's own callback,
@@ -1281,6 +1312,20 @@ private struct SidebarTabRow: View {
     @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
     private var isCompact: Bool { density == "compact" }
+
+    /// The editor belonging to the terminal this row stands for.
+    ///
+    /// Not the one that happens to be drawing the sidebar. Every tab is its
+    /// own `TerminalController` with its own `EditorCenter`, and the sidebar
+    /// lists all of them — so a row for tab A, rendered inside tab B's
+    /// sidebar, was computing tab A's worktree switch against tab B's open
+    /// documents. With B's editor empty the plan came back empty, the
+    /// confirm never appeared, and A's unsaved file was carried across
+    /// without a word. Which is the exact promise this whole flow makes and
+    /// the exact way to break it.
+    private var tabEditorCenter: EditorCenter {
+        (tab.window.windowController as? TerminalController)?.editorCenter ?? editorCenter
+    }
 
     private var insertAfter: Bool? {
         guard dragState.target?.row == tab.id else { return nil }
@@ -1421,16 +1466,16 @@ private struct SidebarTabRow: View {
                 currentPath: tab.pwd,
                 isIdle: TerminalIdleCheck.isIdle(foregroundPID: tab.foregroundPID),
                 hasLiveAgent: tab.liveAgent != nil,
-                editorCenter: editorCenter,
+                editorCenter: tabEditorCenter,
                 terminalPwds: tabManager.models.compactMap(\.pwd),
                 onMigrate: { worktree, plan in
                     tabManager.select(tab)
                     WorktreeMigrate.perform(
-                        to: worktree, plan: plan, tab: tab, editorCenter: editorCenter)
+                        to: worktree, plan: plan, tab: tab, editorCenter: tabEditorCenter)
                 },
                 onNewTerminal: onNewWorktreeTab,
                 onCreateGroup: { worktree in groupingWorktree = worktree },
-                onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
+                onViewFile: { path in tabEditorCenter.open(URL(fileURLWithPath: path)) },
                 isRevealed: alwaysShowActions || isHovered)
 
             ForEach(agentActions, id: \.self) { agent in

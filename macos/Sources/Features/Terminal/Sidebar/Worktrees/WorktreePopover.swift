@@ -41,7 +41,12 @@ struct WorktreePopover: View {
     /// Groups the terminals of one worktree together. Offered here because
     /// three terminals in one worktree usually *are* a group, and this is
     /// the moment the reader is thinking about that worktree.
-    let onCreateGroup: (GitWorktree) -> Void
+    ///
+    /// Nil where there is nothing sensible to group — from inside a group's
+    /// own header, where the group already exists. The item is then not
+    /// drawn at all, rather than drawn and inert: a menu item that does
+    /// nothing when pressed is worse than one that isn't there.
+    let onCreateGroup: ((GitWorktree) -> Void)?
 
     /// Cancels the switch and goes to the file — see
     /// `WorktreeMigrationConfirm.onView`.
@@ -141,7 +146,7 @@ struct WorktreePopover: View {
             /// Set apart by a gap rather than by a second box: it is a
             /// different kind of action, but it is about the same thing the
             /// reader is already looking at.
-            if let groupable = currentWorktree ?? offered.first {
+            if let onCreateGroup, let groupable = currentWorktree ?? offered.first {
                 Button {
                     leaving { onCreateGroup(groupable) }
                 } label: {

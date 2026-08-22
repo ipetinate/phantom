@@ -66,6 +66,17 @@ struct WorktreePanelView: View {
     /// poll a collapsed section refuses to pay for.
     @State private var expanded: Set<String> = []
 
+    /// One field above every section, rather than one per section.
+    ///
+    /// The first cut had no search in workspace mode at all, on the grounds
+    /// that a field searching across collapsed sections would have to either
+    /// hide matches or expand everything — and expanding everything is the
+    /// poll a collapsed section exists to refuse. That reasoning holds and
+    /// the conclusion did not: it took the field away from the panel people
+    /// actually use it in. It filters what is on screen, which is the
+    /// expanded sections, and it says so.
+    @State private var filter = ""
+
     private var selectedTab: SidebarTabModel? {
         tabManager.models.first { $0.isSelected }
     }
@@ -144,10 +155,13 @@ struct WorktreePanelView: View {
         }
     }
 
-    private func family(_ root: String, style: WorktreeFamilyStyle) -> WorktreeFamilyView {
+    private func family(
+        _ root: String, style: WorktreeFamilyStyle, sharedFilter: String? = nil
+    ) -> WorktreeFamilyView {
         WorktreeFamilyView(
             commonRoot: root,
             style: style,
+            sharedFilter: sharedFilter,
             tabManager: tabManager,
             editorCenter: editorCenter,
             onNewTerminal: onNewTerminal,
@@ -155,6 +169,44 @@ struct WorktreePanelView: View {
     }
 
     private func sections(_ roots: [String]) -> some View {
+        VStack(spacing: 0) {
+            workspaceSearch
+            sectionList(roots)
+        }
+    }
+
+    private var workspaceSearch: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+
+            TextField("Search open sections", text: $filter)
+                .textFieldStyle(.plain)
+                .font(palette.font(size: 11))
+
+            if !filter.isEmpty {
+                Button {
+                    filter = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.primary.opacity(0.06))
+        )
+        .padding(.horizontal, 8)
+        .padding(.bottom, 6)
+    }
+
+    private func sectionList(_ roots: [String]) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(roots.enumerated()), id: \.element) { index, root in
@@ -164,10 +216,13 @@ struct WorktreePanelView: View {
                             .padding(.vertical, 4)
                     }
 
-                    family(root, style: .section(
-                        isExpanded: expanded.contains(root),
-                        onToggle: { toggle(root) }
-                    ))
+                    family(
+                        root,
+                        style: .section(
+                            isExpanded: expanded.contains(root),
+                            onToggle: { toggle(root) }
+                        ),
+                        sharedFilter: filter)
                 }
             }
             .padding(.vertical, 6)

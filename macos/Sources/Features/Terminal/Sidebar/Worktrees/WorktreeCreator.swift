@@ -236,8 +236,17 @@ struct WorktreeCreator: View {
             branch: branch)
     }
 
+    /// Whether the folder this would land in is already taken.
+    ///
+    /// Only while configuring, and that guard is the whole point: this asks
+    /// the filesystem, and the moment git checks the worktree out the folder
+    /// exists and is not empty — so during `.creating` it fires about the
+    /// folder the flow itself just made, with the button reading "Creating…".
+    /// It is a pre-flight check, and it has nothing to say once the work has
+    /// started.
     private var occupied: Bool {
-        !branch.isEmpty && WorktreePath.isOccupied(derivedPath)
+        guard case .configuring = phase else { return false }
+        return !branch.isEmpty && WorktreePath.isOccupied(derivedPath)
     }
 
     private var canCreate: Bool {

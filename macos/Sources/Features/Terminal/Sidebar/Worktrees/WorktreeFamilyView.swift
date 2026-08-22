@@ -27,6 +27,14 @@ struct WorktreeFamilyView: View {
     let commonRoot: String
     var style: WorktreeFamilyStyle = .standalone
 
+    /// The search text, when the panel owns it.
+    ///
+    /// A workspace has one field above all its sections rather than one per
+    /// section, so the filter arrives from outside and the section draws no
+    /// field of its own. Standalone keeps its own, which is why this is
+    /// optional rather than a plain `String`.
+    var sharedFilter: String?
+
     @ObservedObject var tabManager: SidebarTabManager
 
     /// For one sentence in the removal alert — see `removalAlert`.
@@ -43,7 +51,9 @@ struct WorktreeFamilyView: View {
     @AppStorage("SidebarShowCodex") private var showCodex = true
     @AppStorage("SidebarShowOpenCode") private var showOpenCode = true
 
-    @State private var filter = ""
+    @State private var ownFilter = ""
+
+    private var filter: String { sharedFilter ?? ownFilter }
     @State private var isCreating = false
     @State private var creationBase: String?
     @State private var removal: GitWorktree?
@@ -225,13 +235,13 @@ struct WorktreeFamilyView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
 
-            TextField("Search worktrees", text: $filter)
+            TextField("Search worktrees", text: $ownFilter)
                 .textFieldStyle(.plain)
                 .font(palette.font(size: 11))
 
-            if !filter.isEmpty {
+            if !ownFilter.isEmpty {
                 Button {
-                    filter = ""
+                    ownFilter = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 10))
@@ -414,24 +424,28 @@ struct WorktreeFamilyView: View {
             center.merged(forRoot: commonRoot).contains($0)
         } ?? false
 
-        var lines: [String] = [(worktree.path as NSString).abbreviatingWithTildeInPath]
-        if dirty { lines.append("It has uncommitted changes.") }
-        if !tabs.isEmpty {
-            let names = tabs.compactMap(\.directoryName).joined(separator: ", ")
-            lines.append("\(tabs.count) terminal\(tabs.count == 1 ? " is" : "s are") working here (\(names)). They stay open, in a folder that no longer exists.")
+        let message = Text(WorktreeRemovalNote.message(
+            path: worktree.path,
+            isDirty: dirty,
+            terminalCount: tabs.count,
+            unsavedFiles: unsavedDocuments(in: worktree.path)))
+
+        /// A lock is answered before anything else, because it is the one
+        /// state where none of the buttons below can succeed. Git refuses a
+        /// locked worktree, and refuses it through the force this pane
+        /// sends — so offering "Remove Anyway" would be a destructive
+        /// confirm for something that cannot happen, and the reader only
+        /// learns that after pressing it.
+        if worktree.isLocked {
+            return Alert(
+                title: Text("This worktree is locked"),
+                message: Text(WorktreeLockNote.text(reason: worktree.lockReason)
+                    + "\n\nUnlock it first, then remove it."),
+                primaryButton: .default(Text("Unlock")) {
+                    center.unlock(path: worktree.path, commonRoot: commonRoot) { _ in }
+                },
+                secondaryButton: .cancel())
         }
-        /// Named rather than offered a Save button, which is the one thing
-        /// this must not do: saving writes into the folder about to be
-        /// deleted, so it would look like rescuing the edits while changing
-        /// nothing about their fate. Committing is the only way to keep
-        /// them, and that is not a thing a removal dialog should do on
-        /// somebody's behalf.
-        let unsaved = unsavedDocuments(in: worktree.path)
-        if !unsaved.isEmpty {
-            let names = unsaved.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
-            lines.append("\(unsaved.count) open file\(unsaved.count == 1 ? " has" : "s have") unsaved edits (\(names)). Removing discards them.")
-        }
-        let message = Text(lines.joined(separator: "\n"))
 
         if dirty {
             return Alert(
