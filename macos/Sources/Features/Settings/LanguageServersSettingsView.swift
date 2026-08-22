@@ -156,17 +156,33 @@ struct LanguageServersSettingsView: View {
         return allRows.filter { $0.haystack.lowercased().contains(needle) }
     }
 
-    /// The rows, grouped by category, with sections in the category's
-    /// declared order and empty sections dropped.
+    /// The rows, grouped by category, both levels sorted by name and empty
+    /// sections dropped.
+    ///
+    /// Alphabetical rather than curated, because the list is long enough to
+    /// scroll and any other order is one only its author knows. The two
+    /// TypeScript servers landing apart — one near the top, one seven rows
+    /// below it — is what a declared order produces once a table outgrows
+    /// the reasoning that arranged it.
+    ///
+    /// `localizedStandardCompare` rather than `<`: it folds case and reads
+    /// digits as numbers, so "TypeScript 7 (Go)" sorts next to
+    /// "TypeScript (npm)" instead of by the ASCII value of a bracket.
     private var sections: [LanguageServerSection] {
         var byCategory: [LSPServerCategory: [LanguageRow]] = [:]
         for row in filteredRows {
             byCategory[row.category, default: []].append(row)
         }
-        return LSPServerCategory.allCases.compactMap { category in
-            guard let rows = byCategory[category], !rows.isEmpty else { return nil }
-            return LanguageServerSection(category: category, rows: rows)
-        }
+        return LSPServerCategory.allCases
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            .compactMap { category in
+                guard let rows = byCategory[category], !rows.isEmpty else { return nil }
+                return LanguageServerSection(
+                    category: category,
+                    rows: rows.sorted {
+                        $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+                    })
+            }
     }
 
     private func languageRow(_ row: LanguageRow) -> some View {

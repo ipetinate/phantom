@@ -328,3 +328,49 @@ struct TypeScriptRowTests {
         #expect(alone.map(\.command) == ["tsc"])
     }
 }
+
+/// The order the Languages pane puts things in.
+///
+/// The pane sorts both levels itself, so these pin the inputs that sort has
+/// to work with rather than the view — a `private var` in a `View` is not
+/// reachable from here, and reaching for it would test the wrong thing
+/// anyway.
+struct LanguageListOrderTests {
+    /// Alphabetical by header, so a reader hunting for a section scans
+    /// instead of learning somebody's idea of importance. Pinned as a
+    /// literal because the sort key is the *title*, not the case name — the
+    /// two disagree for every case, and sorting the wrong one still
+    /// produces a plausible-looking list.
+    @Test func theHeadersAreAlphabetical() {
+        let sorted = LSPServerCategory.allCases
+            .map(\.title)
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+
+        #expect(sorted == ["Compiled", "Data", "Infrastructure", "Markup", "Script", "Styles"])
+    }
+
+    /// The complaint that prompted the sort: the two TypeScript servers sat
+    /// seven rows apart in one section, because the registry lists them in
+    /// the order they were added.
+    @Test func theTwoTypeScriptRowsEndUpAdjacent() throws {
+        let script = LSPServerRegistry.distinctServers
+            .filter { $0.category == .script }
+            .map(\.displayName)
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+
+        let first = try #require(script.firstIndex { $0.hasPrefix("TypeScript") })
+        let last = try #require(script.lastIndex { $0.hasPrefix("TypeScript") })
+
+        #expect(last - first == 1, "\(script)")
+    }
+
+    /// `localizedStandardCompare`, not `<`. A plain comparison orders by
+    /// scalar value, which puts "(" before a digit and would separate the
+    /// two rows above by whatever else happens to start with "TypeScript".
+    @Test func digitsSortAsNumbersRatherThanCharacters() {
+        let names = ["TypeScript 10 (Go)", "TypeScript 7 (Go)", "TypeScript (npm)"]
+        let sorted = names.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+
+        #expect(sorted.firstIndex(of: "TypeScript 7 (Go)")! < sorted.firstIndex(of: "TypeScript 10 (Go)")!)
+    }
+}

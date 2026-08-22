@@ -28,8 +28,11 @@ enum LSPServerCategory: String, CaseIterable, Hashable, Sendable, Identifiable {
 
     var id: String { rawValue }
 
-    /// The section header shown in Settings. "Script" and "Compiled" are the
-    /// first two so the two big families are visible without scrolling.
+    /// The section header shown in Settings.
+    ///
+    /// The sections are ordered by this string, not by the order the cases
+    /// are declared in — so a reader hunting for one scans alphabetically
+    /// instead of learning which family somebody decided was important.
     var title: String {
         switch self {
         case .script: return "Script"
