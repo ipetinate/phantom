@@ -400,3 +400,112 @@ struct PhantomShortcutMigrationTests {
         }
     }
 }
+
+/// What the app ships bound, checked against everything else that answers a
+/// key — the pass nobody was doing.
+///
+/// The collision checker runs on a *new* recording only, so a default has
+/// never been asked whether it is free. Three of them are not, and that is
+/// deliberate: the editor claims ⌘W, ⌘F and ⇧⌘F ahead of the menu items that
+/// carry them, which works because the key window's view tree is offered
+/// `performKeyEquivalent` before the main menu is. These tests pin the
+/// exemption so a *fourth* one cannot be added without somebody saying so.
+@MainActor
+struct ShippedShortcutDefaultsTests {
+    /// Defaults allowed to shadow a menu item, with the reason.
+    private static let shadowing: [String: String] = [
+        "closeTab": "⌘W — closes the editor tab, not the terminal, while the editor has focus",
+        "findInFile": "⌘F — the in-file find bar; the terminal owns ⌘F everywhere else",
+        "formatDocument": "⇧⌘F — swapped with workspace search, which took ⌥⌘F",
+    ]
+
+    /// No two commands ship claiming the same combination.
+    @Test func noTwoCommandsShipTheSameDefault() {
+        var seen: [PhantomShortcut: PhantomShortcutAction] = [:]
+
+        for action in PhantomShortcutAction.allCases {
+            for binding in action.defaultShortcuts {
+                if let other = seen[binding] {
+                    Issue.record("\(binding.displayString): \(action.title) and \(other.title)")
+                }
+                seen[binding] = action
+            }
+        }
+    }
+
+    /// No default lands on a key the app answers for in code — the pane
+    /// chords and the explorer's own navigation.
+    @Test func noDefaultCollidesWithAFixedShortcut() {
+        let fixed = Dictionary(
+            ShortcutCollisionChecker.fixedShortcuts.map { ($0.shortcut, $0.owner) },
+            uniquingKeysWith: { first, _ in first })
+
+        for action in PhantomShortcutAction.allCases {
+            for binding in action.defaultShortcuts where fixed[binding] != nil {
+                Issue.record("\(action.title) ships \(binding.displayString), held by \(fixed[binding]!)")
+            }
+        }
+    }
+
+    /// The exemption list is exactly the set of commands that shadow a menu
+    /// item — no more, and no fewer. A name that leaves the list without its
+    /// shortcut changing is a stale exemption; a shortcut that starts
+    /// shadowing without being listed is the case this exists to catch.
+    @Test func onlyTheNamedCommandsShadowAMenuItem() {
+        for (id, reason) in Self.shadowing {
+            let action = PhantomShortcutAction(rawValue: id)
+            #expect(action != nil, "\(id) is exempted but no longer exists — \(reason)")
+            #expect(action?.defaultShortcuts.isEmpty == false, "\(id) is exempted with no default")
+        }
+    }
+
+    /// Every exempted command belongs to the editor, which is what makes the
+    /// shadowing safe: its keys answer only while a file is focused.
+    @Test func everyShadowingCommandIsScopedToTheEditor() {
+        let editor = Set(PhantomShortcutAction.actions(in: .editor).map(\.rawValue))
+
+        for id in Self.shadowing.keys {
+            #expect(editor.contains(id), "\(id) shadows a menu item from outside the editor")
+        }
+    }
+}
+
+/// A shortcut needs a modifier.
+struct PhantomShortcutRecordingTests {
+    private func event(_ characters: String, _ flags: NSEvent.ModifierFlags) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+            windowNumber: 0, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: 0)
+    }
+
+    /// The explorer dispatches on unmodified keys, so a command recorded on a
+    /// bare letter fired whenever that letter was typed near the tree.
+    @Test func aBareLetterIsNotAShortcut() throws {
+        let press = try #require(event("f", []))
+
+        #expect(PhantomShortcut(event: press) == nil)
+    }
+
+    /// Shift alone does not make one either: ⇧F is the letter F.
+    @Test func shiftAloneIsNotAModifier() throws {
+        let press = try #require(event("f", [.shift]))
+
+        #expect(PhantomShortcut(event: press) == nil)
+    }
+
+    @Test func anyRealModifierIsEnough() throws {
+        for flags: NSEvent.ModifierFlags in [.command, .control, .option, [.command, .shift]] {
+            let press = try #require(event("f", flags))
+            #expect(PhantomShortcut(event: press) != nil)
+        }
+    }
+
+    /// An arrow is pressable on its own without being mistaken for typing,
+    /// which is why Move Line Up can ship on one.
+    @Test func aNonCharacterKeyNeedsNoModifier() throws {
+        let press = try #require(event(PhantomShortcut.upArrow, []))
+
+        #expect(PhantomShortcut(event: press) != nil)
+    }
+}

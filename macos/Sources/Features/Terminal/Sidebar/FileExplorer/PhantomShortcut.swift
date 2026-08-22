@@ -36,6 +36,13 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
 
     /// Reads a combination out of a key-down event. Returns nil when the
     /// event is a modifier by itself, which is not a shortcut.
+    ///
+    /// And nil for a bare letter. The recorder accepted one, and on the
+    /// explorer's path — which dispatches on unmodified keys — a command
+    /// bound to `f` fired every time somebody typed an `f` into the rename
+    /// field's neighbourhood. A shortcut needs a modifier to be a shortcut;
+    /// the exception is a key that is not a character at all, which cannot
+    /// be typed by accident.
     init?(event: NSEvent) {
         guard let characters = event.charactersIgnoringModifiers?.lowercased(),
               characters.count == 1
@@ -48,7 +55,19 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
         if flags.contains(.option) { modifiers.insert(.option) }
         if flags.contains(.control) { modifiers.insert(.control) }
 
+        /// Shift alone does not count: ⇧F is the letter F.
+        let carriesModifier = !modifiers.isEmpty && modifiers != [.shift]
+        guard carriesModifier || Self.isNonCharacter(characters) else { return nil }
+
         self.init(key: characters, modifiers: modifiers)
+    }
+
+    /// Function keys and the arrows — pressable on their own without being
+    /// mistaken for typing.
+    private static func isNonCharacter(_ key: String) -> Bool {
+        guard let scalar = key.unicodeScalars.first, key.unicodeScalars.count == 1
+        else { return false }
+        return (0xF700...0xF8FF).contains(Int(scalar.value))
     }
 
     /// Modifier glyphs in the order macOS spells a shortcut — control,

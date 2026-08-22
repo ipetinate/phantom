@@ -223,7 +223,7 @@ struct MoveLineKeyTests {
             ],
         ]
         textView.setSelectedRange(NSRange(location: caret, length: 0))
-        return textView
+        return EditorFocus.give(to: textView)
     }
 
     /// An arrow event carries the function-key bit, and on many keyboards the

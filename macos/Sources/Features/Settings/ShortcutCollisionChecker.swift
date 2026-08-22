@@ -36,13 +36,28 @@ struct ShortcutCollision: Equatable {
 
 /// Finds out whether a proposed shortcut is already taken.
 ///
-/// Three sources exist because shortcuts reach the app through three doors.
-/// Everything in the menu system carries a key equivalent — including the
-/// Ghostty config bindings, which are synced onto the menu items — so the
-/// live `NSApp.mainMenu` is the authoritative list of *those*. The pane
-/// shortcuts (⌥⌘\, ⌥⌘1–9) are handled in code and never appear on a menu
-/// item, so they get a fixed table of their own. And the configurable
-/// commands claim whatever the reader gave them, which is the map.
+/// Three sources, and one deliberate omission.
+///
+/// **The menu**, walked live, because a menu key equivalent answers whatever
+/// has focus — that is what makes it a real collision. Config bindings that
+/// are synced onto menu items are covered by this, which is most of them.
+///
+/// **The fixed table** below: shortcuts Phantom answers for in code that
+/// never reach a menu item, so nothing else would report them.
+///
+/// **The configurable commands**, which claim whatever the reader gave them.
+///
+/// What is deliberately *not* checked: a Ghostty config binding with no menu
+/// item — `clear_screen` on ⌘K, the split-focus chords, ⌘1–9. Those reach
+/// the terminal surface and only while it has focus, and every command this
+/// checker guards is focus-scoped too (`PhantomShortcutGroup.detail` says so,
+/// and `CodeTextView.performKeyEquivalent` now enforces it). Two commands
+/// that can never both answer are not in collision, and refusing the
+/// recording would block a pairing the app already ships — ⌘K attaches a
+/// line in the editor and clears the screen in the terminal, on purpose.
+///
+/// An earlier reading of this called the omission a bug. It is one only if
+/// the focus scoping is not real; keep them together.
 ///
 /// The third door is the one that got likelier when a command stopped being
 /// limited to a single shortcut: a reader adding a second binding is, by
@@ -66,6 +81,19 @@ struct ShortcutCollisionChecker {
         ("Select file tab 7", PhantomShortcut(key: "7", modifiers: [.command, .option])),
         ("Select file tab 8", PhantomShortcut(key: "8", modifiers: [.command, .option])),
         ("Select file tab 9", PhantomShortcut(key: "9", modifiers: [.command, .option])),
+
+        /// The file explorer's own navigation, handled in
+        /// `FileExplorerView.handle(press:)`. Unmodified keys, which is
+        /// exactly why they need naming here: nothing else in the app would
+        /// report them as taken, so a command recorded on Return or Delete
+        /// would be accepted without a word and then fight the tree.
+        ("Rename in the file explorer", PhantomShortcut(key: "\r", modifiers: [])),
+        ("Move to Trash in the file explorer", PhantomShortcut(key: "\u{7f}", modifiers: [])),
+        ("Open a file in the file explorer", PhantomShortcut(key: " ", modifiers: [])),
+        ("Move up in the file explorer", PhantomShortcut(key: "\u{f700}", modifiers: [])),
+        ("Move down in the file explorer", PhantomShortcut(key: "\u{f701}", modifiers: [])),
+        ("Collapse in the file explorer", PhantomShortcut(key: "\u{f702}", modifiers: [])),
+        ("Expand in the file explorer", PhantomShortcut(key: "\u{f703}", modifiers: [])),
     ]
 
     /// Every shortcut currently claimed, from the fixed table and the live

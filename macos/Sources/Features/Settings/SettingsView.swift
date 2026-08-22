@@ -37,8 +37,12 @@ struct SettingsRootView: View {
             }
         }
 
-        var icon: String {
+        /// SF Symbol, or nil for a pane that ships its own artwork — the
+        /// same shape `SidebarPane.symbol` uses, and for the same reason: the
+        /// worktrees mark is this app's own drawing, not one of Apple's.
+        var icon: String? {
             switch self {
+            case .worktrees: return nil
             case .general: return "gearshape"
             case .appearance: return "paintpalette"
             case .icon: return "app.badge"
@@ -48,7 +52,6 @@ struct SettingsRootView: View {
             case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
             case .agents: return "sparkles"
-            case .worktrees: return "arrow.triangle.branch"
             }
         }
     }
@@ -58,8 +61,16 @@ struct SettingsRootView: View {
     var body: some View {
         NavigationSplitView {
             List(SettingsSection.allCases, selection: $selection) { section in
-                Label(section.title, systemImage: section.icon)
-                    .tag(section)
+                Label {
+                    Text(section.title)
+                } icon: {
+                    if let symbol = section.icon {
+                        Image(systemName: symbol)
+                    } else {
+                        WorktreeIcon(size: 13)
+                    }
+                }
+                .tag(section)
             }
             .listStyle(.sidebar)
             // Wide enough for the longest section name at the window's
@@ -272,10 +283,18 @@ struct BehaviorsSettingsView: View {
     var body: some View {
         Form {
             Section("General") {
+                /// `never`, not `default`.
+                ///
+                /// The domain is `always` / `default` / `never`, and this
+                /// wrote the middle value when switched off — which means
+                /// "follow the system", and every reader in the app only
+                /// bails on `never`. So turning the switch off restored the
+                /// windows anyway. `default` stays reachable from the config
+                /// file, which is the boundary this window already declares.
                 Toggle("Restore Windows on Launch", isOn: $restoreWindows)
                     .toggleStyle(.switch)
                     .onChange(of: restoreWindows) { value in
-                        store.set("window-save-state", value ? "always" : "default")
+                        store.set("window-save-state", value ? "always" : "never")
                         store.apply(ghostty: ghostty)
                     }
             }

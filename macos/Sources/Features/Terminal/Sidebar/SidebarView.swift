@@ -148,8 +148,6 @@ struct SidebarView: View {
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
     @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
-    @AppStorage("SidebarShowClaude") private var showClaude = true
-    @AppStorage("SidebarShowCodex") private var showCodex = true
 
     private var enabledPanes: [SidebarPane] {
         SidebarPane.allCases.filter { pane in
