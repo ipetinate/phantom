@@ -10,6 +10,11 @@ struct EditorTabBar: View {
     let tabs: [EditorTab]
     let selection: EditorSelection
     let needsDirectory: (EditorTab) -> Bool
+
+    /// Whether this tab's file is from a worktree its terminal has left.
+    /// Asked rather than derived here: the answer needs the terminal's
+    /// working directory and the filesystem, and this row knows neither.
+    let isDivergent: (EditorTab) -> Bool
     let onSelect: (String) -> Void
     let onClose: (String) -> Void
 
@@ -45,6 +50,7 @@ struct EditorTabBar: View {
                         tab: tab,
                         isSelected: selection == .file(tab.id),
                         showsDirectory: needsDirectory(tab),
+                        isDivergent: isDivergent(tab),
                         onSelect: { onSelect(tab.id) },
                         onClose: { onClose(tab.id) }
                     )
@@ -132,6 +138,7 @@ private struct EditorTabItem: View {
     let tab: EditorTab
     let isSelected: Bool
     let showsDirectory: Bool
+    let isDivergent: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
 
@@ -155,6 +162,8 @@ private struct EditorTabItem: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
+
+            divergenceMark
 
             closeControl
         }
@@ -184,6 +193,27 @@ private struct EditorTabItem: View {
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
         .help(tab.path)
+    }
+
+    /// The worktree mark, for a tab whose file is from a checkout its
+    /// terminal has left.
+    ///
+    /// The sidebar's own glyph rather than a new one, so "this is about
+    /// worktrees" is the same shape wherever it is said. Tinted, and that is
+    /// the whole difference from the sidebar's use of it: there the mark is
+    /// information, here it is a discrepancy, and the banner over the
+    /// document is where it gets explained.
+    ///
+    /// Its own slot rather than the dirty dot's. The two are independent —
+    /// a document stays behind on a worktree switch *because* it is dirty,
+    /// so the common case is both at once — and folding them together would
+    /// make the more urgent of the two hide the other.
+    @ViewBuilder
+    private var divergenceMark: some View {
+        if isDivergent {
+            WorktreeIcon(size: 9)
+                .foregroundStyle(.orange)
+        }
     }
 
     /// A dot for unsaved changes that becomes the close button on hover —
