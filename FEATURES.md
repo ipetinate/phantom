@@ -48,7 +48,11 @@ and not a new app.
 | Git | Add to .gitignore, tracked files included | Shipped | v0.7.0 |
 | Git | Branch review: commits and files against the base | Unverified | 0.8.0-beta |
 | Git | Search inside the git panel | Planned | — |
-| Git | Worktrees: pane, create, adopt, clean up, setup hooks | In progress | 0.9.0-dev |
+| Git | Worktrees: pane, create, adopt, clean up, setup hooks | Unreleased | 0.9.0-dev |
+| Git | Worktrees: one section per repository in a workspace | Unreleased | 0.9.0-dev |
+| Git | Switch a terminal's worktree from its row, group or toolbar | Unreleased | 0.9.0-dev |
+| Git | Open editor tabs follow the switch; unsaved ones stay behind | Unreleased | 0.9.0-dev |
+| Git | A file from a worktree its terminal left says so, read-only when it has no counterpart | Unreleased | 0.9.0-dev |
 | Files | File explorer with a directory watcher | Shipped | v0.2.0 |
 | Files | File icon themes loaded from disk | Shipped | v0.2.0 |
 | Files | Remappable shortcuts, more than one per command | Shipped | v0.7.0 |
@@ -76,7 +80,7 @@ and not a new app.
 | Editor | Page thumbnails beside a PDF, where the minimap sits | Unreleased | 0.8.0-beta |
 | Editor | An SVG opens as a picture, with its markup one press away | Unreleased | 0.8.0-beta |
 | Editor | A CSV opens as a table, with its text one press away | Unreleased | 0.8.0-beta |
-| Editor | Attach the editor line to the agent prompt, ⌘K and ⇧⌘K | In progress | 0.9.0-dev |
+| Editor | Attach the editor line to the agent prompt, ⌘K and ⇧⌘K | Unreleased | 0.9.0-dev |
 | Editor | Multi-cursor | Planned | — |
 | Language | Language servers, 21 binaries | Shipped | v0.2.0 |
 | Language | Hover, definition, references, rename | Shipped | v0.2.0 |
