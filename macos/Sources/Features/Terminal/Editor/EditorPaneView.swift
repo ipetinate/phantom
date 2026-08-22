@@ -45,6 +45,9 @@ struct EditorPaneView: View {
     /// one of them opens a *different* document, which is this view's job.
     @State private var references: [LSPReference] = []
 
+    /// The ⇧⌘K request, alive while its picker sheet is on screen.
+    @State private var attachRequest: AgentAttachRequest?
+
     var body: some View {
         content
             // A `safeAreaInset` rather than a `VStack`, so the tab bar's
@@ -94,6 +97,27 @@ struct EditorPaneView: View {
                     )
                 }
             }
+            .sheet(item: $attachRequest) { request in
+                AgentAttachPicker(request: request) { attachRequest = nil }
+            }
+    }
+
+    /// ⌘K: the reference goes to this tab's own terminal, and the pane flips
+    /// to it — a reference typed into a hidden prompt looks like the key did
+    /// nothing, and seeing it land is what tells the reader they can keep
+    /// typing their question.
+    private func attachToOwnTerminal(document: EditorDocument, range: NSRange, text: String) {
+        guard let surface = AgentAttach.ownSurface() else {
+            NSSound.beep()
+            return
+        }
+        let lines = EditorLineReference.lines(in: text as NSString, selection: range)
+        let reference = EditorLineReference.reference(
+            filePath: document.url.path,
+            lines: lines,
+            cwd: AgentAttach.ownCwd())
+        AgentAttach.send(reference, into: surface)
+        center.selectTerminal()
     }
 
     @ViewBuilder
@@ -115,6 +139,14 @@ struct EditorPaneView: View {
                 },
                 onShowReferences: { found in
                     references = found.map(LSPReference.init)
+                },
+                onAttachLine: { range, text in
+                    attachToOwnTerminal(document: document, range: range, text: text)
+                },
+                onAttachLinePicker: { range, text in
+                    attachRequest = AgentAttachRequest(
+                        filePath: document.url.path,
+                        lines: EditorLineReference.lines(in: text as NSString, selection: range))
                 }
             )
             .id(document.id)
@@ -225,6 +257,8 @@ private struct DocumentView: View {
     let onSearchWorkspace: () -> Void
     let onOpenLocation: (LSPLocation) -> Void
     let onShowReferences: ([LSPLocation]) -> Void
+    let onAttachLine: (NSRange, String) -> Void
+    let onAttachLinePicker: (NSRange, String) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
 
@@ -601,7 +635,9 @@ private struct DocumentView: View {
             onSave: { saveWithFormatting() },
             onSaveAll: onSaveAll,
             onCloseTab: onCloseTab,
-            onSearchWorkspace: onSearchWorkspace
+            onSearchWorkspace: onSearchWorkspace,
+            onAttachLine: onAttachLine,
+            onAttachLinePicker: onAttachLinePicker
         )
     }
 
