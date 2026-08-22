@@ -115,7 +115,7 @@ struct FilesSettingsView: View {
                     HStack(spacing: 8) {
                         Slider(value: $fontSize, in: 9...24, step: 1)
                             .frame(width: 180)
-                        Text("\(Int(fontSize))")
+                        Text(verbatim: "\(Int(fontSize))")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }

@@ -44,6 +44,6 @@ custom_rules:
   # this makes the fourth one impossible.
   localized_number_interpolation:
     name: "Localized number interpolation"
-    regex: 'Text\("[^"]*\\\([^)"]*([Cc]ount|[Nn]umber|[Ll]ine|[Tt]otal|[Pp]ort|[Ii]ndex)[^)"]*\)'
-    message: "Text(_:) localizes interpolated integers (1000 becomes \"1.000\"). Use Text(verbatim:)."
+    regex: 'Text\("[^"]*\\\([^)"]*([Cc]ount|[Nn]umber|[Ll]ine|[Tt]otal|[Pp]ort|[Ii]ndex|Int\(|Double\(|Float\(|CGFloat\()[^)"]*\)'
+    message: "Text(_:) localizes interpolated numbers (1000 becomes \"1.000\"). Use Text(verbatim:)."
     severity: error
