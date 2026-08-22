@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// The other direction: from what you are working on to where you want to
@@ -74,6 +75,15 @@ struct WorktreePopover: View {
             }
         }
         .onChange(of: editorCenter.tabs) { _ in refreshPlan() }
+        /// Asked for again while this is open, which is what the panel does
+        /// and for the same reason: `git worktree list` answers off the main
+        /// thread, and a popover opened before it came back showed an empty
+        /// chooser for as long as it stayed up. Every request inside the
+        /// store's TTL is a no-op, so this costs nothing once the answer has
+        /// landed.
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            center.requestList(commonRoot: commonRoot)
+        }
     }
 
     // MARK: Choosing
@@ -85,24 +95,37 @@ struct WorktreePopover: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
 
-            if offered.isEmpty {
-                Text(emptyMessage)
-                    .font(palette.font(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 1) {
-                        ForEach(offered) { worktree in
-                            row(worktree)
+            /// Height reserved up front, with a floor, rather than taken
+            /// from the content.
+            ///
+            /// A popover sizes itself to its content when it is presented
+            /// and does not grow afterwards. The worktree list arrives from
+            /// a `git worktree list` off the main thread, so a popover
+            /// opened a moment earlier laid out around the empty state and
+            /// then clamped the arriving rows into ten points of height:
+            /// two rows that existed, had scrollers, and drew nothing. The
+            /// floor is what makes the box the same size before and after
+            /// the answer lands.
+            ZStack(alignment: .topLeading) {
+                if offered.isEmpty {
+                    Text(emptyMessage)
+                        .font(palette.font(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(offered) { worktree in
+                                row(worktree)
+                            }
                         }
                     }
+                    .scrollIndicators(.automatic)
                 }
-                .frame(maxHeight: 6 * 28)
-                .scrollIndicators(.automatic)
             }
+            .frame(height: listHeight, alignment: .topLeading)
 
             Divider().padding(.vertical, 2)
 
@@ -133,7 +156,18 @@ struct WorktreePopover: View {
         }
         .padding(8)
         .frame(width: 260)
-        .onAppear { center.requestList(commonRoot: commonRoot) }
+        /// Forced, because the answer may be a cached empty one: the store
+        /// stamps its check time even when git failed, so an unforced
+        /// request inside the TTL would decline to ask again and the chooser
+        /// would stay empty on the strength of one bad answer.
+        .onAppear { center.requestList(commonRoot: commonRoot, force: true) }
+    }
+
+    /// Room for three rows even when there are none yet, and never more
+    /// than six — past that the list scrolls rather than the popover growing
+    /// down the screen.
+    private var listHeight: CGFloat {
+        CGFloat(min(max(offered.count, 3), 6)) * 28
     }
 
     private func row(_ worktree: GitWorktree) -> some View {
@@ -291,16 +325,32 @@ struct WorktreePopover: View {
 /// A row that highlights on hover, the way a menu item does. `.plain` alone
 /// gives no feedback at all, and a list of things to point at with no
 /// pointing feedback reads as a list of labels.
+///
+/// The hover state lives in a nested `View`, not on the style. A
+/// `ButtonStyle` is not a `View`, so SwiftUI installs no `@State` storage
+/// for it: declaring it there compiles, draws correctly on the first pass,
+/// and then stops drawing the label at all once anything makes the style's
+/// body re-evaluate. Which is how this was found — the chooser rendered its
+/// rows when the worktree list was already cached and rendered two
+/// invisible rows when the list arrived a moment after the popover opened.
 private struct WorktreePopoverRowStyle: ButtonStyle {
-    @State private var isHovered = false
-
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.primary.opacity(
-                        configuration.isPressed ? 0.16 : (isHovered ? 0.09 : 0)))
-            )
-            .onHover { isHovered = $0 }
+        Row(configuration: configuration)
+    }
+
+    private struct Row: View {
+        let configuration: Configuration
+
+        @State private var isHovered = false
+
+        var body: some View {
+            configuration.label
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Color.primary.opacity(
+                            configuration.isPressed ? 0.16 : (isHovered ? 0.09 : 0)))
+                )
+                .onHover { isHovered = $0 }
+        }
     }
 }

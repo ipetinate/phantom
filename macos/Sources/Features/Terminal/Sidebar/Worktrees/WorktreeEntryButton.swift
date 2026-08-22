@@ -45,9 +45,6 @@ struct WorktreeEntryButton: View {
     @State private var isShowingPopover = false
     @State private var isCreating = false
 
-    /// Resolved when the popover opens, not in `body`.
-    @State private var commonRoot: String?
-
     private var action: WorktreeEntryAction? {
         WorktreeEntryRule.action(
             at: entry,
@@ -60,7 +57,6 @@ struct WorktreeEntryButton: View {
     var body: some View {
         if let action {
             SidebarIconButton(help: help(action)) {
-                commonRoot = repoRoot.flatMap { GitCommonDir.resolve(from: $0) }
                 isShowingPopover = true
             } label: {
                 WorktreeIcon(size: 12)
@@ -72,7 +68,7 @@ struct WorktreeEntryButton: View {
                 popover(action)
             }
             .sheet(isPresented: $isCreating) {
-                if let root = commonRoot {
+                if let root = resolvedCommonRoot {
                     WorktreeCreator(
                         commonRoot: root,
                         onDone: { isCreating = false },
@@ -82,9 +78,25 @@ struct WorktreeEntryButton: View {
         }
     }
 
+    /// The family this terminal's repository belongs to.
+    ///
+    /// A computed property read only from the presentation closures, never
+    /// from `body`. Resolving reads a couple of small files, and `body` runs
+    /// on every sidebar update for every row — so the cost is paid when
+    /// something is actually opened.
+    ///
+    /// It used to be `@State`, written in the button's action alongside the
+    /// flag that presents the popover. That is one ordering assumption too
+    /// many: the popover came up before the write was visible to it and
+    /// showed the "couldn't read" fallback over a repository that reads
+    /// fine. Computing it where it is used has no order to get wrong.
+    private var resolvedCommonRoot: String? {
+        repoRoot.flatMap { GitCommonDir.resolve(from: $0) }
+    }
+
     @ViewBuilder
     private func popover(_ action: WorktreeEntryAction) -> some View {
-        if let root = commonRoot {
+        if let root = resolvedCommonRoot {
             WorktreePopover(
                 action: action,
                 commonRoot: root,
