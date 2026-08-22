@@ -10,6 +10,9 @@ struct FilesSettingsView: View {
     @AppStorage(FileOpenAction.defaultsKey)
     private var clickAction = FileOpenAction.builtInEditor.rawValue
 
+    @AppStorage(FileOpenTarget.defaultsKey)
+    private var fileOpenTarget = FileOpenTarget.alwaysNewTerminal.rawValue
+
     @AppStorage(EditorSettings.fontSizeKey) private var fontSize = EditorSettings.defaultFontSize
     @AppStorage(EditorSettings.fontFamilyKey) private var fontFamily = ""
     @AppStorage(EditorSettings.wrapsLinesKey) private var wrapsLines = false
@@ -34,10 +37,23 @@ struct FilesSettingsView: View {
                         Text(action.title).tag(action.rawValue)
                     }
                 }
+
+                /// Directly under the choice it depends on. This lived two
+                /// panes away, under a header that read "Panels", and only
+                /// means anything when the row above sends the file to a
+                /// terminal — which `FileOpener.reusableTerminal` is the
+                /// only consumer of.
+                Picker("In a Terminal", selection: $fileOpenTarget) {
+                    ForEach(FileOpenTarget.allCases) { target in
+                        Text(target.title).tag(target.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(clickAction != FileOpenAction.terminalEditor.rawValue)
             } header: {
                 Text("Opening")
             } footer: {
-                Text("Whatever you pick here, the other ways stay available from a file's context menu — so \"Open With…\" can still send this one file to vim or to another app.")
+                Text("Whatever you pick here, the other ways stay available from a file's context menu — so \"Open With…\" can still send this one file to vim or to another app. Reuse applies only to a terminal sitting at a prompt: one still running something always gets a new terminal, so a command can never land inside whatever is already open there.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
