@@ -35,7 +35,12 @@ enum AgentLauncher {
     ///
     /// The fallback covers a row whose id has not caught up yet, and prefers
     /// doing the thing in the likely-right pane over doing nothing.
-    private static func surface(for tab: SidebarTabModel) -> Ghostty.SurfaceView? {
+    ///
+    /// Shared rather than private since `WorktreeMigrate` needs the same
+    /// answer for the same reason: it also types into the terminal one row
+    /// stands for, and a second copy of the split-window rule above would be
+    /// a second place to get it wrong.
+    static func surface(for tab: SidebarTabModel) -> Ghostty.SurfaceView? {
         guard let controller = tab.window.windowController as? BaseTerminalController
         else { return nil }
 

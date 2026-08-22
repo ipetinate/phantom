@@ -199,6 +199,7 @@ struct SidebarView: View {
             case .worktrees:
                 WorktreePanelView(
                     tabManager: tabManager,
+                    editorCenter: editorCenter,
                     onNewTerminal: layout.onNewWorktreeTab,
                     onNewAgentTab: layout.onNewWorktreeAgentTab
                 )
@@ -222,7 +223,9 @@ struct SidebarView: View {
                             onNewTab: onNewTabInGroup,
                             onNewClaudeTab: onNewClaudeTabInGroup,
                             onNewCodexTab: onNewCodexTabInGroup,
-                            onNewOpenCodeTab: onNewOpenCodeTabInGroup
+                            onNewOpenCodeTab: onNewOpenCodeTabInGroup,
+                            editorCenter: editorCenter,
+                            onNewWorktreeTab: layout.onNewWorktreeTab
                         )
                         .transition(.opacity)
                     }
@@ -236,7 +239,9 @@ struct SidebarView: View {
                             groupId: nil,
                             tabManager: tabManager,
                             store: store,
-                            dragState: dragState
+                            dragState: dragState,
+                            editorCenter: editorCenter,
+                            onNewWorktreeTab: layout.onNewWorktreeTab
                         )
                         .transition(.opacity)
                     }
@@ -288,6 +293,15 @@ struct SidebarView: View {
 struct SidebarTitlebarChrome: View {
     @ObservedObject var store: SidebarGroupStore
     @ObservedObject var layout: SidebarLayoutModel
+
+    /// Both for one button: the worktree action needs to know which
+    /// repository the selected terminal is in, and the component that draws
+    /// it is the same one the rows use — which reasons about documents,
+    /// because on a row it can migrate. From here it only ever opens a new
+    /// terminal.
+    @ObservedObject var tabManager: SidebarTabManager
+    @ObservedObject var editorCenter: EditorCenter
+
     @ObservedObject var collapse: SidebarCollapseState = .shared
 
     @State private var isCreatingGroup = false
@@ -308,6 +322,13 @@ struct SidebarTitlebarChrome: View {
     /// button is exempt: hiding it behind a hover would leave no visible
     /// way to bring a collapsed sidebar back.
     @AppStorage("SidebarChromeAlwaysShowActions") private var alwaysShowActions = false
+    @AppStorage("SidebarChromeShowWorktree") private var showWorktree = true
+
+    /// The terminal the whole sidebar is following, which is the one whose
+    /// repository the chrome's actions are about.
+    private var selectedTab: SidebarTabModel? {
+        tabManager.models.first { $0.isSelected }
+    }
 
     private var visiblePane: SidebarPane {
         switch layout.selectedPane {
@@ -379,6 +400,23 @@ struct SidebarTitlebarChrome: View {
                     OpenCodeIcon(size: 12)
                 }
             }
+            if showWorktreesPane {
+                WorktreeEntryButton(
+                    entry: .chrome,
+                    isEnabled: showWorktree,
+                    repoRoot: selectedTab?.repoRoot,
+                    currentPath: selectedTab?.pwd,
+                    isIdle: true,
+                    hasLiveAgent: false,
+                    editorCenter: editorCenter,
+                    terminalPwds: tabManager.models.compactMap(\.pwd),
+                    onMigrate: { _, _ in },
+                    onNewTerminal: layout.onNewWorktreeTab,
+                    onCreateGroup: { _ in },
+                    onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
+                    isRevealed: true)
+            }
+
             SidebarChromeButton(icon: "folder.badge.plus", help: "New Group") {
                 isCreatingGroup = true
             }
@@ -560,6 +598,12 @@ private struct SidebarGroupSection: View {
     var onNewCodexTab: (SidebarGroup?) -> Void = { _ in }
     var onNewOpenCodeTab: (SidebarGroup?) -> Void = { _ in }
 
+    /// Passed straight through to the rows, which is the only reason this
+    /// view knows about either: a group header draws no documents and opens
+    /// no terminals of its own beyond the one button below.
+    @ObservedObject var editorCenter: EditorCenter
+    let onNewWorktreeTab: (String) -> Void
+
     @ObservedObject private var palette: ThemePalette = .shared
 
     @AppStorage("SidebarGroupShowPullRequests") private var showPullRequests = true
@@ -567,6 +611,7 @@ private struct SidebarGroupSection: View {
     @AppStorage("SidebarGroupShowCodex") private var showCodex = true
     @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = true
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
+    @AppStorage("SidebarGroupShowWorktree") private var showWorktree = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
 
     /// Whether the three action icons above stay visible without a hover —
@@ -581,6 +626,16 @@ private struct SidebarGroupSection: View {
     private var accent: Color? { group.accentColor }
     private var collapsed: Bool { group.collapsed }
 
+    /// Whose repository the header's worktree button reasons about.
+    ///
+    /// A group's tabs can in principle sit in different repositories, and
+    /// there is no single right answer then — so the first one that is in a
+    /// repository at all, which for the ordinary group is every one of them.
+    /// Nothing is typed into it: the button only ever opens a new terminal.
+    private var representativeTab: SidebarTabModel? {
+        tabs.first { !($0.repoRoot ?? "").isEmpty }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -593,7 +648,9 @@ private struct SidebarGroupSection: View {
                             groupId: group.id,
                             tabManager: tabManager,
                             store: store,
-                            dragState: dragState
+                            dragState: dragState,
+                            editorCenter: editorCenter,
+                            onNewWorktreeTab: onNewWorktreeTab
                         )
                     }
                     if tabs.isEmpty {
@@ -722,6 +779,24 @@ private struct SidebarGroupSection: View {
                 .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
                 .allowsHitTesting(alwaysShowActions || isHeaderHovered)
             }
+
+            /// Always a new terminal from here, never a migration: a header
+            /// stands for several terminals, so there is no single tab a
+            /// switch could be about. See `WorktreeEntryRule`.
+            WorktreeEntryButton(
+                entry: .groupHeader,
+                isEnabled: showWorktree,
+                repoRoot: representativeTab?.repoRoot,
+                currentPath: representativeTab?.pwd,
+                isIdle: true,
+                hasLiveAgent: false,
+                editorCenter: editorCenter,
+                terminalPwds: tabManager.models.compactMap(\.pwd),
+                onMigrate: { _, _ in },
+                onNewTerminal: onNewWorktreeTab,
+                onCreateGroup: { _ in },
+                onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
+                isRevealed: alwaysShowActions || isHeaderHovered)
 
             if showNewTerminal {
                 SidebarIconButton(help: "New Terminal in Group") {
@@ -1167,6 +1242,16 @@ private struct SidebarTabRow: View {
     let tabManager: SidebarTabManager
     @ObservedObject var store: SidebarGroupStore
     @ObservedObject var dragState: SidebarDragState
+
+    /// Threaded down for one action: switching this terminal's worktree
+    /// moves the open documents with it, and the decision about which ones
+    /// can move is the editor's to answer.
+    @ObservedObject var editorCenter: EditorCenter
+
+    /// Opens a terminal in a directory — the worktree panel's own callback,
+    /// reused so a new terminal started from a row lands the same way one
+    /// started from the panel does.
+    let onNewWorktreeTab: (String) -> Void
     @ObservedObject private var themePalette: ThemePalette = .shared
     @ObservedObject private var planCenter: ClaudePlanCenter = .shared
 
@@ -1177,6 +1262,7 @@ private struct SidebarTabRow: View {
     @State private var isHovered = false
     @State private var isCreatingGroup = false
     @State private var isCustomizing = false
+    @State private var groupingWorktree: GitWorktree?
 
     @AppStorage("SidebarShowDirectory") private var showDirectory = true
     @AppStorage("SidebarShowGitBranch") private var showGitBranch = true
@@ -1191,6 +1277,7 @@ private struct SidebarTabRow: View {
     @AppStorage("SidebarTabShowClaude") private var showClaudeAction = true
     @AppStorage("SidebarTabShowCodex") private var showCodexAction = true
     @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = true
+    @AppStorage("SidebarTabShowWorktree") private var showWorktreeAction = true
     @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
     private var isCompact: Bool { density == "compact" }
@@ -1325,6 +1412,27 @@ private struct SidebarTabRow: View {
 
             Spacer(minLength: 0)
 
+            /// Before the agent buttons, and gone under the same conditions
+            /// they are: all of these type into the tab's shell.
+            WorktreeEntryButton(
+                entry: .tabRow,
+                isEnabled: showWorktreeAction,
+                repoRoot: tab.repoRoot,
+                currentPath: tab.pwd,
+                isIdle: TerminalIdleCheck.isIdle(foregroundPID: tab.foregroundPID),
+                hasLiveAgent: tab.liveAgent != nil,
+                editorCenter: editorCenter,
+                terminalPwds: tabManager.models.compactMap(\.pwd),
+                onMigrate: { worktree, plan in
+                    tabManager.select(tab)
+                    WorktreeMigrate.perform(
+                        to: worktree, plan: plan, tab: tab, editorCenter: editorCenter)
+                },
+                onNewTerminal: onNewWorktreeTab,
+                onCreateGroup: { worktree in groupingWorktree = worktree },
+                onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
+                isRevealed: alwaysShowActions || isHovered)
+
             ForEach(agentActions, id: \.self) { agent in
                 SidebarIconButton(help: "Start \(agent.displayName) in This Tab") {
                     tabManager.select(tab)
@@ -1401,6 +1509,21 @@ private struct SidebarTabRow: View {
                 group: nil,
                 store: store,
                 assignSurfaceId: tab.surfaceId
+            )
+        }
+        /// Every terminal working in that worktree, not just this one: the
+        /// gesture is about the worktree, and a group holding one of its
+        /// three terminals would be a group that means something narrower
+        /// than what was pointed at.
+        .sheet(item: $groupingWorktree) { worktree in
+            SidebarGroupEditor(
+                group: nil,
+                store: store,
+                assignSurfaceIds: tabManager.models
+                    .filter { GitWorktreeMembership.contains(pwd: $0.pwd, root: worktree.path) }
+                    .compactMap(\.surfaceId),
+                initialName: worktree.branch
+                    ?? (worktree.path as NSString).lastPathComponent
             )
         }
         .sheet(isPresented: $isCustomizing) {
@@ -2058,6 +2181,18 @@ private struct SidebarGroupEditor: View {
     /// into the new group on save.
     var assignSurfaceId: UUID?
 
+    /// Every tab to move in, for the gestures that group more than one —
+    /// "create group from worktree" stands for all the terminals working
+    /// there, and moving only one of them in would leave the group meaning
+    /// something narrower than what was asked for.
+    var assignSurfaceIds: [UUID] = []
+
+    /// A name to arrive with. The reader can change it; what it saves is a
+    /// blank field in the one case where there *is* an obvious name — the
+    /// branch the worktree is on — and typing it out again is work the
+    /// gesture already knew the answer to.
+    var initialName: String?
+
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var palette: ThemePalette = .shared
 
@@ -2157,7 +2292,10 @@ private struct SidebarGroupEditor: View {
     }
 
     private func populate() {
-        guard let group else { return }
+        guard let group else {
+            if let initialName, name.isEmpty { name = initialName }
+            return
+        }
         name = group.name
         details = group.details ?? ""
         icon = group.icon
@@ -2213,8 +2351,10 @@ private struct SidebarGroupEditor: View {
             if let colorHex {
                 store.update(created.id) { $0.colorHex = colorHex }
             }
-            if let assignSurfaceId {
-                store.assign(surfaceId: assignSurfaceId, to: created.id)
+            /// Deduplicated, so a caller that passes both a single tab and a
+            /// list containing it does not assign it twice.
+            for surfaceId in Set([assignSurfaceId].compactMap { $0 } + assignSurfaceIds) {
+                store.assign(surfaceId: surfaceId, to: created.id)
             }
         }
     }
