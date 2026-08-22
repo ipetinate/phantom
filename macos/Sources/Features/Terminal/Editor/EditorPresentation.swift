@@ -3,9 +3,10 @@ import Foundation
 /// How a document is being shown, as opposed to what it contains.
 ///
 /// Until now a tab had exactly one answer — the text view — and the question
-/// was never asked. Two things ask it: a Markdown file can be read as source
-/// or as prose, and a changed file can be read as itself or as a diff against
-/// what it was.
+/// was never asked. Several things ask it: a Markdown file can be read as
+/// source or as prose, a changed file as itself or as a diff against what it
+/// was, and an SVG or a CSV as the picture or the grid that its text stands
+/// for rather than as the text itself.
 ///
 /// Deliberately a property of the **document** rather than of the view. A tab
 /// switched away from and back to should return the way it was left; view
@@ -19,6 +20,18 @@ enum EditorPresentation: Equatable, Hashable, CaseIterable, Sendable {
     /// Markdown drawn as prose.
     case preview
 
+    /// An SVG drawn as the picture its markup describes.
+    ///
+    /// Not folded into `.preview` even though both render, because the two
+    /// are offered by different files and a presentation is only honest if
+    /// every document that offers it can draw it. A single "the rendered
+    /// one" case would let the control offer Markdown's prose renderer for a
+    /// `.svg`, which is exactly the empty pane this type exists to prevent.
+    case image
+
+    /// Delimited text laid out as the grid it stands for.
+    case table
+
     /// The file against a git revision.
     case diff
 
@@ -30,6 +43,33 @@ enum EditorPresentation: Equatable, Hashable, CaseIterable, Sendable {
     /// `.md` with changes is still read as prose or as a diff, never as
     /// prose *and* a diff in the same two panes.
     case split
+
+    /// What a file opens as, before anybody has toggled anything.
+    ///
+    /// Source for nearly everything, and for the reason this is a code
+    /// editor: a file that opens in a mode you cannot type into surprises the
+    /// person who opened it to type. Markdown obeys that despite rendering
+    /// beautifully, and so does a CSV — reading the raw rows is one of the two
+    /// honest reasons to open one, so its table is offered rather than
+    /// imposed.
+    ///
+    /// An SVG is the exception, because its markup is not what the file is
+    /// *for*. Nobody opens a logo to read its path data; they open it to see
+    /// the logo, and the reader who did come to edit it is one click from the
+    /// source, which is then remembered for the rest of the sitting.
+    ///
+    /// Answered from the name alone, and deliberately not routed through an
+    /// `EditorPresentationOptions`: whether git has something to compare the
+    /// file against is not what decides where it lands. A file reached from
+    /// the Changes list opens on its diff because the *caller* asked for that
+    /// — `EditorCenter.open(showing:)` — not because it happened to be dirty
+    /// when somebody opened it from the sidebar.
+    static func opening(fileName: String) -> EditorPresentation {
+        let options = EditorPresentationOptions.resolve(fileName: fileName, hasChanges: false)
+        if options.supports(.image) { return .image }
+        if options.supports(.table) { return .table }
+        return .source
+    }
 }
 
 /// Which presentations a document can actually be shown in.
@@ -42,13 +82,6 @@ struct EditorPresentationOptions: Equatable, Sendable {
     /// Ordered as they should appear in a control: source first, because it
     /// is the one every file has and the one a reader falls back to.
     let available: [EditorPresentation]
-
-    /// What a document opens as.
-    ///
-    /// Source, always — including for Markdown. This is a code editor, and a
-    /// file that opens in a mode you cannot type into surprises the person
-    /// who opened it to type. The toggle is one click and it is remembered.
-    var initial: EditorPresentation { .source }
 
     func supports(_ presentation: EditorPresentation) -> Bool {
         available.contains(presentation)
@@ -80,10 +113,28 @@ struct EditorPresentationOptions: Equatable, Sendable {
         let isMarkdown = markdownExtensions.contains(ext)
 
         if isMarkdown { available.append(.preview) }
+
+        /// An SVG and a CSV are the two files here whose *source* is text
+        /// somebody edits and whose *subject* is something else — a picture
+        /// and a grid. That is why they are presentations rather than entries
+        /// in `EditorMediaKind`: a PNG has no source to return to, so a media
+        /// tab costs its reader nothing, while sending an SVG there would
+        /// trade away the ability to edit a text file for a rendering nobody
+        /// asked for.
+        if ext == "svg" { available.append(.image) }
+        if ext == "csv" { available.append(.table) }
+
         if hasChanges { available.append(.diff) }
 
         /// A split needs something to sit beside the source, and only a
         /// preview qualifies.
+        ///
+        /// A picture and a table are left out for a duller reason than the
+        /// diff's: the second pane is scroll-linked to the first, and the
+        /// machinery that does the linking maps Markdown blocks to source
+        /// lines. There is no such mapping from a rendered SVG back to the
+        /// attribute that drew it, and a table's rows do not scroll with the
+        /// text that spells them once a cell wraps.
         ///
         /// **A diff is already a split** — two columns of one file, with
         /// its own divider and its own direction toggle. Offering "source

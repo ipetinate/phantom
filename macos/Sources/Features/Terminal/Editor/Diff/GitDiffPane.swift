@@ -91,6 +91,11 @@ struct GitDiffPane: View {
                     alignment: .leading
                 )
                 .frame(minHeight: viewport.size.height, alignment: .top)
+                /// The diff is a document, so its bar carries the content
+                /// weight — and without this it inherited whatever System
+                /// Settings said, which for "always show scroll bars" is the
+                /// 15-point legacy bar the rest of the window no longer has.
+                .background(alignment: .top) { OverlayScrollers(weight: .content) }
                 .synchronizedScroll(scrollSync, as: syncSide)
             }
         }

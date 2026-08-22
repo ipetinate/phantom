@@ -189,6 +189,262 @@ struct SFCTokenTests {
     }
 }
 
+/// An HTML document's own blocks.
+///
+/// The same problem an SFC has, in the other direction: lexed as markup from
+/// end to end, a `<script>` block's `const` is not a keyword, its `//` is not
+/// a comment, and — measured, this is the one that reads as a bug rather than
+/// as something missing — every `name =` in it is painted as an *attribute*,
+/// because "a name before an equals sign" is what an attribute is in markup
+/// and what an assignment is in code.
+struct MarkupContainerTests {
+    private func kinds(of needle: String, in text: String) -> [TokenKind] {
+        let ns = text as NSString
+        let tokens = SyntaxHighlighter(language: .html)
+            .tokens(in: text, range: NSRange(location: 0, length: ns.length))
+        let target = ns.range(of: needle)
+        return tokens
+            .filter { NSIntersectionRange($0.range, target).length > 0 }
+            .map(\.kind)
+    }
+
+    private let page = """
+    <!doctype html>
+    <html>
+      <head>
+        <script type="text/babel">
+          const Card = ({ title }) => {
+            // a note
+            return <div className="card">{title}</div>;
+          };
+        </script>
+        <style>
+          .card { display: flex; }
+        </style>
+      </head>
+      <body><div class="root">text</div></body>
+    </html>
+    """
+
+    @Test func theScriptBlockIsJavaScript() {
+        #expect(kinds(of: "const Card", in: page).contains(.keyword))
+        #expect(kinds(of: "// a note", in: page) == [.comment])
+    }
+
+    @Test func theStyleBlockIsCSS() {
+        #expect(kinds(of: ".card {", in: page).contains(.type))
+        #expect(kinds(of: "display", in: page).contains(.attribute))
+    }
+
+    /// The frame is still the document: an HTML container lexes what is
+    /// *around* its blocks with its own rules, which is the difference from an
+    /// SFC, where the frame is three tags and nothing else.
+    @Test func theMarkupAroundTheBlocksIsStillMarkup() {
+        #expect(kinds(of: "<html", in: page).contains(.keyword))
+        #expect(kinds(of: "<div class", in: page).contains(.keyword))
+        #expect(kinds(of: "class=\"root\"", in: page).contains(.attribute))
+    }
+
+    /// The block's own tag belongs to the markup around it, not to the
+    /// language inside — `<script` lexed as JavaScript makes `script` an
+    /// identifier.
+    @Test func theBlockTagsThemselvesAreMarkup() {
+        #expect(kinds(of: "<script type", in: page).contains(.keyword))
+    }
+
+    /// **The rule an SFC cannot share.** In an HTML file `<script>` is inside
+    /// `<head>`, so it is indented, so the column-zero convention that tells
+    /// an SFC's own `<template>` from a nested one would find nothing here.
+    @Test func anIndentedBlockIsFoundInMarkupAndNotInAnSFC() {
+        let indented = "<html>\n  <script>\n    const a = 1;\n  </script>\n</html>"
+        #expect(SFCRegions.regions(in: indented, of: .markup).map(\.language) == [.javascript])
+        #expect(SFCRegions.regions(in: indented, of: .singleFileComponent).isEmpty)
+    }
+
+    /// `<SCRIPT>` is ordinary in hand-written HTML, and case is not something
+    /// a Vue toolchain ever produces — which is why only one of the two
+    /// containers ignores it.
+    @Test func markupIsCaseInsensitive() {
+        let shouting = "<HTML>\n  <SCRIPT>\n  const a = 1;\n  </SCRIPT>\n</HTML>"
+        #expect(SFCRegions.regions(in: shouting, of: .markup).map(\.language) == [.javascript])
+    }
+
+    /// `<template>` in HTML holds markup, which is what the document is
+    /// already being lexed as. Claiming it would mean lexing HTML as HTML
+    /// through a second, slower path.
+    @Test func markupDoesNotClaimATemplateElement() {
+        let text = "<template>\n<b>x</b>\n</template>"
+        #expect(SFCRegions.regions(in: text, of: .markup).isEmpty)
+        #expect(SFCRegions.regions(in: text, of: .singleFileComponent).map(\.language) == [.html])
+    }
+
+    /// An unclosed block is not claimed, so a file being typed is markup
+    /// until the closing tag exists rather than half a document in the wrong
+    /// language.
+    @Test func anUnclosedBlockLeavesTheDocumentAsMarkup() {
+        let unclosed = "<html>\n  <script>\n    const a = 1;\n"
+        #expect(SFCRegions.regions(in: unclosed, of: .markup).isEmpty)
+        #expect(kinds(of: "const", in: unclosed).isEmpty)
+    }
+
+    /// Which file types are made of blocks, in the one place that decides it.
+    @Test func onlyTheTwoContainersAreContainers() {
+        #expect(SFCRegions.container(of: .vue) == .singleFileComponent)
+        #expect(SFCRegions.container(of: .html) == .markup)
+        #expect(SFCRegions.container(of: .javascript) == nil)
+        #expect(SFCRegions.container(of: .css) == nil)
+    }
+}
+
+/// JSX, which is markup written in a language whose `<` is an operator.
+///
+/// The reason this is a rule and not a container: JSX is not a *block* inside
+/// JavaScript with tags around it that a splitter could find — it is an
+/// expression, anywhere an expression can go. So the tags are painted by a
+/// pattern, and the pattern's whole difficulty is telling `<div` from
+/// `Array<string>`.
+struct JSXTagTests {
+    private func kinds(of needle: String, in text: String) -> [TokenKind] {
+        let ns = text as NSString
+        let tokens = SyntaxHighlighter(language: .javascript)
+            .tokens(in: text, range: NSRange(location: 0, length: ns.length))
+        let target = ns.range(of: needle)
+        return tokens
+            .filter { NSIntersectionRange($0.range, target).length > 0 }
+            .map(\.kind)
+    }
+
+    private let element = """
+    const Card = ({ title }: Props) => (
+      <>
+        <div className="card">{title}</div>
+        <p>hello</p>
+      </>
+    );
+    """
+
+    @Test func anElementsTagsAreTags() {
+        #expect(kinds(of: "<div", in: element).contains(.keyword))
+        #expect(kinds(of: "</div", in: element).contains(.keyword))
+    }
+
+    /// A closing tag with text in front of it — `<p>hello</p>` — is the
+    /// commonest shape in JSX, and it is why the closing branch of the rule
+    /// carries no guard at all: `</` cannot begin a comparison.
+    @Test func aClosingTagAfterTextIsStillATag() {
+        #expect(kinds(of: "</p>", in: element).contains(.keyword))
+    }
+
+    @Test func fragmentsAreTags() {
+        #expect(kinds(of: "<>", in: element).contains(.keyword))
+        #expect(kinds(of: "</>", in: element).contains(.keyword))
+    }
+
+    /// **The regression this rule is one character away from.** Every one of
+    /// these appears hundreds of times in the TypeScript this editor is used
+    /// on, and an unguarded `<[A-Za-z]` paints all of them as tags — measured,
+    /// 1390 wrongly coloured tokens across the 723 `.ts` and `.vue` files of
+    /// one real project. With the guard: zero changed tokens in the same 723.
+    @Test func typeArgumentsAreNotTags() {
+        let typescript = """
+        const list: Array<string> = [];
+        const map = new Map<string, number>();
+        const [state, setState] = useState<Foo>(null);
+        """
+        #expect(!kinds(of: "<string>", in: typescript).contains(.keyword))
+        #expect(!kinds(of: "<string, number>", in: typescript).contains(.keyword))
+        #expect(!kinds(of: "<Foo>", in: typescript).contains(.keyword))
+    }
+
+    @Test func comparisonsAreNotTags() {
+        let comparisons = """
+        const ok = a < b && c > d;
+        for (let i = 0; i < list.length; i += 1) {}
+        const gt = width>height;
+        """
+        #expect(kinds(of: "< b", in: comparisons).isEmpty)
+        #expect(kinds(of: "< list", in: comparisons).isEmpty)
+        #expect(kinds(of: ">height", in: comparisons).isEmpty)
+    }
+
+    /// The two halves together, which is the case the item was reported for:
+    /// JSX in a `<script type="text/babel">` block of an HTML page. The
+    /// container gets the block lexed as JavaScript; the rule gets its tags
+    /// coloured. Before, the block was markup — so the tags were right by
+    /// accident and everything else was wrong.
+    @Test func jsxInsideAnHTMLScriptBlockGetsBoth() {
+        let page = """
+        <html>
+          <script type="text/babel">
+            const App = () => <div className="root">hi</div>;
+          </script>
+        </html>
+        """
+        let ns = page as NSString
+        let tokens = SyntaxHighlighter(language: .html)
+            .tokens(in: page, range: NSRange(location: 0, length: ns.length))
+
+        func kinds(of needle: String) -> [TokenKind] {
+            let target = ns.range(of: needle)
+            return tokens
+                .filter { NSIntersectionRange($0.range, target).length > 0 }
+                .map(\.kind)
+        }
+
+        #expect(kinds(of: "const App").contains(.keyword))
+        #expect(kinds(of: "<div className").contains(.keyword))
+        #expect(kinds(of: "</div>").contains(.keyword))
+    }
+}
+
+/// The split's answer, kept between calls.
+///
+/// It has to be kept, because the colouring pass is not one pass: measured,
+/// `CodeTextStorage` colours the edited range, `colorBrackets` tokenizes the
+/// same region again to find the strings a brace must not be counted inside,
+/// `matchedPair` tokenizes a window around the caret, and the minimap
+/// tokenizes the whole document. Three scans of the document per keystroke on
+/// a `.vue`, and each was a full one: 1977 µs per keystroke on the largest
+/// `.vue` of a real project (38 KB), against 671 µs with this cache — best of
+/// three, `-O`, 50 keystrokes each changing the text.
+///
+/// And it has to be *correct*, which is the only thing a test can check here:
+/// a cache that answers about the wrong document colours the wrong
+/// characters, silently.
+struct SFCRegionCacheTests {
+    private let script = "<script>\nlet a = 1;\n</script>"
+    private let style = "<style>\n.a { }\n</style>"
+
+    /// The document is the key. Asking about another one in between must not
+    /// leave the first answer standing.
+    @Test func anotherDocumentDoesNotAnswerForThisOne() {
+        #expect(SFCRegions.regions(in: script).map(\.language) == [.javascript])
+        #expect(SFCRegions.regions(in: style).map(\.language) == [.css])
+        #expect(SFCRegions.regions(in: script).map(\.language) == [.javascript])
+    }
+
+    /// The container is part of the key: the same bytes are two different
+    /// splits depending on which convention is being applied to them.
+    @Test func theContainerIsPartOfTheKey() {
+        let indented = "<html>\n  <script>\n  const a = 1;\n  </script>\n</html>"
+        #expect(SFCRegions.regions(in: indented, of: .markup).count == 1)
+        #expect(SFCRegions.regions(in: indented, of: .singleFileComponent).isEmpty)
+        #expect(SFCRegions.regions(in: indented, of: .markup).count == 1)
+    }
+
+    /// More documents than the cache holds, so the eviction path is the one
+    /// under test rather than the hit.
+    @Test func evictionAnswersFromTheDocumentRatherThanFromTheCache() {
+        for index in 0..<8 {
+            let text = "<script>\nlet v\(index) = \(index);\n</script>"
+            let regions = SFCRegions.regions(in: text)
+            #expect(regions.map(\.language) == [.javascript])
+            let body = (text as NSString).substring(with: regions[0].range)
+            #expect(body.contains("v\(index)"), "the cache answered for another document")
+        }
+    }
+}
+
 /// Telling a local build from the installed app.
 struct DevelopmentBuildTests {
     /// `zig build` writes to `zig-out`, and nothing installed runs from

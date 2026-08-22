@@ -164,6 +164,16 @@ struct SplitPaneContainer<First: View, Second: View, Accessory: View>: View {
     /// toggles would sit inches apart doing exactly the same thing.
     var showsDirectionToggle: Bool = true
 
+    /// How far in from the right edge the corner controls sit, beyond the
+    /// standard inset.
+    ///
+    /// The container cannot know what occupies its own top-right corner: in
+    /// a stacked split the first pane spans it, and when that pane is a
+    /// source view its minimap lives exactly there — which is how the
+    /// controls came to be photographed sitting on top of one. The host
+    /// knows what its panes are, so the host says how much to clear.
+    var accessoryTrailingInset: CGFloat = 0
+
     private let first: () -> First
     private let second: () -> Second
     private let accessory: () -> Accessory
@@ -175,12 +185,14 @@ struct SplitPaneContainer<First: View, Second: View, Accessory: View>: View {
     init(
         model: SplitPaneModel,
         showsDirectionToggle: Bool = true,
+        accessoryTrailingInset: CGFloat = 0,
         @ViewBuilder first: @escaping () -> First,
         @ViewBuilder second: @escaping () -> Second,
         @ViewBuilder accessory: @escaping () -> Accessory
     ) {
         self.model = model
         self.showsDirectionToggle = showsDirectionToggle
+        self.accessoryTrailingInset = accessoryTrailingInset
         self.first = first
         self.second = second
         self.accessory = accessory
@@ -203,6 +215,7 @@ struct SplitPaneContainer<First: View, Second: View, Accessory: View>: View {
                 }
             }
             .padding(SplitPaneMetrics.controlInset)
+            .padding(.trailing, accessoryTrailingInset)
         }
     }
 
@@ -222,12 +235,14 @@ extension SplitPaneContainer where Accessory == EmptyView {
     init(
         model: SplitPaneModel,
         showsDirectionToggle: Bool = true,
+        accessoryTrailingInset: CGFloat = 0,
         @ViewBuilder first: @escaping () -> First,
         @ViewBuilder second: @escaping () -> Second
     ) {
         self.init(
             model: model,
             showsDirectionToggle: showsDirectionToggle,
+            accessoryTrailingInset: accessoryTrailingInset,
             first: first,
             second: second,
             accessory: { EmptyView() }

@@ -45,6 +45,16 @@ struct CodeTextView: NSViewRepresentable {
     /// `CodeNSTextView.tagDialect`.
     var tagDialect: CodeTagDialect = .none
 
+    /// Whether a server that completes class attributes is attached to this
+    /// file. See `CodeClassAttribute`.
+    ///
+    /// Beside `tagDialect` rather than inside `CodeEditorConfiguration` for
+    /// the same reason: that value is a preference held per editor, and this
+    /// is a fact about one file — it changes when the document changes and
+    /// again when a server finishes starting. A field there would also be
+    /// compared by the `unchanged` guard, which is about what gets *drawn*.
+    var completesInsideClassAttribute = false
+
     let theme: CodeTheme
     let configuration: CodeEditorConfiguration
 
@@ -180,6 +190,7 @@ struct CodeTextView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
+        scrollView.useThinScrollers()
         scrollView.documentView = textView
 
         onScrollViewReady?(scrollView)
@@ -268,6 +279,7 @@ struct CodeTextView: NSViewRepresentable {
         textView.onFormat = onFormat
         textView.commandShortcuts = commandShortcuts
         textView.completionTriggers = completionTriggers
+        textView.completesInsideClassAttribute = completesInsideClassAttribute
         textView.onJumpToDefinition = onJumpToDefinition
         textView.hoverProvider = hoverProvider
         textView.completionProvider = completionProvider
@@ -315,6 +327,7 @@ struct CodeTextView: NSViewRepresentable {
             code.onFormat = onFormat
             code.commandShortcuts = commandShortcuts
             code.completionTriggers = completionTriggers
+            code.completesInsideClassAttribute = completesInsideClassAttribute
             code.onJumpToDefinition = onJumpToDefinition
             code.hoverProvider = hoverProvider
             code.completionProvider = completionProvider
@@ -1151,9 +1164,20 @@ struct CodeTextView: NSViewRepresentable {
 
         /// The band's frame in the clip view, given where the caret is in it.
         ///
-        /// Full width, and the wider of the two on purpose: the document is
-        /// only as wide as its longest line, so a band that stopped there
-        /// would stop mid-viewport on a file of short lines.
+        /// Full width, and the widest of the three on purpose. The document is
+        /// only as wide as its longest line, so a band that stopped there would
+        /// stop mid-viewport on a file of short lines — hence the viewport.
+        ///
+        /// **And the caret, because the document's width lags a keystroke
+        /// behind.** Measured: on the longest line of a file, typing twenty
+        /// characters leaves `bounds.width` at 2233pt inside `didChangeText`
+        /// — which is where the band is measured — while the caret has already
+        /// moved to 2377. The document view is resized in the layout pass,
+        /// which happens *after* the edit is announced, so the band ended
+        /// 144pt short of the caret and fell further behind with every
+        /// keystroke. Widening it to the caret is what makes the band's own
+        /// correctness independent of when that pass runs, which is not
+        /// something this can know from here.
         static func bandFrame(
             caret: NSRect,
             documentWidth: CGFloat,
@@ -1162,7 +1186,7 @@ struct CodeTextView: NSViewRepresentable {
             NSRect(
                 x: 0,
                 y: caret.minY,
-                width: max(documentWidth, clipWidth),
+                width: max(documentWidth, clipWidth, caret.maxX),
                 height: caret.height
             )
         }
@@ -1329,6 +1353,15 @@ final class CodeNSTextView: NSTextView {
     /// running. The default keeps the dot working when nothing supplies it.
     var completionTriggers: Set<Character> = ["."]
 
+    /// Whether one of the attached servers completes the inside of a class
+    /// attribute — Tailwind's, today.
+    ///
+    /// Lifts the string-and-comment suppression for that one place, and
+    /// widens what counts as the run being completed while it is there: see
+    /// `CodeClassAttribute` for both, and `CodeCompletionTrigger.decide` for
+    /// where in the order of rules it sits.
+    var completesInsideClassAttribute = false
+
     /// The list currently on screen, if any.
     private var completionSession: CompletionSession?
 
@@ -1467,6 +1500,76 @@ final class CodeNSTextView: NSTextView {
     static func isJumpClick(_ modifiers: NSEvent.ModifierFlags) -> Bool {
         guard modifiers.contains(.command) else { return false }
         return modifiers.isDisjoint(with: [.shift, .option, .control])
+    }
+
+    // MARK: The width of the document
+
+    /// How wide this view has to be for its longest line to be scrolled to in
+    /// full.
+    ///
+    /// `used` is what the layout manager measured, and it is the only honest
+    /// answer available: **the frame is not.** A horizontally resizable text
+    /// view is supposed to keep itself as wide as its widest laid-out line,
+    /// and it does — sometimes. Measured with a headless probe of this exact
+    /// recipe: one 300-character line in a 400-line file gives a 2233pt frame
+    /// that scrolls to the end, and the *same* line in a 5 000-line file
+    /// leaves the frame at the viewport's 800pt while
+    /// `usageBoundsForTextContainer` already reports 2230 used. A scroll view
+    /// does not scroll to somewhere its document does not reach, so the tail
+    /// of that line could not be brought on screen at all — the "long lines
+    /// are cut off" report, and the reason it read as intermittent: which
+    /// answer you get depends on what the last layout pass happened to touch.
+    /// `sizeToFit()` is not the repair either; it left the frame at 800 in the
+    /// same probe.
+    ///
+    /// Never below the viewport, so a file of short lines still fills the
+    /// pane, and one inset either side so the last glyph of the longest line
+    /// is not flush against the edge.
+    static func documentWidth(used: CGFloat, inset: CGFloat, viewport: CGFloat) -> CGFloat {
+        max(viewport, used + inset * 2)
+    }
+
+    /// Widens this view to the longest line TextKit has measured.
+    ///
+    /// Nothing to do while lines wrap, and `widthTracksTextView` is the flag
+    /// that says so — with wrapping on, this view's width is what *decides*
+    /// the wrap column, so widening it would move the column rather than
+    /// reveal anything. Asking the container rather than carrying a copy of
+    /// the setting keeps the two from disagreeing.
+    private func fitDocumentWidth() {
+        guard let container = textContainer,
+              !container.widthTracksTextView,
+              let layout = textLayoutManager,
+              let scrollView = enclosingScrollView
+        else { return }
+
+        let wanted = Self.documentWidth(
+            used: layout.usageBoundsForTextContainer.maxX,
+            inset: textContainerInset.width,
+            viewport: scrollView.contentView.bounds.width
+        )
+        /// A tolerance rather than an equality: this runs *inside* the layout
+        /// pass, so a frame set to a value a fraction of a point away would
+        /// ask for another one, and so on.
+        guard abs(frame.width - wanted) > 0.5 else { return }
+        setFrameSize(NSSize(width: wanted, height: frame.height))
+    }
+
+    /// The layout pass is where the width is fixed, because it is the first
+    /// moment the measurement exists.
+    ///
+    /// Doing it from the load, the keystroke and the scroll instead — which
+    /// was the first attempt — repairs nothing: at each of those the text has
+    /// changed and nothing has been laid out yet, so the used width is still
+    /// the old one. Proved by driving the real coordinator over the 5 000-line
+    /// document: the frame stayed at 800 through all three.
+    ///
+    /// ⚠️ `layout()` is an `NSView` method and touches no TextKit 1 API, so it
+    /// does not drop this view to TextKit 1 the way overriding `draw(_:)`
+    /// does. `TextKitDowngradeTests` holds that.
+    override func layout() {
+        super.layout()
+        fitDocumentWidth()
     }
 
     /// ⌘-click goes to the definition; without the modifier this is an
@@ -1790,6 +1893,23 @@ final class CodeNSTextView: NSTextView {
             complete(nil)
             return
         }
+
+        /// The reader's own bindings again, for whatever
+        /// `performKeyEquivalent` did not get to see — the comment above says
+        /// that method only observes ⌘ combinations, and a binding on ⇧⌥↑ has
+        /// to work either way round. Running it here cannot double up: this
+        /// method is only reached at all when `performKeyEquivalent` answered
+        /// false.
+        ///
+        /// Only for presses carrying option, control or command. Shift alone
+        /// is how capitals are typed, and a bare key is how everything else
+        /// is — swallowing either would turn a stray binding into a text view
+        /// that cannot type.
+        if !modifiers.isDisjoint(with: [.option, .control, .command]),
+           let id = boundCommand(for: event), runCommand(id) {
+            return
+        }
+
         super.keyDown(with: event)
     }
 
@@ -1908,7 +2028,8 @@ final class CodeNSTextView: NSTextView {
             typed: typed,
             isInStringOrComment: suppressed,
             triggerCharacters: completionTriggers,
-            minimumPrefix: completionMinimumPrefix)
+            minimumPrefix: completionMinimumPrefix,
+            completesInsideClassAttribute: completesInsideClassAttribute)
 
         return CodeCompletionTrigger.decide(
             context,
@@ -1953,7 +2074,7 @@ final class CodeNSTextView: NSTextView {
     private func showCompletions(_ items: [CodeCompletionItem], requestedAt offset: Int) {
         let content = string as NSString
         let caret = selectedRange().location
-        let prefix = Self.identifierRange(in: content, endingAt: caret)
+        let prefix = completionPrefixRange(in: content, endingAt: caret)
 
         let query = content.substring(with: prefix)
         let ranked = CodeCompletionFilter.rank(
@@ -2147,6 +2268,21 @@ final class CodeNSTextView: NSTextView {
     ///
     /// `$` counts, because it is a legal identifier character in JavaScript
     /// and TypeScript and dropping it would make `$el` complete as `el`.
+    /// What the list is being filtered against, in document coordinates.
+    ///
+    /// Not always an identifier, which is the whole point: a class attribute's
+    /// run ends at whitespace or at the quote, so `w-1/2` is one query and not
+    /// three. Getting this wrong is not a subtle defect — the identifier rule
+    /// answers *empty* for `w-`, and an empty query matches all 11,000
+    /// candidates equally and shows them in whatever order the server sent.
+    private func completionPrefixRange(in content: NSString, endingAt caret: Int) -> NSRange {
+        if completesInsideClassAttribute,
+           let token = CodeClassAttribute.tokenRange(in: content, caret: caret) {
+            return token
+        }
+        return Self.identifierRange(in: content, endingAt: caret)
+    }
+
     static func identifierRange(in content: NSString, endingAt caret: Int) -> NSRange {
         var start = min(max(caret, 0), content.length)
         while start > 0 {
@@ -2305,6 +2441,37 @@ final class CodeNSTextView: NSTextView {
         return NSUnionRange(asked, word)
     }
 
+    /// Whether accepting this row would change the buffer at all.
+    ///
+    /// Asked of one key only — Return — and the reason is the keystroke it
+    /// costs when the answer is no. A list stays open while you type, so
+    /// finishing a word the list is still offering leaves the reader looking
+    /// at a row whose text is *already* what the document says. Return there
+    /// was claimed as an accept, replaced `connect` with `connect`, and the
+    /// line break it was pressed for never happened: nothing moved, nothing
+    /// was inserted, and the keystroke was gone. That is the whole of
+    /// "accepting a completion does not add a line break" — nothing on the
+    /// insertion path can drop a newline, and this is the one way the reader
+    /// loses one.
+    ///
+    /// The same rule VS Code applies, where the Enter binding for
+    /// `acceptSelectedSuggestion` carries a `suggestionMakesTextEdit`
+    /// condition and Tab carries none.
+    ///
+    /// A snippet always counts as a change even when its literal text matches:
+    /// accepting one leaves tab stops and moves the caret, so it does
+    /// something a newline would not. Additional edits count for the plainer
+    /// reason that an auto-import is a change somewhere else in the file.
+    static func acceptChangesText(
+        item: CodeCompletionItem,
+        caret: Int,
+        in content: NSString
+    ) -> Bool {
+        guard !item.isSnippet, item.additionalEdits.isEmpty else { return true }
+        let range = replacementRange(asked: item.replaceRange, caret: caret, in: content)
+        return content.substring(with: range) != item.insertText
+    }
+
     /// Replaces what the row says it replaces with the row's text.
     ///
     /// Through `shouldChangeText` and `didChangeText` rather than a bare
@@ -2419,10 +2586,19 @@ final class CodeNSTextView: NSTextView {
     /// The list wins Tab when both are live, because the reader is looking at
     /// a list they just opened and the stop they were on will still be there
     /// afterwards.
+    ///
+    /// `acceptChangesText` is Return's condition and Return's alone — see
+    /// `acceptChangesText(item:caret:in:)`. Tab means "take this row" and
+    /// nothing else, so it is claimed either way; Return means "break the
+    /// line" to everybody who has ever used a text editor, and a claim that
+    /// spends it on an accept which changes nothing is a keystroke the reader
+    /// does not get back. It defaults to true so the every-other-key contract
+    /// can still be asserted with two arguments.
     static func completionCommand(
         for selector: Selector,
         isListOpen: Bool,
-        hasSnippetSession: Bool
+        hasSnippetSession: Bool,
+        acceptChangesText: Bool = true
     ) -> Claim? {
         if isListOpen {
             switch selector {
@@ -2430,8 +2606,9 @@ final class CodeNSTextView: NSTextView {
             case #selector(NSResponder.moveUp(_:)): return .move(.up)
             case #selector(NSResponder.scrollPageDown(_:)): return .move(.pageDown)
             case #selector(NSResponder.scrollPageUp(_:)): return .move(.pageUp)
-            case #selector(NSResponder.insertNewline(_:)),
-                 #selector(NSResponder.insertTab(_:)):
+            case #selector(NSResponder.insertNewline(_:)):
+                return acceptChangesText ? .accept : nil
+            case #selector(NSResponder.insertTab(_:)):
                 return .accept
             case #selector(NSResponder.cancelOperation(_:)):
                 return .dismiss
@@ -2480,6 +2657,46 @@ final class CodeNSTextView: NSTextView {
         return caret - NSMaxRange(lineStart)
     }
 
+    /// Return, carrying the line's indentation — and a list's marker — onto
+    /// the next line.
+    ///
+    /// Through `insertText` with a replacement range rather than several
+    /// edits, for the reasons `insertTabAsSpacesIfWanted` gives: one undo step
+    /// for the whole thing, and one `didChange` for the language server. An
+    /// empty list item is the only case that removes anything, and it removes
+    /// it as part of the same replacement.
+    override func insertNewline(_ sender: Any?) {
+        let content = string as NSString
+        let caret = selectedRange().location
+        guard selectedRange().length == 0, caret <= content.length else {
+            super.insertNewline(sender)
+            return
+        }
+
+        let lineRange = content.lineRange(for: NSRange(location: caret, length: 0))
+        let line = content.substring(with: lineRange)
+        let insertion = CodeNewlineIndent.insertion(
+            forLine: line.trimmingTrailingNewline,
+            caretInLine: caret - lineRange.location,
+            indentUnit: insertsSpacesForTab ? String(repeating: " ", count: max(tabWidth, 1)) : "\t",
+            continuesLists: hoverLanguage == .markdown
+        )
+
+        /// Nothing but the newline and nothing removed is what
+        /// `super.insertNewline` already does, and it does it with the
+        /// system's own undo coalescing.
+        guard insertion.text != "\n" || insertion.deletingBefore > 0 else {
+            super.insertNewline(sender)
+            return
+        }
+
+        let start = caret - insertion.deletingBefore
+        insertText(
+            insertion.text,
+            replacementRange: NSRange(location: start, length: insertion.deletingBefore))
+        setSelectedRange(NSRange(location: start + insertion.caretOffset, length: 0))
+    }
+
     /// Tab as spaces, when that is what the reader asked for.
     ///
     /// `tabWidth` and `insertsSpacesForTab` existed in the configuration and
@@ -2498,11 +2715,30 @@ final class CodeNSTextView: NSTextView {
         return true
     }
 
+    /// Whether the row Return would take would change anything.
+    ///
+    /// No selected row is the same answer as a row that changes nothing: there
+    /// is nothing to accept, so the keystroke belongs to the document.
+    ///
+    /// The session is checked first because this is read on **every** command
+    /// the view is sent, and a dismissed panel keeps the rows it was last
+    /// filled with — so without it this would measure a range against a list
+    /// nobody is looking at, on every arrow key.
+    private var highlightedRowChangesText: Bool {
+        guard isCompletionListOpen, let item = completionPanel?.selectedItem else { return false }
+        return Self.acceptChangesText(
+            item: item,
+            caret: selectedRange().location,
+            in: string as NSString
+        )
+    }
+
     override func doCommand(by selector: Selector) {
         guard let claim = Self.completionCommand(
             for: selector,
             isListOpen: isCompletionListOpen,
-            hasSnippetSession: snippetSession != nil
+            hasSnippetSession: snippetSession != nil,
+            acceptChangesText: highlightedRowChangesText
         ) else {
             /// After the completion claim, never before: a Tab with a list
             /// open accepts the selection, and a Tab inside a snippet moves
@@ -2770,10 +3006,35 @@ final class CodeNSTextView: NSTextView {
         case "formatDocument":
             guard let onFormat else { return false }
             onFormat()
+        case "moveLineUp":
+            moveSelectedLines(.up)
+        case "moveLineDown":
+            moveSelectedLines(.down)
         default:
             return false
         }
         return true
+    }
+
+    /// Swaps the caret's line — or every line the selection touches — with its
+    /// neighbour.
+    ///
+    /// Through `insertText` with a replacement range, for the reason
+    /// `insertNewline` gives: one undo step for the whole move and one
+    /// `didChange` for the language server, instead of a delete and an insert
+    /// the reader has to undo twice.
+    ///
+    /// A move with nowhere to go is still this view's key to swallow. Falling
+    /// through at the top or bottom of a file would hand ⇧⌥↑ back to AppKit,
+    /// which reads it as "extend the selection by a paragraph" — so holding the
+    /// shortcut would stop moving lines and start selecting them.
+    private func moveSelectedLines(_ direction: CodeLineMove.Direction) {
+        guard let move = CodeLineMove.move(
+            in: string as NSString, selection: selectedRange(), direction: direction)
+        else { return }
+
+        insertText(move.text, replacementRange: move.replacement)
+        setSelectedRange(move.selection)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

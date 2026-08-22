@@ -248,7 +248,14 @@ extension PrettierProject {
         }
 
         let packageJSON = directory.appendingPathComponent("package.json").path
-        return packageDeclaresPrettier(at: packageJSON, fileManager: fileManager) ? packageJSON : nil
+        if packageDeclaresPrettier(at: packageJSON, fileManager: fileManager) { return packageJSON }
+
+        /// `package.yaml` is the twentieth name in Prettier's own list, and it
+        /// sits at the same precedence as `package.json`.
+        let packageYAML = directory.appendingPathComponent("package.yaml").path
+        return packageYAMLDeclaresPrettier(at: packageYAML, fileManager: fileManager)
+            ? packageYAML
+            : nil
     }
 
     /// A Prettier installed into one directory's `node_modules`.
@@ -275,5 +282,51 @@ extension PrettierProject {
         else { return false }
 
         return object["prettier"] != nil
+    }
+
+    /// Whether a `package.yaml` carries a top-level `prettier` key.
+    ///
+    /// **A line scan, not a parser.** Foundation ships no YAML, and the whole
+    /// question is whether one key exists at the top level of a manifest —
+    /// which in a `package.yaml` is written in block style, one key per line at
+    /// column zero. Pulling in a YAML dependency to answer that would be a
+    /// larger decision than the feature deserves, and would put a parser on
+    /// the path that decides whether to reformat somebody's file.
+    ///
+    /// The limit, stated rather than discovered later: a manifest written as a
+    /// single flow mapping — `{prettier: {...}}` on one line — reads as "no".
+    /// Nothing writes a package manifest that way, and the failure is the safe
+    /// direction: Prettier is not claimed, so the file is left alone instead of
+    /// being reformatted by something else.
+    static func packageYAMLDeclaresPrettier(at path: String, fileManager: FileManager = .default) -> Bool {
+        guard fileManager.fileExists(atPath: path),
+              let text = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8)
+        else { return false }
+
+        return text.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
+            declaresPrettierKey(line)
+        }
+    }
+
+    /// A top-level `prettier:` key, quoted or not.
+    ///
+    /// Indentation is what makes it top-level, so a leading space disqualifies
+    /// the line — otherwise `dependencies:` followed by an indented
+    /// `prettier: ^3.6.0` would read as a config, and a dev dependency is not
+    /// a declaration that this project is configured here. That is the same
+    /// distinction `packageDeclaresPrettier` gets for free from JSON.
+    static func declaresPrettierKey(_ line: some StringProtocol) -> Bool {
+        guard let first = line.first, first != " ", first != "\t" else { return false }
+
+        var rest = line[line.startIndex...]
+        for quote in ["\"", "'"] where rest.hasPrefix(quote) {
+            rest = rest.dropFirst()
+            guard rest.hasPrefix("prettier" + quote) else { return false }
+            rest = rest.dropFirst(("prettier" + quote).count)
+            return rest.drop(while: { $0 == " " }).hasPrefix(":")
+        }
+
+        guard rest.hasPrefix("prettier") else { return false }
+        return rest.dropFirst("prettier".count).drop(while: { $0 == " " }).hasPrefix(":")
     }
 }

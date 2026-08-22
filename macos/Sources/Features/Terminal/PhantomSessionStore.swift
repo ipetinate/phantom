@@ -639,6 +639,10 @@ final class PhantomSessionStore {
         guard let states = load(), !states.isEmpty else { return false }
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else { return false }
 
+        WindowBreadcrumbs.note(
+            "restore: beginning with \(states.count) states in " +
+            "\(Set(states.map(\.tabGroupID)).count) groups")
+
         isRestoring = true
         defer {
             isRestoring = false
@@ -816,7 +820,16 @@ final class PhantomSessionStore {
                 // it is a terminal that silently doesn't exist.
                 let joined = previous?.window?
                     .addTabbedWindowSafely(window, ordered: .above) ?? false
-                if !joined { window.orderFrontRegardless() }
+                if !joined {
+                    /// The line that decides whether "N tabs came back as N
+                    /// windows" can ever be diagnosed: this branch was silent,
+                    /// and a session of loose windows was indistinguishable
+                    /// from one that was saved that way.
+                    WindowBreadcrumbs.note(
+                        "restore: tab refused to join its group, shown loose " +
+                        "window=\(window.windowNumber)")
+                    window.orderFrontRegardless()
+                }
             }
 
             if index == selectedIndex { selected = controller }

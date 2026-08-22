@@ -311,3 +311,93 @@ struct CodeCompletionFilterTests {
         #expect(CodeCompletionFilter.rank([], query: "con").isEmpty)
     }
 }
+
+/// What ranking costs when the list is the size the Tailwind server actually
+/// sends.
+///
+/// Measured against `@tailwindcss/language-server` 0.16.0 in a Tailwind 3
+/// project: a completion inside `className="w-"` answers **11,534 items**, and
+/// it does not filter by what was typed — it sends the whole universe of
+/// variants and utilities every time and expects the client to narrow it. So
+/// every keystroke inside a class attribute ranks eleven thousand candidates,
+/// which is two orders of magnitude past anything this filter was measured on
+/// before.
+///
+/// **These assert a ratio, not a duration**, and the first version of this file
+/// got that wrong: it asserted 60 ms and 90 ms against 27 ms and 43 ms measured
+/// here, and CI — a shared runner, with the rest of the suite on it — failed
+/// both. A wall-clock budget on a machine you do not own is a coin toss, and
+/// this repository already says so about timing tests elsewhere.
+///
+/// What is worth defending is the *shape*: ranking is linear in the number of
+/// candidates, and the failure that would hurt is somebody making it quadratic.
+/// Four times the candidates may cost four times as much; sixteen times says
+/// the loop grew an inner loop. The reference numbers on this machine, for
+/// whoever reads a regression later: 27 ms for `w-` and 43 ms for the empty
+/// query, over 11,520 candidates, on the main actor in `showCompletions`.
+struct CompletionFilterAtTailwindScaleTests {
+    /// Shaped like the real answer: `w-1/2`, `hover:bg-red-500`, `[&>*]:mt-2`
+    /// and 15 variants per utility, which is where the volume comes from.
+    private static func candidates(variants variantCount: Int) -> [CodeCompletionItem] {
+        let utilities = ["w", "h", "p", "m", "px", "py", "mt", "bg", "text", "border", "flex", "grid"]
+        let scales = (0..<40).map(String.init) + ["full", "fit", "auto", "px", "1/2", "1/3", "2/3"]
+        let variants = ["", "hover:", "focus:", "sm:", "md:", "lg:", "xl:", "dark:", "group-hover:",
+                        "peer-focus:", "first:", "last:", "odd:", "even:", "[&>*]:"]
+
+        var items: [CodeCompletionItem] = []
+        for variant in variants.prefix(variantCount) {
+            for utility in utilities {
+                for scale in scales {
+                    items.append(CodeCompletionItem(
+                        kind: .value,
+                        label: "\(variant)\(utility)-\(scale)",
+                        detail: "width: 1rem;"
+                    ))
+                }
+            }
+        }
+        return items
+    }
+
+    /// The best of a few runs rather than one, because a shared runner will
+    /// occasionally take a scheduling hit in the middle of any single one, and
+    /// the fastest run is the one that measured the code instead of the queue.
+    private func fastest(_ items: [CodeCompletionItem], query: String) -> Duration {
+        let clock = ContinuousClock()
+        var best: Duration = .seconds(60)
+        for _ in 0..<3 {
+            let elapsed = clock.measure { _ = CodeCompletionFilter.rank(items, query: query) }
+            best = min(best, elapsed)
+        }
+        return best
+    }
+
+    @Test(arguments: ["w-", ""])
+    func rankingGrowsLinearlyWithTheNumberOfCandidates(query: String) {
+        let small = Self.candidates(variants: 3)
+        let large = Self.candidates(variants: 12)
+        #expect(large.count == small.count * 4)
+
+        let one = fastest(small, query: query)
+        let four = fastest(large, query: query)
+
+        /// Linear is 4×. The bound is well above that and well below the 16×
+        /// an inner loop would cost, so it survives a slow runner and still
+        /// catches the thing it is here for.
+        #expect(four < one * 8, "4× the candidates cost \(four) against \(one)")
+    }
+
+    /// An absolute ceiling as well, generous enough for any machine that could
+    /// plausibly run this: past a second the list is not late, it is broken.
+    @Test func rankingTheWholeUniverseIsNotUnbounded() {
+        let elapsed = fastest(Self.candidates(variants: 15), query: "")
+        #expect(elapsed < .seconds(1), "ranking everything took \(elapsed)")
+    }
+
+    /// The ordering that makes the volume bearable: what was typed has to come
+    /// first, or eleven thousand rows are eleven thousand rows.
+    @Test func whatWasTypedComesFirst() {
+        let ranked = CodeCompletionFilter.rank(Self.candidates(variants: 15), query: "w-f")
+        #expect(ranked.first?.label.hasPrefix("w-f") == true, "got \(ranked.first?.label ?? "nothing")")
+    }
+}

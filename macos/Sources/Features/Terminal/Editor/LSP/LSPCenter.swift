@@ -738,6 +738,39 @@ final class LSPCenter: ObservableObject {
         return completionSupport[key]
     }
 
+    /// Whether a server that completes the inside of a class attribute is
+    /// **running** for this file — Tailwind's, today.
+    ///
+    /// The editor asks before lifting the string-and-comment suppression that
+    /// keeps a 1-character trigger out of prose, so the answer has to be about
+    /// a process that exists rather than about a project that could have one.
+    /// It reads `servers`, which is only written after a successful
+    /// `initialize`, and that makes the whole feature self-correcting: routed
+    /// but not installed, or installed but failing to start, and the exception
+    /// stays off — which is the right outcome, since there would be nothing to
+    /// answer the requests it lets through.
+    ///
+    /// Cheap enough for a view body: a dictionary walk, one extension lookup
+    /// and the `.git` walk `workspaceRoot` already does everywhere else. It
+    /// deliberately does not call `resolvedServers`, which stats a
+    /// `node_modules` per level.
+    /// The command is the **effective** one, not the registry's: a key holds
+    /// whatever `LSPServerOverrideStore` turned it into, so comparing against
+    /// the compiled-in name would answer no for anybody who pointed the
+    /// setting at their own build.
+    func completesClassAttributes(forPath path: String) -> Bool {
+        guard let languageID = LanguageResolver.shared.languageID(forPath: path),
+              let tailwind = LSPServerRegistry.tailwindServer(forLanguage: languageID)
+        else { return false }
+
+        let command = Self.effectiveDefinition(tailwind).command
+        let root = Self.workspaceRoot(for: path)
+
+        return servers.keys.contains { key in
+            key.languageID == languageID && key.root == root && key.command == command
+        }
+    }
+
     /// Whether this document has been announced to a server, or is on its
     /// way to one.
     ///
@@ -797,25 +830,26 @@ final class LSPCenter: ObservableObject {
     // MARK: Features
 
     func hover(path: String, position: LSPPosition) async -> String? {
-        guard let result = await request("textDocument/hover", path: path, position: position)
-        else { return nil }
-        return Self.hoverText(from: result["contents"])
+        await firstAnswer("textDocument/hover", path: path, position: position) {
+            Self.hoverText(from: $0["contents"])
+        }
     }
 
     func definition(path: String, position: LSPPosition) async -> [LSPLocation] {
-        guard let result = await request("textDocument/definition", path: path, position: position)
-        else { return [] }
-        return Self.locations(from: result)
+        await firstAnswer("textDocument/definition", path: path, position: position) {
+            Self.answer(Self.locations(from: $0))
+        } ?? []
     }
 
     func references(path: String, position: LSPPosition) async -> [LSPLocation] {
-        guard let result = await request(
+        await firstAnswer(
             "textDocument/references",
             path: path,
             position: position,
             extra: ["context": ["includeDeclaration": .bool(true)]]
-        ) else { return [] }
-        return Self.locations(from: result)
+        ) {
+            Self.answer(Self.locations(from: $0))
+        } ?? []
     }
 
     /// What the server offers at a position.
@@ -1065,16 +1099,30 @@ final class LSPCenter: ObservableObject {
     }
 
     /// Edits per file path, since a rename crosses files by definition.
+    ///
+    /// The first server with edits to offer, never the union of two. Each maps
+    /// a `.vue`'s `<script>` block through its own copy of the language
+    /// tooling, and two sets of edits computed against two mappings and
+    /// applied one after the other is how a file gets corrupted rather than
+    /// renamed — the same reason `merged(_:)` drops a duplicate diagnostic
+    /// whole instead of combining two servers' fields.
+    ///
+    /// **The honest limit:** that makes a rename in a `.vue` no worse and no
+    /// better than it was wherever the primary answers. If the Vue server
+    /// returns template-only edits, template-only edits are what get applied
+    /// — as they are today. What changes is only the case where it returns
+    /// none, which is a `<script>` symbol that never appears in the template.
     func rename(path: String, position: LSPPosition, to newName: String) async
         -> [String: [LSPTextEdit]] {
-        guard let result = await request(
+        await firstAnswer(
             "textDocument/rename",
             path: path,
             position: position,
             extra: ["newName": .string(newName)]
-        ) else { return [:] }
-
-        return Self.workspaceEdits(from: result)
+        ) {
+            let edits = Self.workspaceEdits(from: $0)
+            return edits.isEmpty ? nil : edits
+        } ?? [:]
     }
 
     // MARK: Plumbing
@@ -1124,64 +1172,112 @@ final class LSPCenter: ObservableObject {
         }
     }
 
-    /// A positional request, with the failure kept rather than flattened.
-    private func perform(
+    /// A positional request, asked of the file's servers in turn until one
+    /// answers with something to show — primary first.
+    ///
+    /// This is the rule `key(forPath:)` said would land when the deferral it
+    /// documents did: hover, definition, references and rename asked the
+    /// primary alone, which for a `.vue` is the *template* server. Measured on
+    /// this machine — `vue-language-server` 2.2.12 and
+    /// `typescript-language-server` 5.3.0 carrying `@vue/typescript-plugin`
+    /// 3.3.10 against TypeScript 6.0.3, one `.vue` file, `textDocument/hover`
+    /// at each position:
+    ///
+    /// | hovered              | Vue server       | TypeScript server            |
+    /// |----------------------|------------------|------------------------------|
+    /// | `<div` in template   | the HTML element | `(property) div: …`          |
+    /// | `class=` in template | the attribute    | `(property) class?: …`       |
+    /// | `{{ count }}`        | **nothing**      | `(property) count: number`   |
+    /// | `count` in `<script>`| **nothing**      | `const count: Ref<number>`   |
+    /// | `.card` in `<style>` | the selector     | **nothing**                  |
+    ///
+    /// The two are complementary rather than competing: the only rows where
+    /// both answer are the markup ones, and there the primary's answer — the
+    /// element, the attribute, the selector — is the better one. Which is what
+    /// "primary first" buys, and why this can never take away an answer that
+    /// exists today: a second server is asked only where the first said
+    /// nothing.
+    ///
+    /// **What counts as an answer is the reader's question, not the
+    /// transport's.** Asked for a `.vue` *without* the plugin, the TypeScript
+    /// server does not answer null — it answers `contents.value` of `""`.
+    /// Measured, all seven positions. A "did the server reply" test would take
+    /// that for an answer and stop, which is why the test is `reading`: the
+    /// same function that turns the reply into what the caller shows decides
+    /// whether there is anything in it.
+    private func firstAnswer<Answer>(
         _ method: String,
         path: String,
         position: LSPPosition,
         extra: [String: LSPValue] = [:],
-        timeout: TimeInterval = LSPTimeout.deliberate
-    ) async -> Result<LSPValue, RequestFailure> {
-        guard let key = key(forPath: path), let server = await runningServer(forPath: path) else {
-            return .failure(.noServer)
-        }
+        timeout: TimeInterval = LSPTimeout.deliberate,
+        reading: (LSPValue) -> Answer?
+    ) async -> Answer? {
+        let live = await runningServers(forPath: path)
+        guard !live.isEmpty else { return nil }
+
+        /// `runningServers` flushes this document and no other, and these are
+        /// the features that read across files: a definition in one file is
+        /// answered against the whole workspace, so another document's
+        /// debounced edit is part of the question. The single-server path this
+        /// replaced flushed it, and dropping that would be a regression
+        /// nothing on screen would attribute to this function.
+        for (key, _) in live { flushPending(for: key) }
 
         let params = Self.requestParams(path: path, position: position, extra: extra)
-
         let name = Self.name(of: path)
         let version = versions[path] ?? 0
-        Self.logger.debug(
-            """
-            → \(method, privacy: .public) lang=\(key.languageID, privacy: .public) \
-            \(name) version=\(version, privacy: .public)
-            """
-        )
 
-        let started = Date()
-        do {
-            let result = try await server.request(method, params: params, timeout: timeout)
-            noteRequestSucceeded(for: key)
-            let elapsed = Self.milliseconds(since: started)
-            Self.logger.debug("← \(method, privacy: .public) ok in \(elapsed, privacy: .public)ms")
-            return .success(result)
-        } catch {
-            noteRequestFailed(error, for: key)
-            let failure = Self.failure(from: error)
-            let elapsed = Self.milliseconds(since: started)
+        for (key, server) in live {
+            guard !Task.isCancelled else { return nil }
+
             Self.logger.debug(
                 """
-                ← \(method, privacy: .public) \(failure.summary, privacy: .public) \
-                in \(elapsed, privacy: .public)ms
+                → \(method, privacy: .public) lang=\(key.languageID, privacy: .public) \
+                via \(Self.name(of: key.command), privacy: .public) \
+                \(name) version=\(version, privacy: .public)
                 """
             )
-            return .failure(failure)
+
+            let started = Date()
+            do {
+                let result = try await server.request(method, params: params, timeout: timeout)
+                noteRequestSucceeded(for: key)
+                let answer = reading(result)
+                Self.logger.debug(
+                    """
+                    ← \(method, privacy: .public) \
+                    \(answer == nil ? "nothing" : "ok", privacy: .public) \
+                    in \(Self.milliseconds(since: started), privacy: .public)ms
+                    """
+                )
+                if let answer { return answer }
+            } catch {
+                noteRequestFailed(error, for: key)
+                let failure = Self.failure(from: error)
+                Self.logger.debug(
+                    """
+                    ← \(method, privacy: .public) \(failure.summary, privacy: .public) \
+                    in \(Self.milliseconds(since: started), privacy: .public)ms
+                    """
+                )
+                /// The caller gave up, and asking the next server would be
+                /// work for an answer nobody is waiting for. Every other
+                /// failure falls through: one server being down does not cost
+                /// the file the other's answer.
+                if failure == .cancelled { return nil }
+            }
         }
+
+        return nil
     }
 
-    /// The three callers that only ever had two answers.
-    private func request(
-        _ method: String,
-        path: String,
-        position: LSPPosition,
-        extra: [String: LSPValue] = [:]
-    ) async -> LSPValue? {
-        guard case .success(let result) = await perform(
-            method,
-            path: path,
-            position: position,
-            extra: extra
-        ) else { return nil }
-        return result
+    /// A list, or nil when it is empty.
+    ///
+    /// Named for what it means to the caller of `firstAnswer`: an empty list
+    /// is a server saying it has nothing, and the next server should be asked.
+    nonisolated static func answer<Element>(_ list: [Element]) -> [Element]? {
+        list.isEmpty ? nil : list
     }
 
     /// The params every positional request is sent with.
@@ -1265,16 +1361,20 @@ final class LSPCenter: ObservableObject {
 
     /// The primary server's key.
     ///
-    /// Status, the log, the capability questions and every `perform`-based
-    /// feature — hover, definition, references — still answer for the primary
-    /// alone. **That is a deferral, not a decision.** It is safe to defer
-    /// because in the case that motivates a second server those three come
-    /// back empty today anyway: the Vue server serves template and style, and
-    /// says nothing about a `<script>` block. So consulting only the primary
-    /// keeps exactly what works and loses nothing that does — which is what
-    /// makes the second server additive. The rule when it lands is "first
-    /// non-empty answer, primary first"; until then this is why there is only
-    /// one.
+    /// Status, the log and the capability questions answer for the primary
+    /// alone. Hover, definition, references and rename **no longer do** — they
+    /// go through `firstAnswer`, which asks each of the file's servers until
+    /// one has something, primary first. That was the deferral this comment
+    /// used to describe, and the measurement that closed it is in
+    /// `firstAnswer`: the Vue server answers nothing at all inside a
+    /// `<script>` block, so a reader hovering a `ref` in their own code got
+    /// silence from a server that was working perfectly.
+    ///
+    /// What is left here is genuinely about one server. A capability is a
+    /// claim a particular process made at `initialize`, and merging two into
+    /// one boolean would produce a claim neither of them made; status and the
+    /// log pick their server by `speakingKey`, which prefers the one that is
+    /// failing, because that is the one worth reading about.
     private func key(forPath path: String) -> Key? {
         keys(forPath: path).first
     }

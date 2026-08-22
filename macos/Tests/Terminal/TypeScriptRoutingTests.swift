@@ -89,14 +89,15 @@ struct TypeScriptRoutingTests {
     @Test func aTypeScriptFileInASixProjectGetsTheWrapper() {
         let servers = LSPServerRegistry.servers(
             forPath: "/p/a.ts",
-            toolchain: .tsserver(path: "/p/node_modules/typescript/lib/tsserver.js")
+            toolchain: .tsserver(path: "/p/node_modules/typescript/lib/tsserver.js"),
+            tailwind: .absent
         )
         #expect(servers.map(\.command) == ["typescript-language-server"])
     }
 
     @Test func aTypeScriptFileInASevenProjectGetsTheNativeServer() {
         for path in ["/p/a.ts", "/p/a.tsx", "/p/a.js", "/p/a.jsx", "/p/a.mts", "/p/a.cts"] {
-            let servers = LSPServerRegistry.servers(forPath: path, toolchain: .native)
+            let servers = LSPServerRegistry.servers(forPath: path, toolchain: .native, tailwind: .absent)
             #expect(
                 servers.map(\.command) == [LSPServerRegistry.nativeTypeScriptCommand],
                 "\(path) did not route to the native server"
@@ -109,7 +110,7 @@ struct TypeScriptRoutingTests {
     /// the project's TypeScript.
     @Test func anUnrelatedLanguageIsNotTouchedByTheToolchain() {
         for toolchain in [TypeScriptToolchain.native, .tsserver(path: "/p/x/tsserver.js")] {
-            let servers = LSPServerRegistry.servers(forPath: "/p/main.py", toolchain: toolchain)
+            let servers = LSPServerRegistry.servers(forPath: "/p/main.py", toolchain: toolchain, tailwind: .absent)
             #expect(servers.map(\.command) == ["pyright-langserver"])
         }
     }
@@ -121,7 +122,8 @@ struct TypeScriptRoutingTests {
     @Test func aVueFileInASixProjectGetsBothServers() {
         let servers = LSPServerRegistry.servers(
             forPath: "/p/App.vue",
-            toolchain: .tsserver(path: "/p/node_modules/typescript/lib/tsserver.js")
+            toolchain: .tsserver(path: "/p/node_modules/typescript/lib/tsserver.js"),
+            tailwind: .absent
         )
         #expect(servers.map(\.command) == ["vue-language-server", "typescript-language-server"])
     }
@@ -134,7 +136,8 @@ struct TypeScriptRoutingTests {
     @Test func theTypeScriptHalfOfAVueFileAnnouncesItselfAsVue() {
         let servers = LSPServerRegistry.servers(
             forPath: "/p/App.vue",
-            toolchain: .tsserver(path: "/p/node_modules/typescript/lib/tsserver.js")
+            toolchain: .tsserver(path: "/p/node_modules/typescript/lib/tsserver.js"),
+            tailwind: .absent
         )
         #expect(servers.allSatisfy { $0.languageID == "vue" })
         #expect(servers.last?.initializationOptionsKind == .vueTypeScriptPlugin)
@@ -152,7 +155,7 @@ struct TypeScriptRoutingTests {
     /// Routing answers "who serves this language"; launching answers "can it
     /// run here". Only the second question has a voice.
     @Test func aVueFileRoutesBothServersEvenWhenTheProjectCannotRunTheSecond() {
-        let servers = LSPServerRegistry.servers(forPath: "/p/App.vue", toolchain: .native)
+        let servers = LSPServerRegistry.servers(forPath: "/p/App.vue", toolchain: .native, tailwind: .absent)
         #expect(servers.map(\.command) == ["vue-language-server", "typescript-language-server"])
     }
 
@@ -196,7 +199,7 @@ struct TypeScriptRoutingTests {
         ]
 
         for path in hostile {
-            let servers = LSPServerRegistry.servers(forPath: path, toolchain: .native)
+            let servers = LSPServerRegistry.servers(forPath: path, toolchain: .native, tailwind: .absent)
             #expect(
                 !servers.contains { $0.command == LSPServerRegistry.nativeTypeScriptCommand },
                 """

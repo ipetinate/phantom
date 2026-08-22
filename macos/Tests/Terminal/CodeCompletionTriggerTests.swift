@@ -238,3 +238,115 @@ struct CodeCompletionTriggerTests {
         )
     }
 }
+
+/// The one exception to "inside a string, everything closes".
+///
+/// It exists for a measured reason: the Tailwind server's own
+/// `triggerCharacters` are `"`, `'`, `` ` ``, space, `-` and `:` — it expects
+/// to be asked inside a string, which is the one place this trigger refused to
+/// ask. What makes the exception affordable is how narrow it is, and that is
+/// what most of these cases pin.
+struct ClassAttributeCompletionTriggerTests {
+    private func context(
+        _ line: String,
+        typed: Character?,
+        completesClasses: Bool = true
+    ) -> CodeCompletionTrigger.Context {
+        CodeCompletionTrigger.Context(
+            line: line,
+            caretInLine: (line as NSString).length,
+            typed: typed,
+            /// True throughout, because it *is* true: a class attribute's
+            /// value is a string literal and the highlighter says so. The
+            /// exception has to survive that, or it is not an exception.
+            isInStringOrComment: true,
+            triggerCharacters: ["."],
+            completesInsideClassAttribute: completesClasses
+        )
+    }
+
+    private func decide(
+        _ line: String,
+        typed: Character?,
+        isListOpen: Bool = false,
+        completesClasses: Bool = true
+    ) -> CodeCompletionTrigger.Decision {
+        CodeCompletionTrigger.decide(
+            context(line, typed: typed, completesClasses: completesClasses),
+            isListOpen: isListOpen,
+            isExplicit: false
+        )
+    }
+
+    @Test func opensInsideAClassAttribute() {
+        #expect(decide(#"<div className="w"#, typed: "w") == .open(prefix: NSRange(location: 16, length: 1)))
+    }
+
+    /// The keystroke that matters most and that no other rule would let
+    /// through: `-` is not an identifier character and not in the trigger set.
+    @Test func opensOnTheCharactersAClassIsMadeOf() {
+        for typed: Character in ["-", ":", "/", "[", "!", "."] {
+            let line = #"<div className="w"# + String(typed)
+            #expect(decide(line, typed: typed) != .close, "typing \(typed)")
+        }
+    }
+
+    /// The prefix is the class, so the filter has something to rank against.
+    /// The identifier rule would report length 0 here and every candidate
+    /// would score identically.
+    @Test func theWholeClassIsThePrefix() {
+        guard case .open(let prefix) = decide(#"<div className="w-1/"#, typed: "/") else {
+            Issue.record("expected to open")
+            return
+        }
+        #expect(prefix == NSRange(location: 16, length: 4))
+    }
+
+    @Test func spaceOpensTheNextClassOnEverything() {
+        #expect(decide(#"<div className="flex "#, typed: " ") == .open(prefix: NSRange(location: 21, length: 0)))
+    }
+
+    @Test func refinesWhileTheListIsOpen() {
+        let decision = decide(#"<div className="w-f"#, typed: "f", isListOpen: true)
+        #expect(decision == .refilter(prefix: NSRange(location: 16, length: 3)))
+    }
+
+    /// Deletion keeps the list, which the identifier path leaves to the view.
+    @Test func deletionRefinesRatherThanClosing() {
+        let decision = decide(#"<div className="w-"#, typed: nil, isListOpen: true)
+        #expect(decision == .refilter(prefix: NSRange(location: 16, length: 2)))
+    }
+
+    @Test func aCaretThatArrivedWithoutTypingClosesAClosedList() {
+        #expect(decide(#"<div className="w-"#, typed: nil) == .close)
+    }
+
+    // MARK: - How narrow it is
+
+    /// The rule the exception is carved out of, unchanged everywhere else.
+    @Test func anOrdinaryStringStillCloses() {
+        #expect(decide(#"const greeting = "hello wor"#, typed: "r") == .close)
+    }
+
+    @Test func aCommentStillCloses() {
+        #expect(decide("// this is prose about wid", typed: "d") == .close)
+    }
+
+    /// No server that completes classes attached, so nothing changes at all —
+    /// which is what keeps a React project with no Tailwind exactly as quiet
+    /// as it was.
+    @Test func withoutSuchAServerTheStringRuleIsUntouched() {
+        #expect(decide(#"<div className="w"#, typed: "w", completesClasses: false) == .close)
+    }
+
+    /// Explicit still wins outright, and it wins with the *class* as its
+    /// prefix — ⌃Space inside a class attribute is asking about that class.
+    @Test func explicitUsesTheClassPrefixToo() {
+        let decision = CodeCompletionTrigger.decide(
+            context(#"<div className="w-fu"#, typed: nil),
+            isListOpen: false,
+            isExplicit: true
+        )
+        #expect(decision == .open(prefix: NSRange(location: 16, length: 4)))
+    }
+}

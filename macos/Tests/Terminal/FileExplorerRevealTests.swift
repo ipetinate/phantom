@@ -203,6 +203,47 @@ struct FileExplorerRevealModelTests {
         #expect(model.rows.map(\.id) == before)
     }
 
+    /// Collapses everything a test opened.
+    ///
+    /// The expansion store is shared and file-backed, keyed by root path, so
+    /// a test rooted at `/` writes under a key a real workspace uses — and
+    /// would otherwise hand the reader's own window an expanded `/Library`.
+    private func collapse(_ model: FileExplorerModel) {
+        for path in model.expanded {
+            model.toggle(FileNode(
+                url: URL(fileURLWithPath: path, isDirectory: true),
+                name: (path as NSString).lastPathComponent,
+                isDirectory: true
+            ))
+        }
+    }
+
+    /// `cd` into a folder while the workspace is the whole disk.
+    ///
+    /// The boundary check appended its own separator to a root that already
+    /// ended in one, so under `/` every path read as outside the tree: the
+    /// highlight landed on a row nobody had opened, which is to say on
+    /// nothing. Real directories rather than a temporary tree, because the
+    /// row has to be *built* for the reveal to have done its job, and macOS
+    /// marks `/private` — where a temporary directory lives — hidden, which
+    /// this tree deliberately never lists.
+    @Test func revealingUnderTheFilesystemRootOpensTheFoldersOnTheWay() async throws {
+        let model = FileExplorerModel()
+        model.setRoot("/")
+        await settle(model)
+        defer { collapse(model) }
+
+        #expect(!model.rows.contains { $0.id == "/Library/Preferences" }, "it starts out of reach")
+
+        model.reveal("/Library/Preferences")
+        await settle(model)
+
+        #expect(model.currentDirectory == "/Library/Preferences")
+        #expect(model.expanded.contains("/Library"))
+        #expect(model.expanded.contains("/Library/Preferences"), "arriving by cd opens it too")
+        #expect(model.rows.contains { $0.id == "/Library/Preferences" })
+    }
+
     /// Revealing what is already revealed has to be free — the reveal fires
     /// on every switch between open files, and most of those are files the
     /// reader clicked in the tree a moment ago.

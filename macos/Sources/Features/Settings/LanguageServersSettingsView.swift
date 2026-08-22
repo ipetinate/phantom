@@ -1078,10 +1078,29 @@ struct ServerOverrideFields: View {
 }
 
 extension LSPServerDefinition {
-    /// The asset name of the language's logo, or nil when the app ships no
-    /// logo for this server's language.
+    /// The asset name of the logo for this row, or nil when the app ships no
+    /// logo for it.
+    ///
+    /// **The command is asked first**, because a few servers are identified by
+    /// the tool rather than by the language. Tailwind's row is registered under
+    /// five language ids it does not own — it is the *second* server for each —
+    /// so resolving by language id alone drew it with the HTML logo, which is
+    /// the logo of the server sitting above it in the same list.
     var languageIconName: String? {
-        Self.iconName(forLanguageID: languageID)
+        if let byCommand = Self.iconName(forCommand: command) { return byCommand }
+        return Self.iconName(forLanguageID: languageID)
+    }
+
+    /// A logo that belongs to the binary, not to a language.
+    ///
+    /// Deliberately not a general fallthrough: every other server in this
+    /// registry *is* its language's server, and giving those a command-keyed
+    /// logo would mean two tables claiming the same row.
+    static func iconName(forCommand command: String) -> String? {
+        switch command {
+        case LSPServerRegistry.tailwindCommand: return "Lang-tailwind"
+        default: return nil
+        }
     }
 
     /// Split off the instance property so a contributed language — which is

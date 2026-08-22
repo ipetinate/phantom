@@ -90,6 +90,24 @@ struct EditorShortcutTests {
         #expect(formatted)
     }
 
+    /// Caps lock is in `deviceIndependentFlagsMask`, which is what a binding
+    /// used to be compared against — so with caps lock down, every remapped
+    /// shortcut in the editor silently stopped working. The same equality is
+    /// what made an arrow key unbindable, since an arrow always carries the
+    /// function bit.
+    @Test func capsLockDoesNotBreakABinding() {
+        let textView = CodeNSTextView()
+        var formatted = false
+        textView.onFormat = { formatted = true }
+        textView.commandShortcuts = [
+            "formatDocument": [EditorShortcut(key: "l", modifiers: [.command, .control])],
+        ]
+
+        #expect(textView.performKeyEquivalent(
+            with: event("l", [.command, .control, .capsLock])))
+        #expect(formatted)
+    }
+
     @Test func commandOptionFSearchesTheWorkspace() {
         let textView = CodeNSTextView()
         var searched = false

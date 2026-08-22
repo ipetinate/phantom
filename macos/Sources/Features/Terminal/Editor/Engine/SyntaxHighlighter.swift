@@ -31,6 +31,16 @@ struct SyntaxHighlighter {
 
     private let regex: NSRegularExpression?
 
+    /// Whether this is the document's own highlighter, or one lexing a block
+    /// inside it.
+    ///
+    /// A container's blocks are found once, at the top. The `<template>` of a
+    /// `.vue` is HTML's *rules* and not another HTML document: looking for a
+    /// `<script>` inside it would claim a nested element the outer split has
+    /// already decided about, and would pay a second scan of the whole
+    /// document per keystroke to do it.
+    private let isEmbedded: Bool
+
     /// Order is the precedence used when two kinds could start at the same
     /// index. Comment and string lead because they are the ones that must
     /// win — everything else is a detail inside them.
@@ -48,8 +58,13 @@ struct SyntaxHighlighter {
     }
 
     init(syntax: LanguageSyntax) {
+        self.init(syntax: syntax, isEmbedded: false)
+    }
+
+    private init(syntax: LanguageSyntax, isEmbedded: Bool) {
         self.language = syntax.base
         self.syntax = syntax
+        self.isEmbedded = isEmbedded
         self.regex = Self.cache.regex(for: syntax)
     }
 
@@ -57,18 +72,65 @@ struct SyntaxHighlighter {
     /// viewport — highlighting a whole file on every keystroke is the cost
     /// this design exists to avoid.
     func tokens(in text: String, range: NSRange) -> [Token] {
-        // A single-file component has no rules of its own: it is split into
-        // its blocks and each is lexed by the language it actually holds.
-        // The sub-languages are never `.vue`, so this cannot recurse.
-        if language == .vue, syntax.isBuiltIn {
-            return SFCRegions.regions(in: text).flatMap { region -> [Token] in
-                let clipped = NSIntersectionRange(region.range, range)
-                guard clipped.length > 0 else { return [] }
-                return SyntaxHighlighter(language: region.language)
-                    .tokens(in: text, range: clipped)
+        if !isEmbedded, syntax.isBuiltIn, let container = SFCRegions.container(of: language) {
+            return tokens(in: text, range: range, of: container)
+        }
+        return ownTokens(in: text, range: range)
+    }
+
+    /// A document that holds other languages: each block lexed by the
+    /// language it actually holds, and the frame around them by the
+    /// container's own rules.
+    ///
+    /// Those own rules are the difference between the two containers, and it
+    /// falls out of the rule tables rather than being decided here. An SFC's
+    /// frame is `<template>`/`<script>`/`<style>` and nothing else, and `.vue`
+    /// has no rules of its own, so the frame comes back empty — which is
+    /// exactly what it did before there was a frame at all. An HTML
+    /// document's frame is the document, and `.html` has a full rule set, so
+    /// the markup keeps colouring as it always has.
+    private func tokens(
+        in text: String,
+        range: NSRange,
+        of container: SFCRegions.Container
+    ) -> [Token] {
+        var tokens: [Token] = []
+        var cursor = range.location
+
+        for region in SFCRegions.regions(in: text, of: container) {
+            let clipped = NSIntersectionRange(region.range, range)
+            /// `max` rather than a plain start, and the reason is the
+            /// documented failure mode of the split: a nested block at column
+            /// zero produces regions that overlap, and lexing the overlap
+            /// twice would hand the caller two tokens for one range. First
+            /// region wins, deterministically.
+            let start = max(clipped.location, cursor)
+            guard clipped.length > 0, NSMaxRange(clipped) > start else { continue }
+
+            if start > cursor {
+                tokens += ownTokens(
+                    in: text,
+                    range: NSRange(location: cursor, length: start - cursor)
+                )
             }
+
+            let body = NSRange(location: start, length: NSMaxRange(clipped) - start)
+            tokens += SyntaxHighlighter(syntax: .builtIn(region.language), isEmbedded: true)
+                .tokens(in: text, range: body)
+            cursor = NSMaxRange(body)
         }
 
+        if cursor < NSMaxRange(range) {
+            tokens += ownTokens(
+                in: text,
+                range: NSRange(location: cursor, length: NSMaxRange(range) - cursor)
+            )
+        }
+
+        return tokens
+    }
+
+    private func ownTokens(in text: String, range: NSRange) -> [Token] {
         guard let regex else { return [] }
 
         var tokens: [Token] = []

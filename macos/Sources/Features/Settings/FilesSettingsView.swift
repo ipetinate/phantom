@@ -78,7 +78,7 @@ struct FilesSettingsView: View {
             } header: {
                 Text("Display")
             } footer: {
-                Text("Files larger than \(sizeLimit) or containing binary data open in an external app instead — there is nothing readable to show, and loading them would stall the window.")
+                Text("Files larger than \(sizeLimit) or containing binary data open in an external app instead — there is nothing readable to show, and loading them would stall the window. Images and PDFs are shown in the editor instead of being refused.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

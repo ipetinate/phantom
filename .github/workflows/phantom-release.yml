@@ -41,10 +41,19 @@ jobs:
       - name: Compute version
         id: version
         run: |
-          VERSION=$(grep -m1 '\.version' build.zig.zon | sed -E 's/.*"([^"]+)".*/\1/')
-          VERSION=${VERSION%-dev}
+          DECLARED=$(grep -m1 '\.version' build.zig.zon | sed -E 's/.*"([^"]+)".*/\1/')
+
+          # Any pre-release suffix is dropped for the tag, not just "-dev".
+          # The suffix says how finished the build is — "-dev" while it is
+          # being worked on, "-beta" once it is usable but still taking
+          # fixes, nothing at all when it is stable — and the tag cannot
+          # carry it: the Zig build refuses a tag that is not vX.Y.Z
+          # matching build.zig. So the tag is the number and the release
+          # *title* is what was declared, which is also what stops anyone
+          # renaming releases by hand afterwards.
+          VERSION=${DECLARED%%-*}
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "build.zig.zon version '$VERSION' is not X.Y.Z" >&2
+            echo "build.zig.zon version '$DECLARED' is not X.Y.Z with an optional suffix" >&2
             exit 1
           fi
           if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
@@ -52,6 +61,7 @@ jobs:
             exit 1
           fi
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "title=v${DECLARED}" >> "$GITHUB_OUTPUT"
           echo "short_version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "build=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -93,7 +103,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create ${{ steps.version.outputs.tag }} \
-            --title ${{ steps.version.outputs.tag }} \
+            --title "${{ steps.version.outputs.title }}" \
             --generate-notes \
             --notes 'Ad-hoc signed, not notarized — on first launch, right-click the app and choose **Open** (or run `xattr -cr Phantom.app` after unzipping) instead of double-clicking, or Gatekeeper will refuse it as from an unidentified developer.' \
             Phantom.dmg

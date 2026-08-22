@@ -178,19 +178,23 @@ final class SidebarSplitView: NSSplitView {
     /// `dividerColor` override: AppKit does not reliably re-read that
     /// property for an already-drawn divider, so a mode change in settings
     /// left the old divider on screen until the window was recreated.
+    /// The divider runs the **full height**, titlebar strip included.
+    ///
+    /// It used to stop at `safeAreaInsets.top`, to avoid stacking a second
+    /// coat over the strip the titlebar paints — the artifact that produced
+    /// was a slightly darker tick at the top of the divider. What it produced
+    /// instead was worse and was what got reported: the divider simply *ends*
+    /// where the titlebar begins, so the line separating the sidebar from the
+    /// terminal has a transparent gap in it while the rest of the line is
+    /// coloured. A tick a shade too dark reads as a divider; a gap reads as a
+    /// bug.
+    ///
+    /// The clip is gone rather than replaced with `.copy` compositing, which
+    /// was the other candidate: `.copy` writes alpha straight through, and
+    /// this window is transparent under the glass and blur modes — it would
+    /// punch a hole in the strip in exactly the configurations the report asks
+    /// not to break.
     override func drawDivider(in rect: NSRect) {
-        // The titlebar paints its own strip and composites above this view,
-        // so drawing the divider up into it stacks a second coat over that
-        // one column — a short dark tick in an otherwise even strip.
-        let inset = safeAreaInsets.top
-        let rect = rect.intersection(
-            NSRect(
-                x: bounds.minX,
-                y: isFlipped ? bounds.minY + inset : bounds.minY,
-                width: bounds.width,
-                height: bounds.height - inset
-            )
-        )
         guard !rect.isEmpty else { return }
 
         switch AppearanceCoordinator.dividerMode {

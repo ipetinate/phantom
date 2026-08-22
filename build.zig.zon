@@ -1,6 +1,6 @@
 .{
     .name = .ghostty,
-    .version = "0.7.0-dev",
+    .version = "0.8.0-beta",
     .paths = .{""},
     .fingerprint = 0x64407a2a0b4147e5,
     .minimum_zig_version = "0.16.0",

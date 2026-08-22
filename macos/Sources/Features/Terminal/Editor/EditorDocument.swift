@@ -59,7 +59,24 @@ final class EditorDocument: ObservableObject, Identifiable {
     ///
     /// Not persisted across launches, deliberately: it is a reading posture
     /// for the current sitting, not a property of the file.
-    @Published var presentation: EditorPresentation = .source
+    ///
+    /// Where it *starts* is a property of the file, though, and is decided
+    /// here rather than by whoever draws the document: a view that applied
+    /// the opening posture when it appeared would re-apply it every time the
+    /// tab came back, undoing the toggle the paragraph above exists to
+    /// remember. `EditorCenter.open(showing:)` still overrides it, because a
+    /// file clicked in the Changes list was chosen for its changes.
+    @Published var presentation: EditorPresentation
+
+    /// The ref this file is being compared against, when it was opened from a
+    /// branch review rather than from the working tree.
+    ///
+    /// Carried on the document because it is a property of *this reading* of
+    /// the file: the same path opened from the Changes list is a working-tree
+    /// diff, and opened from the review it is `base...HEAD`. Nil is the
+    /// ordinary case and means "ask the working tree", which is what every
+    /// other entry point wants.
+    @Published var reviewBase: String?
 
     var id: String { url.path }
 
@@ -78,6 +95,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.url = url
         self.text = text
         self.diskText = text
+        self.presentation = .opening(fileName: url.lastPathComponent)
     }
 
     /// Reads the file, refusing anything the editor can't usefully show.

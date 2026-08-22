@@ -11,6 +11,16 @@ enum GitDiffSide: Equatable {
 
     /// Index against `HEAD` — `git diff --cached`.
     case staged
+
+    /// This branch against where it left the base — `git diff base...HEAD`,
+    /// with three dots.
+    ///
+    /// Three, not two, and the difference is the whole point. Two dots
+    /// compares the two commits, so everything that landed on the base branch
+    /// since you forked shows up as though you had written it. Three dots
+    /// compares against the **merge base**, which is what a pull request
+    /// shows and what somebody reviewing their own branch means to see.
+    case branch(base: String)
 }
 
 /// What asking for a diff produced.
@@ -72,6 +82,9 @@ enum GitDiffLoader {
         if change.isUntracked {
             /// Nothing about an untracked file is in the index, so there is
             /// no staged side of it to show.
+            /// An untracked file is only ever a working-tree fact: it is in
+            /// no index and in no commit, so neither the staged side nor a
+            /// branch range has anything to say about it.
             guard side == .unstaged else { return .unchanged }
             return loadUntracked(path: change.path, in: root, context: context)
         }
@@ -101,7 +114,7 @@ enum GitDiffLoader {
         context: Int = defaultContext
     ) -> GitDiffOutcome {
         var arguments = baseArguments(context: context)
-        if side == .staged { arguments.append("--cached") }
+        arguments.append(contentsOf: rangeArguments(for: side))
         arguments.append("--find-renames")
         arguments.append("--")
         arguments.append(path)
@@ -171,6 +184,19 @@ enum GitDiffLoader {
             "--no-textconv",
             "--unified=\(max(0, context))",
         ]
+    }
+
+    /// What a side adds to `git diff`, before the pathspec.
+    ///
+    /// Kept beside `baseArguments` so the three shapes of this command are
+    /// read together: nothing at all for the working tree, `--cached` for the
+    /// index, and a three-dot range for a branch.
+    static func rangeArguments(for side: GitDiffSide) -> [String] {
+        switch side {
+        case .unstaged: []
+        case .staged: ["--cached"]
+        case .branch(let base): ["\(base)...HEAD"]
+        }
     }
 
     private static func outcome(for output: String, path: String) -> GitDiffOutcome {

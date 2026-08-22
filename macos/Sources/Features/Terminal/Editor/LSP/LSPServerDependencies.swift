@@ -75,7 +75,12 @@ struct LSPServerDependency: Hashable, Sendable, Identifiable {
         return version.split(separator: ".").first.map(String.init) == pin
     }
 
-    fileprivate init(
+    /// Module-visible rather than file-private so a test can build a fixture.
+    /// `satisfies(version:)` accepts a major-only pin, and no plan in the table
+    /// uses one any more — the last was the TypeScript wrapper's `typescript@6`,
+    /// which left because it collided with the native TypeScript row. Without a
+    /// fixture that branch would be exercised by nothing at all.
+    init(
         package: String,
         pin: String? = nil,
         purpose: String,
@@ -152,37 +157,20 @@ enum LSPDependencyCatalog {
     /// drive.
     private static let tsserverCompatibleTypeScript = "6"
 
+    /// **The TypeScript wrapper has no plan on purpose.** It used to list a
+    /// global `typescript@6` beside itself, and that package is the one the
+    /// native row installs as *itself* at version 7 — so installing either row
+    /// changed the other, which is the crossing that got reported. The plan's
+    /// own note said why it was unnecessary: a file reaches the wrapper only
+    /// when its project has `node_modules/typescript`, and a project without
+    /// one is served by `tsc --lsp`. So the dependency was never needed for
+    /// routing, only for a case routing does not produce.
+    ///
+    /// Dropping it also settles the shape of the row. A server with a plan
+    /// draws the multi-package popover *and* an Uninstall button side by side;
+    /// without one it draws a plain Install or Uninstall, which is what two
+    /// clearly-labelled rows want.
     private static let plans: [String: LSPServerDependencyPlan] = [
-        "typescript-language-server": LSPServerDependencyPlan(
-            packages: [
-                LSPServerDependency(
-                    package: "typescript-language-server",
-                    purpose: """
-                    The server itself. It drives TypeScript's own tsserver.js \
-                    and bundles no copy of one.
-                    """,
-                    presence: .binary("typescript-language-server")
-                ),
-                LSPServerDependency(
-                    package: "typescript",
-                    pin: tsserverCompatibleTypeScript,
-                    purpose: """
-                    Needed when this server has to find a TypeScript for \
-                    itself. Pinned to 6.x because npm's latest is TypeScript \
-                    7, the native rewrite, which ships no tsserver.js for a \
-                    wrapper to drive.
-                    """,
-                    presence: .globalPackage
-                ),
-            ],
-            projectNote: """
-            Phantom sends a file to this server only when its project has its \
-            own node_modules/typescript. A project without one is served by \
-            tsc --lsp instead, which needs no wrapper — see the TypeScript \
-            (native) row.
-            """
-        ),
-
         "vue-language-server": LSPServerDependencyPlan(
             packages: [
                 LSPServerDependency(

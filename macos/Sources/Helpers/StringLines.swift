@@ -38,3 +38,15 @@ extension String {
         hasSuffix("\r") ? String(dropLast()) : self
     }
 }
+
+extension String {
+    /// The line without the terminator `lineRange(for:)` includes.
+    ///
+    /// `lineRange` returns the newline as part of the line, and every rule
+    /// that reads "the caret's line" means the text of it.
+    var trimmingTrailingNewline: String {
+        var text = self
+        while text.hasSuffix("\n") || text.hasSuffix("\r") { text.removeLast() }
+        return text
+    }
+}

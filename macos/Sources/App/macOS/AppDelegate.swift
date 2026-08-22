@@ -246,6 +246,11 @@ class AppDelegate: NSObject,
         CodexHooksInstaller.repairIfStale()
         OpenCodeHooksInstaller.repairIfStale()
 
+        // Watching for the moments a window can become unreachable, before
+        // any window exists to have them. Development builds only; see
+        // `WindowBreadcrumbs` for the incident this observes for.
+        WindowBreadcrumbs.startWatching()
+
         // Restore our own persisted session. macOS's restoration has either
         // run already (restoring, or standing down in favor of ours), or
         // runs right after launch — it never creates a window when our store
@@ -508,7 +513,18 @@ class AppDelegate: NSObject,
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         // If we have visible windows then we allow macOS to do its default behavior
         // of focusing one of them.
-        guard !flag else { return true }
+        //
+        // "Visible" is macOS's word, and it includes a window orphaned on a
+        // Space that no longer exists — one Mission Control lists but cannot
+        // raise, and focusing does nothing the reader can see. So the default
+        // behavior is verified rather than trusted: if a moment later nothing
+        // terminal is key or on the active Space, the window is pulled onto
+        // this one. See `WindowGhostRescue` for the incident this answers.
+        guard !flag else {
+            WindowBreadcrumbs.note("reopen: deferring to macOS, hasVisibleWindows=true")
+            WindowGhostRescue.verifyReopenLandedSomewhere()
+            return true
+        }
 
         // If the application isn't active yet then we don't want to process
         // this because we're not ready. This happens sometimes in Xcode runs
@@ -1313,6 +1329,9 @@ extension AppDelegate {
         syncMenuShortcut(config, action: "new_split:down", menuItem: self.menuSplitDown)
         syncMenuShortcut(config, action: "new_split:up", menuItem: self.menuSplitUp)
 
+        /// These four keep a macOS-standard shortcut when the configuration
+        /// has no answer for them — see
+        /// `MenuShortcutManager.standardEditingShortcuts`.
         syncMenuShortcut(config, action: "undo", menuItem: self.menuUndo)
         syncMenuShortcut(config, action: "redo", menuItem: self.menuRedo)
         syncMenuShortcut(config, action: "copy_to_clipboard", menuItem: self.menuCopy)

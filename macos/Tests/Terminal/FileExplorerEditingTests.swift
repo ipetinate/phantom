@@ -91,6 +91,44 @@ struct FileExplorerEditingTests {
         #expect(model.editing == nil)
     }
 
+    /// New File while the workspace is the whole disk.
+    ///
+    /// The boundary check appended its own separator to a root that already
+    /// ended in one, so under `/` every parent read as outside the tree and
+    /// the action returned before setting `editing`: no field, no error, a
+    /// menu item that did nothing at all. Asserted through to the row,
+    /// because a create that sets `editing` and draws no field is the wedge
+    /// the tests above exist for.
+    @Test func creatingUnderTheFilesystemRootShowsTheField() async throws {
+        let model = FileExplorerModel()
+        model.setRoot("/")
+        await settle(model)
+        defer { collapse(model) }
+
+        model.beginCreate(in: "/Library", isFolder: false)
+        await settle(model)
+
+        #expect(model.editing == .create(parent: "/Library", isFolder: false))
+        #expect(model.expanded.contains("/Library"))
+        #expect(model.selection == "/Library")
+        #expect(model.rows.contains { $0.isCreatePlaceholder }, "the field has to be on screen")
+    }
+
+    /// Collapses everything a test opened.
+    ///
+    /// The expansion store is shared and file-backed, keyed by root path, so
+    /// a test rooted at `/` writes under a key a real workspace uses — and
+    /// would otherwise hand the reader's own window an expanded `/Library`.
+    private func collapse(_ model: FileExplorerModel) {
+        for path in model.expanded {
+            model.toggle(FileNode(
+                url: URL(fileURLWithPath: path, isDirectory: true),
+                name: (path as NSString).lastPathComponent,
+                isDirectory: true
+            ))
+        }
+    }
+
     @Test func aCreateWithNoRootIsNeverEntered() {
         let model = FileExplorerModel()
         model.beginCreate(in: "/tmp", isFolder: false)

@@ -56,6 +56,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = true
+        scrollView.useThinScrollers()
 
         let textView = Self.makeTextView()
         scrollView.documentView = textView

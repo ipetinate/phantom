@@ -81,7 +81,13 @@ struct GitDiffView<Accessory: View>: View {
     private func panes(_ document: GitDiffDocument) -> some View {
         let palette = GitDiffPalette.make(from: theme)
 
-        return SplitPaneContainer(model: model) {
+        return SplitPaneContainer(
+            model: model,
+            /// The host's accessory carries the toggle inside its own box;
+            /// a second copy here is the loose button this used to draw.
+            showsDirectionToggle: false,
+            accessoryTrailingInset: ThinScroller.trackWidth
+        ) {
             GitDiffPane(
                 rows: document.rows,
                 side: .left,

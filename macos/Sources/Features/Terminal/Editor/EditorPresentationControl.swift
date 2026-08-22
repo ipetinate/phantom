@@ -26,9 +26,17 @@ extension SplitViewDirection {
 ///
 /// Renders nothing at all when the document has only one way to be shown —
 /// a control whose every press is a no-op is worse than an empty corner.
-struct EditorPresentationControl: View {
+///
+/// `extra` is a slot inside the same box, for the one control that belongs
+/// beside these without being one of them: the split-direction toggle. It
+/// used to float loose next to this cluster — two backings inches apart in
+/// the corner, one of them over the minimap — and "which box is which" is a
+/// question the reader should never be asked. A gap inside the box marks it
+/// as a different kind of action; a second box overstates the difference.
+struct EditorPresentationControl<Extra: View>: View {
     let options: EditorPresentationOptions
     @Binding var presentation: EditorPresentation
+    @ViewBuilder let extra: () -> Extra
 
     @State private var isHovered = false
 
@@ -38,41 +46,16 @@ struct EditorPresentationControl: View {
                 ForEach(options.available, id: \.self) { option in
                     button(for: option)
                 }
+                extra()
+                    .padding(.leading, 5)
             }
             .padding(4)
-            .background(background)
+            .editorOverlayChrome(isHovered: isHovered)
             .opacity(isHovered ? 1 : 0.78)
             .onHover { isHovered = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovered)
             .padding(6)
         }
-    }
-
-    /// Always drawn, which is the whole difference between a control you
-    /// can find and one you have to know about.
-    ///
-    /// It used to appear only on hover, so at rest the glyphs floated
-    /// unbacked over whatever the editor happened to be drawing — and the
-    /// place it sits is beside the minimap, which is the busiest, most
-    /// multicoloured strip in the window. Contrast cannot come from the
-    /// glyph alone when the thing behind it is arbitrary.
-    ///
-    /// `.regularMaterial` rather than `.thinMaterial`: thin lets the code
-    /// underneath read straight through, which is the property that made
-    /// this hard to see. The extra wash on hover is the affordance now,
-    /// rather than the background's whole existence.
-    private var background: some View {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(.regularMaterial)
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(isHovered ? 0.22 : 0.14), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.28), radius: 3, y: 1)
     }
 
     private func button(for option: EditorPresentation) -> some View {
@@ -101,11 +84,14 @@ struct EditorPresentationControl: View {
         switch option {
         case .source: "chevron.left.forwardslash.chevron.right"
         case .preview: "doc.richtext"
-        /// Two versions of one document, the earlier one dashed. Not
-        /// `plus.forwardslash.minus`, which was here first and reads as a
-        /// percent sign, and not a swap arrow, which would say "switch" —
-        /// ambiguous next to buttons whose whole job is switching.
-        case .diff: "square.on.square.dashed"
+        case .image: "photo"
+        case .table: "tablecells"
+        /// Lines of text with a change marked against them, which is what a
+        /// source file's diff actually shows. Not `plus.forwardslash.minus`,
+        /// which was here first and reads as a percent sign, and not a swap
+        /// arrow, which would say "switch" — ambiguous next to buttons whose
+        /// whole job is switching.
+        case .diff: "text.append"
         case .split: "rectangle.split.2x1"
         }
     }
@@ -114,8 +100,16 @@ struct EditorPresentationControl: View {
         switch option {
         case .source: "Source"
         case .preview: "Preview"
+        case .image: "Image"
+        case .table: "Table"
         case .diff: "Changes"
         case .split: "Split"
         }
+    }
+}
+
+extension EditorPresentationControl where Extra == EmptyView {
+    init(options: EditorPresentationOptions, presentation: Binding<EditorPresentation>) {
+        self.init(options: options, presentation: presentation, extra: { EmptyView() })
     }
 }

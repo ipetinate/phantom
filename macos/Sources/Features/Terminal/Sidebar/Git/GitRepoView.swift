@@ -46,6 +46,13 @@ struct GitRepoView: View {
     /// a defaulted empty closure would have done.
     var onOpenDiff: ((URL) -> Void)?
 
+    /// Opens a file as the branch review sees it — its diff against the base
+    /// the review was measured from, which is not the working tree.
+    ///
+    /// Separate from `onOpenDiff` because the two mean different comparisons
+    /// of the same file, and a single callback would have to guess which.
+    var onOpenBranchDiff: ((URL, String) -> Void)?
+
     @ObservedObject private var center: GitCenter = .shared
     @ObservedObject private var palette: ThemePalette = .shared
 
@@ -424,6 +431,18 @@ struct GitRepoView: View {
         // A gap, so two adjacent rows' hover backgrounds never touch and
         // read as one block.
         LazyVStack(alignment: .leading, spacing: 2) {
+            /// First, because it answers the question somebody has when they
+            /// are about to open a pull request, and the sections below answer
+            /// the one they have while working. Collapsed until asked.
+            if let onOpenBranchDiff {
+                GitBranchReviewView(root: root) { file, base in
+                    onOpenBranchDiff(
+                        URL(fileURLWithPath: root).appendingPathComponent(file.path),
+                        base.ref
+                    )
+                }
+            }
+
             section("Merge Changes", status.unmerged, staged: false, merge: true)
             section("Staged Changes", status.staged, staged: true, merge: false)
             section("Changes", status.unstaged, staged: false, merge: false)
