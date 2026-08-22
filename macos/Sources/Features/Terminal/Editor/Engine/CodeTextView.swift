@@ -142,6 +142,13 @@ struct CodeTextView: NSViewRepresentable {
     var onCloseTab: () -> Void = {}
     var onSearchWorkspace: () -> Void = {}
 
+    /// The selection, for the host to turn into an `@file:line` reference and
+    /// type into a terminal. The range crosses rather than the string because
+    /// which lines it covers is `EditorLineReference`'s judgement, and which
+    /// terminal receives it is the host's — the engine holds neither.
+    var onAttachLine: ((NSRange, String) -> Void)?
+    var onAttachLinePicker: ((NSRange, String) -> Void)?
+
     func makeCoordinator() -> Coordinator {
         Coordinator(
             storage: CodeTextStorage(
@@ -271,6 +278,8 @@ struct CodeTextView: NSViewRepresentable {
         context.coordinator.minimapWidth = minimapWidth
 
         textView.onSave = onSave
+        textView.onAttachLine = onAttachLine
+        textView.onAttachLinePicker = onAttachLinePicker
         textView.onSaveAll = onSaveAll
         textView.onCloseTab = onCloseTab
         textView.onSearchWorkspace = onSearchWorkspace
@@ -319,6 +328,8 @@ struct CodeTextView: NSViewRepresentable {
         // was selected when the view was made, and the selection moves.
         if let code = textView as? CodeNSTextView {
             code.onSave = onSave
+            code.onAttachLine = onAttachLine
+            code.onAttachLinePicker = onAttachLinePicker
             code.onSaveAll = onSaveAll
             code.onCloseTab = onCloseTab
             code.onSearchWorkspace = onSearchWorkspace
@@ -1278,6 +1289,14 @@ final class CodeNSTextView: NSTextView {
     /// would be a downgrade dressed as a feature.
     var onSearchWorkspace: (() -> Void)?
 
+    /// ⌘K and ⇧⌘K, carrying the selection out for the host to reference.
+    ///
+    /// The live text travels with the range: while somebody types, the buffer
+    /// runs ahead of the host's copy, and lines counted against the stale
+    /// text would name the wrong ones.
+    var onAttachLine: ((NSRange, String) -> Void)?
+    var onAttachLinePicker: ((NSRange, String) -> Void)?
+
     /// The host's language features, reached by keyboard or ⌘-click.
     var onRename: ((Int) -> Void)?
     var onFindReferences: ((Int) -> Void)?
@@ -1770,7 +1789,8 @@ final class CodeNSTextView: NSTextView {
             hasDefinition: onJumpToDefinition != nil,
             hasReferences: onFindReferences != nil,
             hasRename: onRename != nil,
-            hasFormat: onFormat != nil
+            hasFormat: onFormat != nil,
+            hasAttach: onAttachLine != nil
         ) {
             if let lastGroup, lastGroup != command.group {
                 menu.addItem(.separator())
@@ -1795,6 +1815,14 @@ final class CodeNSTextView: NSTextView {
             case .format:
                 menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
                     self.onFormat?()
+                })
+            case .attachLine:
+                /// The selection, not the click point: right-clicking a
+                /// selection to attach it is the gesture, and the click is
+                /// somewhere inside it. A bare caret attaches its own line,
+                /// same as ⌘K.
+                menu.addItem(item(command.title, key: shown.key, shown.modifiers) {
+                    self.onAttachLine?(self.selectedRange(), self.string)
                 })
             case .cut, .copy, .paste, .selectAll:
                 let entry = NSMenuItem(
@@ -1840,13 +1868,15 @@ final class CodeNSTextView: NSTextView {
         hasDefinition: Bool,
         hasReferences: Bool,
         hasRename: Bool,
-        hasFormat: Bool
+        hasFormat: Bool,
+        hasAttach: Bool = false
     ) -> [EditorContextCommand] {
         var commands: [EditorContextCommand] = []
         if hasDefinition { commands.append(.goToDefinition) }
         if hasReferences { commands.append(.findReferences) }
         if hasRename { commands.append(.rename) }
         if hasFormat { commands.append(.format) }
+        if hasAttach { commands.append(.attachLine) }
 
         commands.append(contentsOf: [.cut, .copy, .paste, .selectAll])
         return commands
@@ -3010,6 +3040,12 @@ final class CodeNSTextView: NSTextView {
             moveSelectedLines(.up)
         case "moveLineDown":
             moveSelectedLines(.down)
+        case "attachLineToAgent":
+            guard let onAttachLine else { return false }
+            onAttachLine(selectedRange(), string)
+        case "attachLineToAgentPicker":
+            guard let onAttachLinePicker else { return false }
+            onAttachLinePicker(selectedRange(), string)
         default:
             return false
         }

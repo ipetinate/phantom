@@ -54,6 +54,8 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
     case formatDocument
     case moveLineUp
     case moveLineDown
+    case attachLineToAgent
+    case attachLineToAgentPicker
 
     var id: String { rawValue }
 
@@ -79,6 +81,8 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         case .formatDocument: return "Format Document"
         case .moveLineUp: return "Move Line Up"
         case .moveLineDown: return "Move Line Down"
+        case .attachLineToAgent: return "Attach Line to Agent"
+        case .attachLineToAgentPicker: return "Attach Line to Agent In…"
         }
     }
 
@@ -97,6 +101,8 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         case .formatDocument: return "Formats the focused file"
         case .moveLineUp: return "Swaps the caret's line — or every selected line — with the one above"
         case .moveLineDown: return "Swaps the caret's line — or every selected line — with the one below"
+        case .attachLineToAgent: return "Types @file:line for the selection into this tab's terminal"
+        case .attachLineToAgentPicker: return "Asks which terminal, then types @file:line into it"
         }
     }
 
@@ -134,6 +140,15 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
             return [PhantomShortcut(key: PhantomShortcut.upArrow, modifiers: [.shift, .option])]
         case .moveLineDown:
             return [PhantomShortcut(key: PhantomShortcut.downArrow, modifiers: [.shift, .option])]
+
+        /// ⌘K, the combination Cursor and VS Code taught for "add this line
+        /// to the chat". The terminal's own ⌘K is untouched: the editor and
+        /// the terminal are mutually hidden siblings, so whichever is on
+        /// screen answers.
+        case .attachLineToAgent:
+            return [PhantomShortcut(key: "k", modifiers: [.command])]
+        case .attachLineToAgentPicker:
+            return [PhantomShortcut(key: "k", modifiers: [.command, .shift])]
         }
     }
 
