@@ -523,6 +523,16 @@ private struct WorktreeRow: View {
                         Image(systemName: "lock")
                             .font(.system(size: 8))
                             .foregroundStyle(.secondary)
+
+                        /// Beside the padlock rather than after the sentence
+                        /// below it. The sentence wraps, and a trailing icon
+                        /// on a wrapping paragraph lands wherever the last
+                        /// line happens to end — mid-thought, and somewhere
+                        /// different on every window width.
+                        WorktreeLockInfo(
+                            reason: worktree.lockReason,
+                            path: worktree.path,
+                            onUnlock: { onUnlock(worktree) })
                     }
                 }
 

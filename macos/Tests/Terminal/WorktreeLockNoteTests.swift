@@ -41,6 +41,26 @@ struct WorktreeLockNoteTests {
             == WorktreeLockNote.text(reason: "on the external drive"))
     }
 
+    // MARK: The reason on its own
+
+    /// The row and the info popover both ask this, and they must not
+    /// disagree about what counts as "there is a reason".
+    @Test func theReasonIsSharedBetweenTheRowAndThePopover() {
+        #expect(WorktreeLockNote.reason("on the external drive") == "on the external drive")
+        #expect(WorktreeLockNote.reason(nil) == nil)
+        #expect(WorktreeLockNote.reason("") == nil)
+        #expect(WorktreeLockNote.reason("  \n ") == nil)
+        #expect(WorktreeLockNote.reason("  spaced  ") == "spaced")
+    }
+
+    /// Whenever the row shows a reason, the popover has one to show too.
+    @Test func theRowNeverNamesAReasonThePopoverWouldHide() {
+        for raw in [nil, "", "   ", "on the external drive", " trimmed \n"] {
+            let inRow = WorktreeLockNote.text(reason: raw).contains(" · ")
+            #expect(inRow == (WorktreeLockNote.reason(raw) != nil), "\(raw ?? "nil")")
+        }
+    }
+
     /// Nothing is truncated here. How much fits is the row's problem, and it
     /// has a width to decide it with — this rule does not.
     @Test func aLongReasonIsLeftWhole() {

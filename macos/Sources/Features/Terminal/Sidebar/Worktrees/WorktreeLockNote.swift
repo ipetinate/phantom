@@ -16,17 +16,25 @@ import Foundation
 /// the reason never states.
 enum WorktreeLockNote {
     /// - Parameter reason: git's own `--reason` text, when one was given.
-    ///
-    /// Blank is treated as absent: `git worktree lock --reason ""` records an
-    /// empty string, and rendering "Locked — git won't remove or prune it ·"
-    /// with nothing after the separator looks like the sentence was cut off.
     static func text(reason: String?) -> String {
         let consequence = "Locked — git won't remove or prune it"
 
-        guard let trimmed = reason?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty
-        else { return consequence }
+        guard let given = self.reason(reason) else { return consequence }
+        return "\(consequence) · \(given)"
+    }
 
-        return "\(consequence) · \(trimmed)"
+    /// The reason as something worth showing, or nil.
+    ///
+    /// Shared with the info popover so the two cannot disagree about what
+    /// counts as "there is a reason". Blank is absent: `git worktree lock
+    /// --reason ""` records an empty string, and every place that renders a
+    /// reason would otherwise have to remember that on its own — the row as
+    /// a separator with nothing after it, the popover as a "Reason:" label
+    /// followed by white space.
+    static func reason(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty
+        else { return nil }
+        return trimmed
     }
 }
