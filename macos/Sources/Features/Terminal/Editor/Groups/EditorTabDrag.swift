@@ -1,15 +1,27 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// What a dragged tab carries, written as text.
+/// What a dragged tab carries.
 ///
-/// Text rather than a custom transferable type: a drag leaves SwiftUI's own
-/// world and comes back through an `NSItemProvider`, and plain text is the
-/// one representation that survives that round trip without a registered
-/// type identifier. The prefix keeps it from being mistaken for a file path
-/// dragged in from the Finder — a drop that could not be decoded is one this
-/// grid refuses rather than guesses at.
+/// A short string, under a type of this app's own — see `type` for why the
+/// type matters more than the payload. The tokens are prefixed so a drop
+/// that cannot be decoded is one this grid refuses rather than guesses at.
 enum EditorTabDrag {
+    /// A drag type of our own rather than plain text.
+    ///
+    /// Plain text was the first attempt and it never arrived. The editor's
+    /// `NSTextView` and the terminal surface both register for dragged text,
+    /// and a drag is offered to the deepest view that accepts its type — so
+    /// the cell underneath them was never asked, and a tab dropped anywhere
+    /// useful did nothing. A type only the cell registers walks past both,
+    /// because that search carries on up the view hierarchy until something
+    /// accepts.
+    ///
+    /// Declared in `Ghostty-Info.plist` beside `ghosttySurfaceId`, which
+    /// upstream exports for the same reason: dragging a terminal between
+    /// splits is also a private gesture that must not be confused with text.
+    static let type = UTType(exportedAs: "com.ipetinate.phantom.editorTab")
+
     private static let terminalToken = "phantom.tab:terminal"
     private static let filePrefix = "phantom.tab:file:"
 
@@ -29,7 +41,19 @@ enum EditorTabDrag {
     }
 
     static func provider(for item: EditorCenter.DragItem) -> NSItemProvider {
-        NSItemProvider(object: text(for: item) as NSString)
+        let provider = NSItemProvider()
+        let payload = Data(text(for: item).utf8)
+        /// Own-process only: this names a tab inside this window, and nothing
+        /// outside the app could act on it.
+        provider.registerDataRepresentation(
+            forTypeIdentifier: type.identifier,
+            visibility: .ownProcess
+        ) { completion in
+            completion(payload, nil)
+            return nil
+        }
+        WindowBreadcrumbs.note("tab drag: began \(text(for: item))")
+        return provider
     }
 }
 
@@ -39,7 +63,15 @@ enum EditorTabDrag {
 /// so what is left here is the part only a view can do: report the pointer's
 /// position while it moves, and paint the half of the cell the tab would take.
 struct EditorCellDropDelegate: DropDelegate {
+    /// Named here as well so the delegate reads it without reaching across
+    /// files for a type it uses in three places.
+    static let dragType = EditorTabDrag.type
+
     let size: CGSize
+
+    /// How tall this cell's bar is, or zero when it has none. The bar is a
+    /// join rather than a top edge — see `EditorDropZone.resolve`.
+    let barHeight: CGFloat
 
     /// Written on every move, so the highlight follows the pointer between
     /// the centre and the four edges rather than latching on entry.
@@ -47,19 +79,36 @@ struct EditorCellDropDelegate: DropDelegate {
 
     let perform: (EditorCenter.DragItem, EditorDropZone) -> Void
 
+    /// Which cell this is, for the breadcrumbs only — a drag that goes wrong
+    /// goes wrong *somewhere*, and "a cell" was not enough to tell two of
+    /// them apart in a log.
+    let label: String
+
     func dropEntered(info: DropInfo) {
+        WindowBreadcrumbs.note(
+            "tab drag: entered \(label) at "
+            + "\(Int(info.location.x)),\(Int(info.location.y)) "
+            + "size=\(Int(size.width))x\(Int(size.height)) bar=\(Int(barHeight)) "
+            + "zone=\(resolve(info))")
         zone(resolve(info))
     }
 
+    /// No proposal of its own, deliberately.
+    ///
+    /// This returned `DropProposal(operation: .move)`, which reads as the
+    /// truth — the tab leaves the cell it came from — and cost the gesture
+    /// its drop: a destination may only propose an operation the *source*
+    /// allows, and the session `.onDrag` opens allows a copy. Proposing a
+    /// move it never offered had AppKit refuse the drop with no error and no
+    /// callback, so the tab flew back and nothing happened. Nil takes the
+    /// default proposal, which is by construction one the source allows.
     func dropUpdated(info: DropInfo) -> DropProposal? {
         zone(resolve(info))
-        /// A move, not a copy: the tab leaves the cell it came from. The
-        /// cursor says so, and saying "copy" would promise a second tab this
-        /// grid deliberately never makes.
-        return DropProposal(operation: .move)
+        return nil
     }
 
     func dropExited(info: DropInfo) {
+        WindowBreadcrumbs.note("tab drag: left \(label)")
         zone(nil)
     }
 
@@ -67,16 +116,22 @@ struct EditorCellDropDelegate: DropDelegate {
         let target = resolve(info)
         zone(nil)
 
-        guard let provider = info.itemProviders(for: [.plainText, .text]).first
-        else { return false }
+        guard let provider = info.itemProviders(for: [Self.dragType]).first else {
+            WindowBreadcrumbs.note("tab drag: dropped with no provider of our type")
+            return false
+        }
+        WindowBreadcrumbs.note("tab drag: dropped on \(label), zone=\(target)")
 
         /// Loaded asynchronously because that is the only way an item
         /// provider hands anything over, and answered `true` before it
         /// arrives: the answer is whether this cell accepts the drag, which
         /// is already known.
         let apply = perform
-        provider.loadObject(ofClass: NSString.self) { object, _ in
-            guard let text = object as? String,
+        provider.loadDataRepresentation(
+            forTypeIdentifier: Self.dragType.identifier
+        ) { data, _ in
+            guard let data,
+                  let text = String(data: data, encoding: .utf8),
                   let item = EditorTabDrag.item(from: text)
             else { return }
             DispatchQueue.main.async {
@@ -87,7 +142,7 @@ struct EditorCellDropDelegate: DropDelegate {
     }
 
     private func resolve(_ info: DropInfo) -> EditorDropZone {
-        EditorDropZone.resolve(point: info.location, in: size)
+        EditorDropZone.resolve(point: info.location, in: size, barHeight: barHeight)
     }
 }
 

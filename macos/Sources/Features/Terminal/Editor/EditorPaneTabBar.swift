@@ -73,25 +73,9 @@ struct EditorPaneTabBar: View {
 
     private var cell: EditorTabSet { center.tabs(in: groupID) }
 
-    /// A bar appears once there is something to switch to — or somewhere to
-    /// drag to.
-    ///
-    /// Files in the cell are the first case, and the only one that used to
-    /// exist: a lone terminal offered no choice, so a bar over it would have
-    /// been a control that does nothing while costing the terminal a row of
-    /// its height.
-    ///
-    /// A grid adds the second. The terminal's tab is the handle for moving the
-    /// terminal, so a terminal alone in its cell still needs it as soon as
-    /// there is another cell to move it to — without the tab, the reader who
-    /// split the pane has no way to put the shell somewhere else. Alone in the
-    /// *whole* grid it stays bare, which is both the old look and the honest
-    /// one: there is nowhere to drag it, and a drop on its own cell's edge is
-    /// already a no-op.
-    private var showsBar: Bool {
-        if !cell.isEmpty { return true }
-        return center.hostsTerminal(groupID) && center.tree.groups.count > 1
-    }
+    /// See `EditorCenter.showsTabBar(in:)`, which is where the rule lives so
+    /// the drop can read the same answer.
+    private var showsBar: Bool { center.showsTabBar(in: groupID) }
 
     private func resolveDivergence() {
         let directory = terminalDirectory.path

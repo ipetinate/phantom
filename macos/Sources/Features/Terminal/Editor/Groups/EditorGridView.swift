@@ -54,6 +54,12 @@ private struct EditorGridNode: View {
                 search: search,
                 terminal: terminal
             )
+            /// Identified by the cell it draws, and that is load-bearing.
+            /// Without it SwiftUI matches these views by position when the
+            /// grid reshapes, and a cell's `@State` outlives the cell — which
+            /// is how a drop that collapsed one pane left the other wearing
+            /// the drop panel with nothing being dragged.
+            .id(group.id)
 
         case .split(let split):
             SplitView(
@@ -115,6 +121,7 @@ private struct EditorGridCell: View {
                 surface
             }
             .overlay(alignment: .topLeading) { highlight(in: geometry.size) }
+            .animation(.easeOut(duration: 0.12), value: dropZone)
             /// Cleared whenever the grid changes shape, which a completed
             /// drop always does. `dropExited` covers a drag that leaves the
             /// cell, but a session that dies mid-flight — the pointer never
@@ -122,34 +129,82 @@ private struct EditorGridCell: View {
             /// painted over a pane nobody is dragging onto.
             .onChange(of: center.tree) { _ in dropZone = nil }
             .onDrop(
-                of: [.plainText, .text],
+                of: [EditorTabDrag.type],
                 delegate: EditorCellDropDelegate(
                     size: geometry.size,
+                    barHeight: center.showsTabBar(in: group.id) ? EditorTabBar.height : 0,
                     zone: { dropZone = $0 },
                     perform: { item, zone in
                         center.drop(item, on: group.id, zone: zone)
-                    }
+                    },
+                    label: cellLabel
                 )
             )
         }
     }
 
-    /// The shape the arriving tab would take, drawn over the cell.
+    /// The shape the arriving tab would take, drawn over the cell: a blurred
+    /// panel, a hairline ring in the theme's accent, and a word for what the
+    /// drop will do.
     ///
-    /// Hit testing off: the highlight sits above the cell while a drag is in
-    /// flight, and a view that answered the pointer there would take the drop
-    /// away from the delegate underneath it.
+    /// Blurred rather than tinted. A translucent wash over a terminal full of
+    /// output left the text legible underneath and the panel looking like a
+    /// stain; a material makes the region read as a *destination* — the
+    /// content behind it is still placed, but plainly not the subject.
+    ///
+    /// Edge to edge, with only the corners rounded. Inset by a few points it
+    /// left a frame of bare window showing on all four sides, which read as
+    /// the panel being broken rather than as a margin.
+    ///
+    /// Hit testing off: this sits above the cell while a drag is in flight,
+    /// and a view that answered the pointer here would take the drop away
+    /// from the delegate underneath it.
     @ViewBuilder
     private func highlight(in size: CGSize) -> some View {
         if let dropZone {
             let rect = dropZone.highlight(in: size)
             let accent = palette.accent ?? .accentColor
-            Rectangle()
-                .fill(accent.opacity(0.22))
-                .overlay(Rectangle().strokeBorder(accent.opacity(0.7), lineWidth: 2))
-                .frame(width: rect.width, height: rect.height)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(accent.opacity(0.85), lineWidth: 1)
+                }
+                .overlay { dropLabel(for: dropZone, accent: accent) }
+                .frame(width: max(rect.width, 0), height: max(rect.height, 0))
                 .offset(x: rect.minX, y: rect.minY)
                 .allowsHitTesting(false)
+        }
+    }
+
+    /// How this cell is named in the breadcrumbs. A log that says only "a
+    /// cell" cannot tell two of them apart, which is exactly the question a
+    /// drag that went to the wrong half raises.
+    private var cellLabel: String {
+        if center.hostsTerminal(group.id) { return "terminal cell" }
+        let name = group.tabs.selectedPath.map { ($0 as NSString).lastPathComponent }
+        return "cell(\(name ?? "empty"))"
+    }
+
+    /// What the drop will do, said in the destination it will do it to.
+    ///
+    /// Two answers, because there are two: the centre and the bar take the tab
+    /// into this cell, an edge makes a cell of its own. Naming the outcome
+    /// beats naming the gesture — the reader already knows they are dragging.
+    private func dropLabel(for zone: EditorDropZone, accent: Color) -> some View {
+        let isMove = zone == .center
+        return HStack(spacing: 6) {
+            Image(systemName: isMove ? "arrow.down.right.square" : "rectangle.split.2x1")
+                .font(.system(size: 11, weight: .semibold))
+            Text(isMove ? "Move here" : "Split here")
+                .font(palette.font(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(accent)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.thinMaterial, in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(accent.opacity(0.35), lineWidth: 1)
         }
     }
 

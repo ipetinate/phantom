@@ -23,6 +23,31 @@ extension EditorDropZone {
     /// enough that the middle half of a cell still means "move it here".
     static let defaultEdgeFraction: CGFloat = 0.25
 
+    /// The zone a point falls in, over a cell whose bar is `barHeight` tall.
+    ///
+    /// The bar is a join, never a split. That is the convention every editor
+    /// with this gesture uses, and here it is also what makes the gesture
+    /// *reversible*: a drag starts on a tab, so it starts at the top of a
+    /// cell, and dragging it straight across to another cell arrives at the
+    /// top of that one. With the bar resolving like any other top edge, the
+    /// most natural gesture in the feature — take this tab back — split the
+    /// grid into rows instead of merging it, every time.
+    static func resolve(
+        point: CGPoint,
+        in size: CGSize,
+        barHeight: CGFloat,
+        edgeFraction: CGFloat = defaultEdgeFraction
+    ) -> EditorDropZone {
+        guard barHeight > 0 else {
+            return resolve(point: point, in: size, edgeFraction: edgeFraction)
+        }
+        guard point.y > barHeight else { return .center }
+
+        let surface = CGSize(width: size.width, height: size.height - barHeight)
+        let local = CGPoint(x: point.x, y: point.y - barHeight)
+        return resolve(point: local, in: surface, edgeFraction: edgeFraction)
+    }
+
     /// The zone a point falls in.
     ///
     /// `point` is in the cell's own coordinates **with y increasing

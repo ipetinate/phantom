@@ -194,6 +194,30 @@ final class EditorCenter: ObservableObject {
         tree.group(id)?.hostsTerminal ?? false
     }
 
+    /// Whether a cell draws a bar of tabs.
+    ///
+    /// Files in the cell are the first reason, and the only one that used to
+    /// exist: a lone terminal offered no choice, so a bar over it would have
+    /// been a control that does nothing while costing the terminal a row of
+    /// its height.
+    ///
+    /// A grid adds the second. The terminal's tab is the handle for moving
+    /// the terminal, so a terminal alone in its cell still needs it as soon
+    /// as there is another cell to move it to. Alone in the whole grid it
+    /// stays bare, which is both the old look and the honest one — there is
+    /// nowhere to drag it, and a drop on its own cell is already a no-op.
+    ///
+    /// Answered here rather than in the bar because the *drop* needs it too:
+    /// a tab dropped on a bar joins that cell, and a cell with no bar has no
+    /// such strip to aim at. Two copies of this rule would eventually
+    /// disagree, and the disagreement would read as a split appearing where
+    /// the reader aimed to merge.
+    func showsTabBar(in id: EditorGroup.ID) -> Bool {
+        let cell = tabs(in: id)
+        if !cell.isEmpty { return true }
+        return hostsTerminal(id) && tree.groups.count > 1
+    }
+
     /// What a particular cell is showing, if it is showing a file.
     func selected(in id: EditorGroup.ID) -> OpenPane? {
         guard let path = tabs(in: id).selectedPath else { return nil }

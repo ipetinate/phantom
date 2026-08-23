@@ -356,6 +356,52 @@ struct EditorDropZoneTests {
         #expect(EditorDropZone.resolve(point: CGPoint(x: 900, y: 100), in: size) == .trailing)
     }
 
+    // MARK: The bar is a join
+
+    /// The bug this rule exists for, pinned: a drag starts on a tab, so it
+    /// starts at the top of a cell and arrives at the top of the next one.
+    /// With the bar resolving like any other top edge, taking a tab back
+    /// split the grid into rows instead of merging it — every time, which is
+    /// how it was reported.
+    @Test func aDropOnTheBarMeansMoveHere() {
+        let bar: CGFloat = 39
+        #expect(
+            EditorDropZone.resolve(
+                point: CGPoint(x: 200, y: 10), in: size, barHeight: bar) == .center)
+        #expect(
+            EditorDropZone.resolve(
+                point: CGPoint(x: 20, y: 30), in: size, barHeight: bar) == .center)
+    }
+
+    /// Below the bar the edges still divide, measured against the surface
+    /// rather than against the whole cell — otherwise the band would sit a
+    /// bar's height off.
+    @Test func theSurfacesEdgesStillSplit() {
+        let bar: CGFloat = 39
+        let surfaceHeight = size.height - bar
+
+        #expect(
+            EditorDropZone.resolve(
+                point: CGPoint(x: 200, y: bar + surfaceHeight * 0.05),
+                in: size, barHeight: bar) == .top)
+        #expect(
+            EditorDropZone.resolve(
+                point: CGPoint(x: 200, y: bar + surfaceHeight * 0.5),
+                in: size, barHeight: bar) == .center)
+        #expect(
+            EditorDropZone.resolve(
+                point: CGPoint(x: 10, y: bar + surfaceHeight * 0.5),
+                in: size, barHeight: bar) == .leading)
+    }
+
+    /// A cell with no bar has no strip to aim at, so the plain geometry
+    /// applies and the top edge is a top edge again.
+    @Test func withNoBarTheTopEdgeIsAnEdge() {
+        #expect(
+            EditorDropZone.resolve(
+                point: CGPoint(x: 200, y: 5), in: size, barHeight: 0) == .top)
+    }
+
     @Test func onlyTheCentreAsksForNoSplit() {
         #expect(EditorDropZone.center.split == nil)
         #expect(EditorDropZone.leading.split?.onFirstSide == true)

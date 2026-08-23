@@ -113,6 +113,18 @@
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Phantom Editor Tab</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.ipetinate.phantom.editorTab</string>
+			<key>UTTypeTagSpecification</key>
+			<dict/>
+		</dict>
+		<dict>
 			<key>UTTypeIdentifier</key>
 			<string>com.mitchellh.ghosttySurfaceId</string>
 			<key>UTTypeDescription</key>
