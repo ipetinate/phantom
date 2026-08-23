@@ -1,9 +1,10 @@
 <!-- LOGO -->
 <h1>
-<p align="center">
-  <img src="images/phantom-logo.png" alt="Phantom" width="140">
-  <br>Phantom
-</h1>
+  <p align="center">
+      <img src="https://github.com/user-attachments/assets/756ed832-98c8-4c3a-8e66-4e6b9749f27e" alt="Phantom" width="140" />
+      <br>Phantom
+    </h1>
+
   <p align="center">
     A Ghostty-powered terminal built around coding agents: tabs grouped by
     project, git/PR/dev-server status on every row, and a Claude Code
@@ -19,6 +20,10 @@
     <a href="HACKING.md">Building</a>
   </p>
 </p>
+
+<img width="1710" height="1073" alt="Screenshot 2026-08-23 at 15 51 26" src="https://github.com/user-attachments/assets/4b199a7b-6ce8-4abe-8d3d-c28cccd96ad2" />
+
+
 
 > Phantom is a personal fork of [Ghostty](https://github.com/ghostty-org/ghostty)
 > by [Mitchell Hashimoto](https://github.com/mitchellh) and its contributors.
