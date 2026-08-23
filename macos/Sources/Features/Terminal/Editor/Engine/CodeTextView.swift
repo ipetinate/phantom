@@ -1427,6 +1427,17 @@ final class CodeNSTextView: NSTextView {
     private var hoverOffset: Int?
     private var hoverTask: Task<Void, Never>?
 
+    /// Where on screen the word the card describes is drawn.
+    ///
+    /// Held rather than recomputed because the question every close asks is
+    /// "is the pointer still hovering?", and answering it needs the *word* as
+    /// well as the card: the card sits a gap below the line, so the pointer is
+    /// legitimately on one, on the other, or between the two. Recomputing it
+    /// from `hoverOffset` would not do — a scroll moves the glyphs and leaves
+    /// the card where it was, and the rectangle that matters is the one the
+    /// card was actually placed against.
+    private var hoverSymbol: NSRect?
+
     /// How long the pointer must rest before a look-up is asked for.
     ///
     /// A property rather than a literal so a test can state its own timing
@@ -1451,6 +1462,12 @@ final class CodeNSTextView: NSTextView {
     /// mean "gone". Every card anybody reached for was dismissed on the way.
     /// Each move restarts the clock, so a card survives a pointer heading for
     /// it and closes shortly after the pointer settles somewhere else.
+    ///
+    /// The delay alone was not enough, and this is the part worth remembering:
+    /// a delay only helps a pointer that keeps moving. `hoverHoldsPointer` is
+    /// what decides whether the card is still wanted when the clock runs out,
+    /// and it has to name the word and the gap as well as the card — a reader
+    /// pausing to read, halfway across, is the most ordinary thing there is.
     ///
     /// A `var` for the same reason `hoverFetchDelay` is one: what is worth
     /// testing here is *when* the close happens, and a test that has to sleep
@@ -1637,8 +1654,13 @@ final class CodeNSTextView: NSTextView {
         super.mouseMoved(with: event)
         guard let hoverProvider else { return }
 
-        // While the pointer is on the card, the card is what it is pointing at.
-        guard hoverPanel?.containsPointer != true else { return }
+        /// Still on the card, still on the word it describes, or still crossing
+        /// the gap between them: the reader is pointing at the same thing, so
+        /// there is nothing to look up and nothing to close. Leaving the word
+        /// out of this is what made a pointer moving *along* a symbol kill its
+        /// own card — every character is a different offset, and each one
+        /// scheduled a close that only the card itself could survive.
+        guard !hoverHoldsPointer() else { return }
 
         let point = convert(event.locationInWindow, from: nil)
         let offset = characterIndexForInsertion(at: point)
@@ -1670,27 +1692,46 @@ final class CodeNSTextView: NSTextView {
 
     /// Puts the card beside the hovered word.
     ///
-    /// Anchored to the **word**, not to the pointer: a card that follows the
-    /// mouse to the pixel jitters while you read it, and what is being
-    /// described is the symbol, which does not move.
+    /// Anchored to the **word** — the whole identifier under the pointer, not
+    /// the one character it happens to be over. A per-character anchor moved
+    /// the card sideways by a glyph on every move within the same symbol, and
+    /// re-presenting a card is what pulls it out from under a pointer already
+    /// resting on it.
+    ///
+    /// An answer that arrives while the reader is holding the card is
+    /// **dropped**. It describes the last offset the pointer crossed on its
+    /// way there, which is behind the card by now, and showing it would move
+    /// the card to that offset's line — the exit that followed hid the card,
+    /// half a second after the reader reached it. This is the dismissal the
+    /// report was about.
     private func showHover(_ info: CodeHoverInfo, at offset: Int) {
-        let length = (string as NSString).length
-        guard length > 0 else { return }
-        let range = NSRange(location: min(offset, length - 1), length: 1)
-        let anchor = firstRect(forCharacterRange: range, actualRange: nil)
+        guard !hoverHoldsPointer() else { return }
+
+        let content = string as NSString
+        guard content.length > 0 else { return }
+        let anchor = firstRect(
+            forCharacterRange: Self.symbolRange(in: content, containing: offset),
+            actualRange: nil
+        )
         guard anchor.height > 0 else { return }
 
         // A fresh card cancels the close the last one was waiting on, or it
         // would be shut 400ms after opening.
         dismissTask?.cancel()
+        hoverSymbol = anchor
 
         let panel = hoverPanel ?? CodeHoverPanel()
         hoverPanel = panel
         panel.onPointerExit = { [weak self] in
-            // Cleared as well as hidden, so that coming back to the same word
-            // opens the card again instead of the offset guard swallowing it.
-            self?.hoverOffset = nil
-            self?.hideHover()
+            guard let self else { return }
+            /// Cleared as well as closed, so that coming back to the same word
+            /// opens the card again instead of the offset guard swallowing it.
+            self.hoverOffset = nil
+            /// The same grace the text view's own exit gets, for the same
+            /// reason turned around: leaving the card *upwards* lands on the
+            /// word it describes, and that is not a reader who is finished.
+            self.hoverTask?.cancel()
+            self.scheduleHoverDismissal()
         }
         panel.present(
             info,
@@ -1701,7 +1742,8 @@ final class CodeNSTextView: NSTextView {
         )
     }
 
-    /// Closes the card unless the pointer reached it in the meantime.
+    /// Closes the card unless `hoverHoldsPointer` still answers yes when the
+    /// clock runs out — the pointer arrived, never left, or is still crossing.
     ///
     /// Closes the *window* and nothing else — deliberately not `hideHover`,
     /// which also cancels the pending look-up. `hoverDismissDelay` is shorter
@@ -1711,18 +1753,50 @@ final class CodeNSTextView: NSTextView {
         dismissTask?.cancel()
         dismissTask = Task { @MainActor [weak self, hoverDismissDelay] in
             try? await Task.sleep(for: hoverDismissDelay)
-            guard !Task.isCancelled, let self,
-                  self.hoverPanel?.containsPointer != true
-            else { return }
+            guard !Task.isCancelled, let self else { return }
+            guard !self.hoverHoldsPointer() else { return }
+
+            /// A button held down while the card has focus is a selection
+            /// being dragged out of it, and overshooting the card's edge must
+            /// not take the text away mid-drag. Re-armed rather than skipped:
+            /// the button coming up outside the card produces no event this
+            /// view or the card would hear, so nothing else is guaranteed to
+            /// ask again, and a card that fails to close is the worse bug.
+            if self.isDraggingFromCard {
+                self.scheduleHoverDismissal()
+                return
+            }
+
+            self.hoverSymbol = nil
             self.hoverPanel?.dismiss()
             self.onHoverDismiss?()
         }
+    }
+
+    /// Whether the pointer is somewhere that still counts as hovering: on the
+    /// card, on the word it describes, or in the gap between the two.
+    ///
+    /// False with no card up, which is what makes it safe to ask from every
+    /// close: the answer then is "nothing is being held".
+    private func hoverHoldsPointer() -> Bool {
+        guard let hoverPanel, let hoverSymbol else { return false }
+        return hoverPanel.retainsPointer(describing: hoverSymbol)
+    }
+
+    /// Whether a mouse button is down *and* the card is the window holding
+    /// focus, which together mean the drag belongs to the card.
+    ///
+    /// The focus half matters: a drag in the editor is a selection in the
+    /// code, and that already closed the card on its first press.
+    private var isDraggingFromCard: Bool {
+        NSEvent.pressedMouseButtons != 0 && hoverPanel?.isKeyWindow == true
     }
 
     /// Stops everything: no card, and no card on its way.
     private func hideHover() {
         hoverTask?.cancel()
         dismissTask?.cancel()
+        hoverSymbol = nil
         hoverPanel?.dismiss()
         onHoverDismiss?()
     }
@@ -1734,10 +1808,11 @@ final class CodeNSTextView: NSTextView {
     /// it describes, and it takes mouse events so a long description can be
     /// scrolled or a line selected out of it. Reaching for it therefore means
     /// leaving this view, and for the few points of the crossing the pointer
-    /// is on neither: `containsPointer` catches the pointer that has already
-    /// arrived, and closing at once dismissed every card that was still on its
-    /// way to being reached. The delay covers the gap; a pointer that
-    /// genuinely left is rid of the card a moment later either way.
+    /// is on neither window: `hoverHoldsPointer` counts that crossing as
+    /// hovering, and closing at once dismissed every card that was still on
+    /// its way to being reached. The delay is kept on top of the geometry,
+    /// because a reach is a hand movement and not a straight line; a pointer
+    /// that genuinely left is rid of the card a moment later either way.
     ///
     /// The look-up is abandoned immediately even though the window is not.
     /// They are separate on purpose — see `scheduleHoverDismissal` — and the
@@ -1745,7 +1820,7 @@ final class CodeNSTextView: NSTextView {
     /// a word nobody is pointing at.
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        guard hoverPanel?.containsPointer != true else { return }
+        guard !hoverHoldsPointer() else { return }
         hoverOffset = nil
         hoverTask?.cancel()
         scheduleHoverDismissal()
@@ -1754,12 +1829,53 @@ final class CodeNSTextView: NSTextView {
     /// A card is a window, and a window outlives the view that opened it. Left
     /// alone it would stay on screen after its tab was closed, describing a
     /// symbol in a file that is no longer showing.
+    ///
+    /// The same window is what the focus observation is hung on, re-hung here
+    /// because a text view moves between windows — a tab dragged out of one
+    /// carries this view with it, and an observation left on the old window
+    /// would report a resignation that says nothing about this editor.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didResignKeyNotification,
+            object: nil
+        )
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(editorWindowDidResignKey),
+                name: NSWindow.didResignKeyNotification,
+                object: window
+            )
+        }
+
         if window == nil {
             hoverOffset = nil
             hideHover()
         }
+    }
+
+    /// The editor's window losing focus closes the card, because the card is a
+    /// floating window: left up it hangs over whatever the reader moved to,
+    /// describing a symbol in a file they are no longer looking at.
+    ///
+    /// Except when the pointer is on the card, which is the one resignation
+    /// that must not close anything — clicking into the card to select a line
+    /// is what makes the card key and this window resign, in that order, so a
+    /// handler that closed on every resignation would undo the selection it
+    /// was asked for. `hoverHoldsPointer` separates the two: the pointer is
+    /// inside the card in that case and somewhere else entirely in every
+    /// other.
+    ///
+    /// `hoverOffset` is cleared either way. Focus moving is exactly when the
+    /// reader may come back to the *same* word, and the guard against a
+    /// repeated offset would otherwise swallow the hover they asked for.
+    @objc private func editorWindowDidResignKey() {
+        hoverOffset = nil
+        guard !hoverHoldsPointer() else { return }
+        hideHover()
     }
 
     /// Anything that moves the text out from under the card closes it: the
@@ -2294,6 +2410,13 @@ final class CodeNSTextView: NSTextView {
     override func didChangeText() {
         super.didChangeText()
 
+        /// The card is pinned to a screen position and the text it describes has
+        /// just moved out from under it. `keyDown` covers what the reader types;
+        /// this covers every edit that arrives by another road — a paste, a
+        /// formatting pass, an undo, an edit the language server applied.
+        hoverOffset = nil
+        hideHover()
+
         guard let session = snippetSession, let edit = pendingEdit else { return }
         pendingEdit = nil
 
@@ -2337,14 +2460,52 @@ final class CodeNSTextView: NSTextView {
 
     static func identifierRange(in content: NSString, endingAt caret: Int) -> NSRange {
         var start = min(max(caret, 0), content.length)
-        while start > 0 {
-            let scalar = UnicodeScalar(content.character(at: start - 1)) ?? " "
-            let character = Character(scalar)
-            guard character.isLetter || character.isNumber || character == "_" || character == "$"
-            else { break }
+        while start > 0, isIdentifier(content.character(at: start - 1)) {
             start -= 1
         }
         return NSRange(location: start, length: min(max(caret, 0), content.length) - start)
+    }
+
+    /// The whole identifier an offset falls inside, or that single character
+    /// when it falls on something that is not one.
+    ///
+    /// What the hover card is anchored to, and it reaches *both* ways where
+    /// `identifierRange` only reaches back from a caret: the pointer lands in
+    /// the middle of a word as often as at its end. Anchoring to the one
+    /// character under the pointer instead moved the card by a glyph on every
+    /// move within the same symbol, and a card that moves is a card the
+    /// pointer is no longer on.
+    ///
+    /// A single character for punctuation and for whitespace, which is the
+    /// honest anchor for a hover over an operator — servers do answer for
+    /// those. Empty only for an empty document, which the caller rejects
+    /// before asking.
+    static func symbolRange(in content: NSString, containing offset: Int) -> NSRange {
+        guard content.length > 0 else { return NSRange(location: 0, length: 0) }
+
+        let clamped = min(max(offset, 0), content.length - 1)
+        guard isIdentifier(content.character(at: clamped)) else {
+            return NSRange(location: clamped, length: 1)
+        }
+
+        var start = clamped
+        while start > 0, isIdentifier(content.character(at: start - 1)) { start -= 1 }
+
+        var end = clamped + 1
+        while end < content.length, isIdentifier(content.character(at: end)) { end += 1 }
+
+        return NSRange(location: start, length: end - start)
+    }
+
+    /// Whether a UTF-16 unit can be part of an identifier.
+    ///
+    /// One rule in one place, because two copies of it drift: `$` counts for
+    /// the reason `identifierRange` gives — it is legal in JavaScript, and
+    /// dropping it completes `$el` as `el` — and it has to count for the hover
+    /// anchor too, or the card opens against half a name.
+    static func isIdentifier(_ unit: unichar) -> Bool {
+        let character = Character(UnicodeScalar(unit) ?? " ")
+        return character.isLetter || character.isNumber || character == "_" || character == "$"
     }
 
     private func makeCompletionPanel() -> CodeCompletionPanel {

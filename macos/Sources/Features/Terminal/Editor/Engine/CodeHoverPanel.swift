@@ -57,10 +57,10 @@ final class CodeHoverPanel: NSPanel {
     /// that only comes if you go back to the code.
     var onPointerExit: (() -> Void)?
 
-    /// Where the pointer actually is, for `containsPointer` below.
+    /// Where the pointer actually is, for `retainsPointer` below.
     ///
     /// Real hardware in production. Tests substitute a fixed point, because
-    /// `containsPointer` is what decides whether the card survives being
+    /// `retainsPointer` is what decides whether the card survives being
     /// reached for — and a test that depends on where the developer's actual
     /// cursor happens to sit is not a test, it's a coin flip.
     var pointerLocationProvider: () -> NSPoint = { NSEvent.mouseLocation }
@@ -146,17 +146,29 @@ final class CodeHoverPanel: NSPanel {
     /// `becomesKeyOnlyIfNeeded` above.
     override var canBecomeMain: Bool { false }
 
-    /// Whether the pointer is over the card.
+    /// Whether the pointer is still hovering, given the word this card
+    /// describes at `symbol` in screen coordinates.
     ///
-    /// Asked before hiding on `mouseExited`: the card is placed over the text,
-    /// so moving the pointer onto it *is* leaving the text view, and a card
-    /// that vanishes when you reach for its scroller cannot be scrolled or its
-    /// text selected.
-    var containsPointer: Bool {
-        Self.contains(point: pointerLocationProvider(), in: frame, isVisible: isVisible)
+    /// Asked before every close, and it is three places rather than one. The
+    /// card is a separate window `PanelPlacement.gap` points clear of the
+    /// line, so "the pointer left the word" and "the reader is done" are
+    /// different facts — the first happens on the way to the second. Only the
+    /// card counted before, and that lost the two cases the reader actually
+    /// hits: a pointer moving across the very word being described closed the
+    /// card, because each character is a new offset, and a look-up that
+    /// answered while the reader was already reading re-presented the card
+    /// somewhere else, which pulled it out from under the pointer and fired
+    /// the exit that hid it.
+    func retainsPointer(describing symbol: NSRect) -> Bool {
+        Self.retains(
+            point: pointerLocationProvider(),
+            symbol: symbol,
+            card: frame,
+            isVisible: isVisible
+        )
     }
 
-    /// The pure rule behind `containsPointer`, with visibility taken as a
+    /// The pure rule behind `retainsPointer`, with visibility taken as a
     /// value rather than read from the window.
     ///
     /// Split out so it can be tested: `isVisible` only becomes true by
@@ -164,6 +176,42 @@ final class CodeHoverPanel: NSPanel {
     /// that from a test process with no running application event loop is
     /// how the earlier version of these tests hung the whole suite instead
     /// of failing it.
+    static func retains(point: NSPoint, symbol: NSRect, card: NSRect, isVisible: Bool) -> Bool {
+        guard isVisible else { return false }
+        if card.contains(point) || symbol.contains(point) { return true }
+        return crossing(from: symbol, to: card).contains(point)
+    }
+
+    /// The band the pointer has to cross to get from the word to the card.
+    ///
+    /// For the length of that crossing the pointer is on neither, and that is
+    /// where every card anybody reached for used to die. The band spans both
+    /// rectangles horizontally rather than only the part they share: the card
+    /// is clamped to the display and the word is one word wide, so the two
+    /// rarely start at the same x, and cutting the corridor to the overlap
+    /// drops a diagonal reach for the middle of the card. Being generous
+    /// sideways costs nothing — the band is only as tall as the gap, and what
+    /// sits directly under it is the card.
+    ///
+    /// `NSRect.null` when the two already meet, since there is then nothing to
+    /// cross and no point is inside a null rectangle. Written from the two
+    /// rectangles rather than from the chosen edge so it holds for a card that
+    /// flipped above the line as well as one below it.
+    static func crossing(from symbol: NSRect, to card: NSRect) -> NSRect {
+        let lower = min(symbol.maxY, card.maxY)
+        let upper = max(symbol.minY, card.minY)
+        guard upper > lower else { return .null }
+
+        let left = min(symbol.minX, card.minX)
+        let right = max(symbol.maxX, card.maxX)
+        return NSRect(x: left, y: lower, width: right - left, height: upper - lower)
+    }
+
+    /// Whether a point is inside a frame the window is actually showing.
+    ///
+    /// A dismissed panel keeps the frame it was last shown at, so the
+    /// visibility half is not decoration: without it a cursor left sitting
+    /// where a card used to be reads as "on the card".
     static func contains(point: NSPoint, in frame: NSRect, isVisible: Bool) -> Bool {
         isVisible && frame.contains(point)
     }
@@ -265,7 +313,7 @@ final class CodeHoverPanel: NSPanel {
     /// inspect it without a panel, a window, or the window server any of the
     /// rest of this class needs.
     static func label(_ text: NSAttributedString, width: CGFloat) -> NSTextField {
-        let field = NSTextField(labelWithAttributedString: text)
+        let field = ReadableLabel(labelWithAttributedString: text)
         field.isSelectable = true
         // A selectable-but-not-editable field still routes clicks through
         // the shared field editor, and that editor draws from `stringValue`
@@ -280,6 +328,18 @@ final class CodeHoverPanel: NSPanel {
         field.translatesAutoresizingMaskIntoConstraints = false
         field.widthAnchor.constraint(lessThanOrEqualToConstant: width).isActive = true
         return field
+    }
+
+    /// A label whose *first* click already selects, or already follows a link.
+    ///
+    /// `NSTextField` answers false to `acceptsFirstMouse`, and this card is
+    /// never the key window until somebody clicks it — so the press that made
+    /// it key was swallowed and the drag it belonged to went with it. Selecting
+    /// a line took two gestures, and the first one looked like nothing had
+    /// happened, which is indistinguishable from text that cannot be selected
+    /// at all.
+    private final class ReadableLabel: NSTextField {
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     }
 
     private func separator(color: NSColor) -> NSView {
@@ -327,7 +387,8 @@ final class CodeHoverPanel: NSPanel {
             return proseText(
                 markdown,
                 font: .systemFont(ofSize: font.pointSize + 1),
-                color: theme.foreground.withAlphaComponent(0.75)
+                color: theme.foreground.withAlphaComponent(0.75),
+                link: theme.color(for: .function)
             )
         }
     }
@@ -379,10 +440,18 @@ final class CodeHoverPanel: NSPanel {
     /// and emphasis in it, not a document with headings and lists. Parsing it
     /// as a full document would reflow whitespace the author meant to keep,
     /// and failing to parse it at all would leave backticks on screen.
+    ///
+    /// `link` is the colour a URL is drawn in, and it has to be applied here
+    /// rather than left to the parser: the base colour below is laid over the
+    /// whole string, which flattened every link the markdown carried into
+    /// ordinary prose. A link that does not look like one is a link nobody
+    /// clicks, and the whole reason the card holds the pointer now is so that
+    /// the ones in a server's documentation can be reached.
     private static func proseText(
         _ markdown: String,
         font: NSFont,
-        color: NSColor
+        color: NSColor,
+        link: NSColor
     ) -> NSAttributedString {
         let parsed = try? AttributedString(
             markdown: markdown,
@@ -414,6 +483,19 @@ final class CodeHoverPanel: NSPanel {
                     range: range
                 )
             }
+        }
+
+        /// The same treatment `MarkdownInline` gives a link in the preview, so
+        /// a URL in a doc comment looks the same in both places. `NSTextField`
+        /// opens it on its own once the field is selectable and allowed to keep
+        /// its attributes, which `label` sets — no delegate involved.
+        result.enumerateAttribute(.link, in: full) { value, range, _ in
+            guard value != nil else { return }
+            result.addAttributes([
+                .foregroundColor: link,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .underlineColor: link.withAlphaComponent(0.4),
+            ], range: range)
         }
         return result
     }
