@@ -250,8 +250,82 @@ struct MarkdownRendererTests {
         #expect(render("before\n\n<!-- hidden -->\n\nafter").text.string.contains("hidden") == false)
     }
 
-    @Test func rawHtmlIsShownAsSource() {
-        #expect(render("<div align=\"center\">\n  hi\n</div>").text.string.contains("<div align=\"center\">"))
+    /// Markup whose meaning *is* its layout keeps the panel it has always
+    /// had. Flattening a table to a paragraph of cells would be a worse
+    /// answer than admitting this preview does not draw one — see
+    /// `MarkdownHTMLTests` for the whole in-and-out list.
+    @Test func htmlThisCannotDrawIsShownAsSource() {
+        let table = render("<table>\n  <tr><td>1</td></tr>\n</table>").text.string
+        #expect(table.contains("<table>"))
+        #expect(render("<details>\n<summary>More</summary>\nhidden\n</details>").text.string.contains("<summary>"))
+    }
+
+    /// ⚠️ The reported bug, in the shape it arrives in: the header at the top
+    /// of half the repositories on GitHub. Every part of it — the wrapper, the
+    /// image, the link — used to be drawn as a panel of raw source, because
+    /// `p` opens an HTML block and the block swallows the lines under it.
+    @Test func theCentredLogoHeaderIsDrawnRatherThanShown() {
+        let readme = """
+        <p align="center">
+            <a href="https://phantom.sh"><img src="docs/logo.png" alt="Phantom" width="180"></a>
+        </p>
+
+        # Phantom
+        """
+
+        let output = render(readme)
+        let rendered = output.text.string
+        #expect(!rendered.contains("<img"))
+        #expect(!rendered.contains("<p align"))
+        /// The logo file is not there, so what is drawn is the alt text — as a
+        /// link, which is the destination the wrapper was carrying.
+        #expect(rendered.contains("Phantom"))
+        #expect(attributes(.link, in: output.text).compactMap { $0 as? URL }.first?.host == "phantom.sh")
+    }
+
+    /// The wrapper's own alignment, applied to everything inside it.
+    @Test func aCentredWrapperCentresWhatItHolds() {
+        let text = render("<div align=\"center\">\n  Tagline\n</div>").text
+        let alignments = attributes(.paragraphStyle, in: text)
+            .compactMap { $0 as? NSParagraphStyle }
+            .map(\.alignment)
+        #expect(alignments.contains(.center))
+        #expect(text.string.contains("Tagline"))
+    }
+
+    /// An HTML heading is a heading, which is what the re-parse buys: the
+    /// reduction is markdown, so it gets the rule and the size a `#` would.
+    @Test func anHtmlHeadingIsDrawnAsAHeading() {
+        let heading = render("<h1 align=\"center\">Phantom</h1>").text
+        let paragraph = render("Phantom").text
+        let headingSize = fonts(in: heading).first?.pointSize ?? 0
+        let bodySize = fonts(in: paragraph).first?.pointSize ?? 0
+        #expect(headingSize > bodySize)
+        #expect(!heading.string.contains("#"))
+    }
+
+    /// Inline markup inside a paragraph, which never reached the HTML block
+    /// path at all: it used to be drawn as literal source in the middle of
+    /// the prose.
+    @Test func inlineMarkupInsideProseIsDrawn() {
+        let text = render("Press <kbd>Cmd</kbd> for <b>more</b>.<br>Then stop.").text
+        #expect(!text.string.contains("<kbd>"))
+        #expect(!text.string.contains("<br>"))
+        #expect(text.string.contains("Cmd"))
+        #expect(fonts(in: text).contains { $0.fontDescriptor.symbolicTraits.contains(.bold) })
+        #expect(fonts(in: text).contains { $0.fontDescriptor.symbolicTraits.contains(.monoSpace) })
+    }
+
+    /// A `<br>` alone is a spacer, and markup with nothing to say draws
+    /// nothing rather than a panel showing the reader a `<br>`.
+    @Test func markupWithNothingToSayDrawsNothing() {
+        #expect(!render("a\n\n<br>\n\nb").text.string.contains("<br>"))
+    }
+
+    /// Prose that only looks like markup is left alone — the case a reducer
+    /// that deleted unknown tags would silently eat.
+    @Test func genericsInProseSurviveTheReduction() {
+        #expect(render("A `Vec<String>` and a Map<K, V> in prose.").text.string.contains("Map<K, V>"))
     }
 
     /// The honest version of "we do not evaluate JSX".
@@ -262,10 +336,12 @@ struct MarkdownRendererTests {
     }
 
     /// An ordinary HTML element in an `.mdx` file is still markup, not a
-    /// component, and does not earn the label.
+    /// component, and does not earn the label. Shown with a `<table>`, since a
+    /// `<div>` is now drawn rather than shown — the distinction being tested is
+    /// between markup and a component, not between drawn and shown.
     @Test func aPlainElementInMdxIsNotLabelled() {
-        let rendered = render("<div>\n  hi\n</div>", flavor: .mdx).text.string
-        #expect(rendered.contains("<div>"))
+        let rendered = render("<table>\n  <tr><td>1</td></tr>\n</table>", flavor: .mdx).text.string
+        #expect(rendered.contains("<table>"))
         #expect(!rendered.contains("shown as source"))
     }
 
@@ -303,21 +379,76 @@ struct MarkdownRendererTests {
     }
 
     @Test func aLocalImageThatExistsIsDrawn() throws {
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("markdown-image-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let directory = try Self.directoryHoldingALogo()
         defer { try? FileManager.default.removeItem(at: directory) }
-
-        let image = NSImage(size: CGSize(width: 8, height: 4))
-        image.lockFocus()
-        NSColor.red.drawSwatch(in: CGRect(x: 0, y: 0, width: 8, height: 4))
-        image.unlockFocus()
-        guard let tiff = image.tiffRepresentation else { return }
-        try tiff.write(to: directory.appendingPathComponent("logo.tiff"))
 
         let text = render("![logo](./logo.tiff)", baseURL: directory).text
         #expect(!attributes(.attachment, in: text).isEmpty)
         #expect(!text.string.contains("image:"))
+    }
+
+    /// ⚠️ Foundation reports a plain `![alt](src)` as an `imageURL` and reports
+    /// a link *wrapping* one as a link with no image at all — so a logo inside
+    /// a link rendered as bare text until this shape was scanned for here.
+    @Test func aLocalImageInsideALinkIsDrawnAndStaysClickable() throws {
+        let directory = try Self.directoryHoldingALogo()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let text = render("[![logo](./logo.tiff)](https://phantom.sh)", baseURL: directory).text
+        #expect(!attributes(.attachment, in: text).isEmpty)
+        #expect(attributes(.link, in: text).compactMap { $0 as? URL }.first?.host == "phantom.sh")
+    }
+
+    /// The same shape written in HTML, which is how a README actually spells
+    /// it, and which reaches the same code by way of the reduction.
+    @Test func theHtmlSpellingOfALinkedLogoIsDrawnToo() throws {
+        let directory = try Self.directoryHoldingALogo()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let markup = "<p align=\"center\"><a href=\"https://phantom.sh\"><img src=\"logo.tiff\"></a></p>"
+        let text = render(markup, baseURL: directory).text
+        #expect(!attributes(.attachment, in: text).isEmpty)
+    }
+
+    /// A badge row is five remote images inside five links, and this preview
+    /// fetches none of them. The alt text as a link is what Foundation drew
+    /// before and is still the best reading: five "image: https://…" chips in
+    /// a row would be worse than the labels they stand for.
+    @Test func aBadgeKeepsItsLabelAndItsLink() {
+        let text = render("[![build](https://img.shields.io/badge.svg)](https://ci.example.com)").text
+        #expect(text.string.contains("build"))
+        #expect(!text.string.contains("image:"))
+        #expect(attributes(.link, in: text).compactMap { $0 as? URL }.first?.host == "ci.example.com")
+    }
+
+    /// An image wider than the column is scaled into it, so a screenshot
+    /// cannot run off the side of the prose it illustrates.
+    @Test func anImageWiderThanTheMeasureIsScaledDown() throws {
+        let directory = try Self.directoryHoldingALogo(size: CGSize(width: 4_000, height: 1_000))
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let text = render("![logo](./logo.tiff)", baseURL: directory).text
+        let attachment = try #require(attributes(.attachment, in: text).first as? NSTextAttachment)
+        #expect(attachment.bounds.width <= style.measure)
+        /// Scaled rather than cropped: the aspect ratio has to survive.
+        #expect(attachment.bounds.height == (attachment.bounds.width / 4).rounded())
+    }
+
+    /// A directory holding `logo.tiff`, drawn rather than fetched, so the
+    /// image tests do not depend on a file in the repository.
+    private static func directoryHoldingALogo(size: CGSize = CGSize(width: 8, height: 4)) throws -> URL {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("markdown-image-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.red.drawSwatch(in: CGRect(origin: .zero, size: size))
+        image.unlockFocus()
+
+        guard let tiff = image.tiffRepresentation else { return directory }
+        try tiff.write(to: directory.appendingPathComponent("logo.tiff"))
+        return directory
     }
 
     // MARK: - The map back to the source

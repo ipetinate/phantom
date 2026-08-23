@@ -361,6 +361,12 @@ private struct DocumentView: View {
     @AppStorage(EditorSettings.markdownSnippetsKey) private var markdownSnippets = true
     @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
 
+    /// Read here as well as inside `MarkdownWidthToggle`, which is what keeps
+    /// the two in step: the toggle writes the preference, `@AppStorage`
+    /// republishes this view, and the preview is handed the new column.
+    @AppStorage(EditorSettings.markdownPreviewWidthKey)
+    private var markdownPreviewWidth = EditorSettings.defaultMarkdownPreviewWidth.rawValue
+
     @State private var notice: String?
 
     /// The server log to offer alongside `notice`, captured at the moment
@@ -563,7 +569,15 @@ private struct DocumentView: View {
     private var presentationControl: some View {
         EditorPresentationControl(
             options: presentationOptions,
-            presentation: presentationBinding
+            presentation: presentationBinding,
+            /// The preview already owns this corner, so the column control
+            /// joins the cluster there instead of a Settings row nobody would
+            /// look for while reading a README — and instead of a second
+            /// floating box, which is the mistake the split toggle was moved
+            /// in here to undo.
+            extra: {
+                if showsRenderedMarkdown { MarkdownWidthToggle() }
+            }
         )
     }
 
@@ -573,8 +587,26 @@ private struct DocumentView: View {
         EditorPresentationControl(
             options: presentationOptions,
             presentation: presentationBinding,
-            extra: { SplitDirectionToggle(model: splitModel) }
+            /// An explicit stack rather than two views in the builder: `extra`
+            /// is padded as one element, and a bare pair would be padded as a
+            /// pair rather than laid out as two buttons.
+            extra: {
+                HStack(spacing: 1) {
+                    if showsRenderedMarkdown { MarkdownWidthToggle() }
+                    SplitDirectionToggle(model: splitModel)
+                }
+            }
         )
+    }
+
+    /// Whether prose is on screen for the column control to act on. False for
+    /// the source, for a diff, and for a split whose second pane is a diff.
+    private var showsRenderedMarkdown: Bool {
+        switch presentationOptions.nearest(to: document.presentation) {
+        case .preview: true
+        case .split: presentationOptions.splitPartner == .preview
+        case .source, .image, .table, .diff: false
+        }
     }
 
     private var presentationBinding: Binding<EditorPresentation> {
@@ -632,6 +664,8 @@ private struct DocumentView: View {
             fileURL: document.url,
             theme: theme,
             configuration: configuration,
+            width: MarkdownPreviewWidth(rawValue: markdownPreviewWidth)
+                ?? EditorSettings.defaultMarkdownPreviewWidth,
             scrollSync: splitModel.scrollSync,
             scrollSyncSide: .second,
             anchors: previewAnchors

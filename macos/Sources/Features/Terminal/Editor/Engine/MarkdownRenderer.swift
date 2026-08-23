@@ -130,6 +130,18 @@ struct MarkdownRenderer {
             /// and showing it as code would be the one case where being
             /// literal is less honest than being quiet.
             guard !isComment(source) else { return }
+
+            /// Markup this build can draw is drawn; everything else keeps the
+            /// source panel below. The decision is *here* rather than in the
+            /// parser for the reason this file opens with — the parser records
+            /// what a block is and hands over its raw text precisely so that
+            /// how much of it to draw stays a drawing question with no parser
+            /// test riding on it.
+            if let reduction = MarkdownHTML.block(source) {
+                appendHTML(reduction, to: out, document: document, indent: indent, containers: containers)
+                return
+            }
+
             appendSource(
                 source,
                 caption: document.flavor == .mdx && isComponent(source)
@@ -160,6 +172,69 @@ struct MarkdownRenderer {
                 indent: indent,
                 containers: containers
             )
+        }
+    }
+
+    /// Reduced HTML, drawn as the markdown it became.
+    ///
+    /// Parsed again rather than rendered inline, which is what buys the shapes
+    /// worth having: `<h1 align="center">` is a heading, `<hr>` is a rule, and
+    /// a wrapper full of images is a paragraph of images. The reduction can
+    /// hold no tag — `MarkdownHTML.block` refuses one that does — so this
+    /// cannot re-enter the HTML arm and go round again.
+    ///
+    /// The alignment is applied afterwards, over the range these blocks
+    /// occupy, because it belongs to the wrapper rather than to any one
+    /// paragraph inside it: `<div align="center">` centres a heading, a
+    /// tagline and a badge row alike.
+    private func appendHTML(
+        _ reduction: MarkdownHTML.Reduction,
+        to out: NSMutableAttributedString,
+        document: MarkdownDocument,
+        indent: CGFloat,
+        containers: [NSTextBlock]
+    ) {
+        let start = out.length
+        for block in MarkdownParser.parse(reduction.text).blocks {
+            append(block, to: out, document: document, indent: indent, containers: containers)
+        }
+
+        guard let alignment = reduction.alignment, out.length > start else { return }
+        align(out, in: NSRange(location: start, length: out.length - start), to: alignment)
+    }
+
+    /// Re-aligns everything already written into a range.
+    ///
+    /// The ranges are collected before anything is written, because
+    /// `enumerateAttribute` is reading the same attribute this is replacing.
+    /// The copies keep the *same* `NSTextBlock` instances, which is what stops
+    /// a re-aligned quote from becoming several stacked quotes with a bar each.
+    private func align(
+        _ text: NSMutableAttributedString,
+        in range: NSRange,
+        to alignment: MarkdownTable.Alignment
+    ) {
+        var found: [(NSRange, NSParagraphStyle)] = []
+        text.enumerateAttribute(.paragraphStyle, in: range) { value, subrange, _ in
+            guard let style = value as? NSParagraphStyle else { return }
+            found.append((subrange, style))
+        }
+
+        for (subrange, style) in found {
+            guard let copy = style.mutableCopy() as? NSMutableParagraphStyle else { continue }
+            copy.alignment = Self.textAlignment(alignment)
+            text.addAttribute(.paragraphStyle, value: copy, range: subrange)
+        }
+    }
+
+    /// One reading of the markdown vocabulary's alignment, shared by a table's
+    /// columns and by an HTML wrapper's `align` attribute — they mean the same
+    /// thing and must not drift into two answers.
+    private static func textAlignment(_ alignment: MarkdownTable.Alignment?) -> NSTextAlignment {
+        switch alignment {
+        case .center: .center
+        case .trailing: .right
+        case .leading, nil: .left
         }
     }
 
@@ -449,11 +524,9 @@ struct MarkdownRenderer {
                     spacing: 0,
                     containers: containers + [block]
                 )
-                switch table.alignments.indices.contains(column) ? table.alignments[column] : nil {
-                case .center: paragraphStyle.alignment = .center
-                case .trailing: paragraphStyle.alignment = .right
-                case .leading, nil: paragraphStyle.alignment = .left
-                }
+                paragraphStyle.alignment = Self.textAlignment(
+                    table.alignments.indices.contains(column) ? table.alignments[column] : nil
+                )
                 apply(paragraphStyle, to: content)
                 out.append(content)
             }
