@@ -697,6 +697,7 @@ extension Ghostty {
 
             #if os(macOS)
             // We want to quit, start that process
+            WindowBreadcrumbs.note("quit: core sent GHOSTTY_ACTION_QUIT -> NSApp.terminate")
             NSApplication.shared.terminate(nil)
             #endif
         }

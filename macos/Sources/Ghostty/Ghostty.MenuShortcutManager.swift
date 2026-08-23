@@ -94,6 +94,25 @@ extension Ghostty {
                 return false
             }
 
+            /// Quit never goes through `performActionForItem`. Performed from
+            /// inside key-equivalent dispatch, `terminate:` was observed —
+            /// under lldb, on a breakpoint at `exit` — reaching `exit()`
+            /// without ever consulting `applicationShouldTerminate` or
+            /// `applicationWillTerminate`: no confirm dialog over running
+            /// processes, and no final session save, so the quit lost
+            /// whatever the debounced save hadn't flushed. The same
+            /// `terminate:` sent outside the menu-perform machinery consults
+            /// the delegate normally, so the quit binding is deferred out of
+            /// this event and sent clean.
+            if item.action == #selector(NSApplication.terminate(_:)) {
+                WindowBreadcrumbs.note(
+                    "quit binding: deferring terminate out of key-equivalent dispatch")
+                DispatchQueue.main.async {
+                    NSApp.terminate(nil)
+                }
+                return true
+            }
+
             let index = parentMenu.index(of: item)
             guard index >= 0 else {
                 return false

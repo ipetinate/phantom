@@ -698,7 +698,26 @@ final class PhantomSessionStore {
             scheduleSave()
         }
 
-        let (groups, standalones) = Self.partition(states)
+        var (groups, standalones) = Self.partition(states)
+
+        /// With the sidebar on, one group is the shape of the app: every
+        /// terminal is a row of the same list, and a second window is not
+        /// something any supported gesture produces — the ways one used to
+        /// appear (⌘N routed to a loose window, a tab request degrading
+        /// when its parent was a husk) were all bugs, and the store then
+        /// preserved their output: a session saved as two groups restored
+        /// as two groups on every launch after, which is how one accident
+        /// became a permanent ghost. Merging here is what heals those
+        /// files. Without the sidebar the split is upstream's normal
+        /// multi-window world and is restored as written.
+        if appDelegate.ghostty.config.sidebar {
+            if groups.count + standalones.count > 1 {
+                WindowBreadcrumbs.note(
+                    "restore: merging \(groups.count) groups and "
+                    + "\(standalones.count) standalones into one")
+            }
+            (groups, standalones) = Self.unified(groups: groups, standalones: standalones)
+        }
 
         var restoredCount = 0
         for group in groups {
@@ -714,6 +733,19 @@ final class PhantomSessionStore {
         /// which produced nothing still told New Window to stand down — so
         /// New Window opened nothing, and went on opening nothing.
         return restoredCount > 0
+    }
+
+    /// One group holding every state, in group-then-standalone order — the
+    /// shape `restoreIfNeeded` uses when the sidebar is on. Pure, because the
+    /// merge policy is the piece of the healing that has to hold without an
+    /// app: a session file carrying an accidental split must come back whole.
+    static func unified<State: PhantomSessionState>(
+        groups: [[State]],
+        standalones: [State]
+    ) -> (groups: [[State]], standalones: [State]) {
+        let merged = groups.flatMap { $0 } + standalones
+        guard !merged.isEmpty else { return ([], []) }
+        return ([merged], [])
     }
 
     /// Splits saved states into the windows that were tabs of one window and

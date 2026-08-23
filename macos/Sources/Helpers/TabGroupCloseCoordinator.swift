@@ -48,6 +48,8 @@ class TabGroupCloseCoordinator {
         // If this window isn't part of a tab group we assume its a window
         // close for the window and let our timer keep running for the rest.
         guard let tabGroup = window.tabGroup else {
+            WindowBreadcrumbs.note(
+                "closeScope: window=\(window.windowNumber) has no tabGroup -> .window")
             callback(.window)
             return
         }
@@ -78,6 +80,8 @@ class TabGroupCloseCoordinator {
         // do. This shouldn't happen. So we just assume it's a tab close
         // and trigger the rest. No right answer here as far as I know.
         if self.tabGroup != tabGroup {
+            WindowBreadcrumbs.note(
+                "closeScope: window=\(window.windowNumber) group mismatch -> .tab")
             callback(.tab)
             trigger(.tab)
             return
@@ -90,6 +94,8 @@ class TabGroupCloseCoordinator {
         if closeRequests.count == tabGroup.windows.count {
             let allWindows = Set(tabGroup.windows.map { ObjectIdentifier($0) })
             if Set(closeRequests.keys) == allWindows {
+                WindowBreadcrumbs.note(
+                    "closeScope: window=\(window.windowNumber) all \(tabGroup.windows.count) asked -> .window")
                 trigger(.window)
                 return
             }
@@ -100,7 +106,10 @@ class TabGroupCloseCoordinator {
             withTimeInterval: Duration.milliseconds(100).timeInterval,
             repeats: false
         ) { [weak self] _ in
-            self?.trigger(.tab)
+            guard let self else { return }
+            WindowBreadcrumbs.note(
+                "closeScope: debounce expired with \(self.closeRequests.count) asks -> .tab")
+            self.trigger(.tab)
         }
     }
 

@@ -451,10 +451,25 @@ class AppDelegate: NSObject,
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        WindowBreadcrumbs.note(
+            "lastWindowClosed: AppKit believes the last window closed; "
+            + "answering \(derivedConfig.shouldQuitAfterLastWindowClosed), "
+            + "app windows=\(NSApp.windows.count) "
+            + "terminals=\(TerminalController.all.count)")
         return derivedConfig.shouldQuitAfterLastWindowClosed
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if let event = NSApp.currentEvent {
+            WindowBreadcrumbs.note(
+                "shouldTerminate: event=\(event.type.rawValue) "
+                + "eventWindow=\(event.window?.windowNumber ?? -1) "
+                + "key=\(event.type == .keyDown ? event.charactersIgnoringModifiers ?? "" : "") "
+                + "windows=\(NSApp.windows.count)")
+        } else {
+            WindowBreadcrumbs.note(
+                "shouldTerminate: no current event (programmatic) windows=\(NSApp.windows.count)")
+        }
         /// The session as it stands at the moment the reader asked to quit,
         /// while every window they have is certainly still theirs. Everything
         /// after this point is the quit happening — windows the review closes,
@@ -499,6 +514,8 @@ class AppDelegate: NSObject,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        WindowBreadcrumbs.note("willTerminate: the app is going down through AppKit")
+
         // We have no notifications we want to persist after death,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.
@@ -844,6 +861,19 @@ class AppDelegate: NSObject,
     @objc private func ghosttyNewWindow(_ notification: Notification) {
         let configAny = notification.userInfo?[Ghostty.Notification.NewSurfaceConfigKey]
         let config = configAny as? Ghostty.SurfaceConfiguration
+
+        /// With the sidebar on, ⌘N makes a terminal in the sidebar, not a
+        /// loose window. The fork replaced macOS tabs with the sidebar, so
+        /// "window" stopped being a unit the reader ever asked for — every
+        /// terminal is a row, and a window outside the group is the ghost
+        /// row: selected in parallel, listed by the Dock under the same
+        /// name, saved by the session store as a second group and restored
+        /// split forever. The reader who reported this created "tabs" with
+        /// ⌘N all along — the expectation is the design.
+        if ghostty.config.sidebar, let parent = TerminalController.liveTabParent() {
+            _ = TerminalController.newTab(ghostty, from: parent, withBaseConfig: config)
+            return
+        }
         _ = TerminalController.newWindow(ghostty, withBaseConfig: config)
     }
 
@@ -1074,6 +1104,12 @@ class AppDelegate: NSObject,
         // back, windows exist, so the next New Window is an ordinary one.
         if PhantomSessionStore.shared.restoreIfNeeded() { return }
 
+        /// Same routing as the core's ⌘N — see `ghosttyNewWindow`. The menu
+        /// item is the other spelling of the same request.
+        if ghostty.config.sidebar, let parent = TerminalController.liveTabParent() {
+            _ = TerminalController.newTab(ghostty, from: parent)
+            return
+        }
         _ = TerminalController.newWindow(ghostty)
     }
 

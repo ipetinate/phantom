@@ -96,9 +96,15 @@ enum WindowGhostRescue {
 /// Development builds only. The file answers a developer's question, and
 /// writing a log nobody will read into every user's disk is not a feature.
 enum WindowBreadcrumbs {
+    /// Synchronous on purpose. The events this file exists for happen at
+    /// the edge of process death, and an async write is exactly the note
+    /// that dies in the queue while the process exits — which has already
+    /// cost one investigation its last three lines. A blocking file append
+    /// a handful of times per session is invisible; a missing final
+    /// breadcrumb is the whole tool gone.
     static func note(_ event: String) {
         guard DevelopmentBuild.isActive else { return }
-        queue.async { append(event) }
+        queue.sync { append(event) }
     }
 
     /// Watches the moments a window can become an orphan, app-wide: Space
@@ -132,7 +138,8 @@ enum WindowBreadcrumbs {
                     "visible=\(window.isVisible) " +
                     "onActiveSpace=\(window.isOnActiveSpace) " +
                     "miniaturized=\(window.isMiniaturized) " +
-                    "occluded=\(!window.occlusionState.contains(.visible))")
+                    "occluded=\(!window.occlusionState.contains(.visible)) " +
+                    "group=\(window.tabGroup?.windows.count ?? 0)")
             })
         }
 

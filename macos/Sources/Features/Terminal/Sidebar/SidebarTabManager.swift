@@ -525,9 +525,13 @@ final class SidebarTabManager: ObservableObject {
     /// list is re-formed instead and the row goes away.
     func select(_ model: SidebarTabModel) {
         guard Self.isLiveTab(model.window) else {
+            WindowBreadcrumbs.note(
+                "sidebar select: window=\(model.window.windowNumber) not live -> refresh")
             refresh()
             return
         }
+        WindowBreadcrumbs.note(
+            "sidebar select: window=\(model.window.windowNumber) group=\(model.window.tabGroup?.windows.count ?? 0)")
         model.window.makeKeyAndOrderFront(nil)
     }
 

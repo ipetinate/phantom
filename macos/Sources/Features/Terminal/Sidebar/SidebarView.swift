@@ -1492,6 +1492,8 @@ private struct SidebarTabRow: View {
                     .opacity(isHovered ? 0 : 1)
 
                 SidebarIconButton(help: "Close Terminal") {
+                    WindowBreadcrumbs.note(
+                        "sidebar close button: window=\(tab.window.windowNumber)")
                     tab.window.performClose(nil)
                 } label: {
                     Image(systemName: "xmark")
@@ -1831,6 +1833,8 @@ private struct SidebarTabRow: View {
         }
 
         Button("Close Tab", role: .destructive) {
+            WindowBreadcrumbs.note(
+                "sidebar context menu close: window=\(tab.window.windowNumber)")
             tab.window.performClose(nil)
         }
     }
