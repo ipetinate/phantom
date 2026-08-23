@@ -141,8 +141,18 @@ struct EditorCellDropDelegate: DropDelegate {
         return true
     }
 
+    /// The zone last reported for this cell, which is what the hysteresis in
+    /// `EditorDropZone.resolve` holds on to. Read from the view's own state
+    /// rather than kept here: a delegate is rebuilt on every SwiftUI update,
+    /// so anything it remembered itself would be forgotten between moves.
+    let currentZone: () -> EditorDropZone?
+
     private func resolve(_ info: DropInfo) -> EditorDropZone {
-        EditorDropZone.resolve(point: info.location, in: size, barHeight: barHeight)
+        EditorDropZone.resolve(
+            point: info.location,
+            in: size,
+            barHeight: barHeight,
+            current: currentZone())
     }
 }
 

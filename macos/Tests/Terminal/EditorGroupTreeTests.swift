@@ -340,9 +340,34 @@ struct EditorDropZoneTests {
         #expect(EditorDropZone.resolve(point: CGPoint(x: 40, y: 2), in: size) == .top)
     }
 
-    @Test func theBandIsAQuarterOfTheAxis() {
-        #expect(EditorDropZone.resolve(point: CGPoint(x: 99, y: 100), in: size) == .leading)
-        #expect(EditorDropZone.resolve(point: CGPoint(x: 101, y: 100), in: size) == .center)
+    /// A third of each axis, which leaves the middle third meaning "move it
+    /// here". A quarter was the first try and it was measured too fine in
+    /// use: aiming for the lower half of a tall pane, the reader landed in
+    /// the centre and got a move where they asked for a split.
+    @Test func theBandIsAThirdOfTheAxis() {
+        #expect(EditorDropZone.resolve(point: CGPoint(x: 130, y: 100), in: size) == .leading)
+        #expect(EditorDropZone.resolve(point: CGPoint(x: 140, y: 100), in: size) == .center)
+    }
+
+    /// A zone already in hand keeps its claim a little past its own edge.
+    /// Without that the answer flips as the pointer travels along a boundary
+    /// — split, move, split — and the panel flickers under the cursor while
+    /// the reader is aiming at it.
+    @Test func aZoneInHandHoldsPastItsEdge() {
+        let justOutside = CGPoint(x: 140, y: 100)
+
+        #expect(EditorDropZone.resolve(point: justOutside, in: size) == .center)
+        #expect(
+            EditorDropZone.resolve(point: justOutside, in: size, current: .leading)
+                == .leading)
+    }
+
+    /// Hysteresis holds a boundary, it does not move it arbitrarily far: past
+    /// the margin the new answer wins even against a zone in hand.
+    @Test func hysteresisRunsOutEventually() {
+        #expect(
+            EditorDropZone.resolve(
+                point: CGPoint(x: 200, y: 100), in: size, current: .leading) == .center)
     }
 
     /// A cell with no size yet cannot be split into halves, so it answers

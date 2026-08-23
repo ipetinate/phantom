@@ -19,9 +19,23 @@ enum EditorDropZone: Equatable {
 extension EditorDropZone {
     /// How much of the cell, along each axis, an edge band claims.
     ///
-    /// A quarter: wide enough to hit without aiming on a small cell, narrow
-    /// enough that the middle half of a cell still means "move it here".
-    static let defaultEdgeFraction: CGFloat = 0.25
+    /// A third of each axis, which leaves the middle third meaning "move it
+    /// here". A quarter was the first try and it was measured too fine in
+    /// use: aiming for the lower half of a tall pane, the reader kept landing
+    /// in the centre and getting a move where they asked for a split.
+    ///
+    /// Raising it is not free — the centre is a target too — so the middle
+    /// keeps a third of the cell rather than shrinking to a line.
+    static let defaultEdgeFraction: CGFloat = 1.0 / 3.0
+
+    /// How much further a zone keeps its claim once it already holds it.
+    ///
+    /// Without this the answer flips as the pointer travels along a
+    /// boundary — split, move, split — and the panel flickers under the
+    /// cursor while the reader is trying to aim at it. A zone that is already
+    /// chosen holds on for a little past its own edge, so crossing a boundary
+    /// takes a deliberate movement rather than a tremor.
+    static let hysteresis: CGFloat = 0.05
 
     /// The zone a point falls in, over a cell whose bar is `barHeight` tall.
     ///
@@ -36,16 +50,19 @@ extension EditorDropZone {
         point: CGPoint,
         in size: CGSize,
         barHeight: CGFloat,
+        current: EditorDropZone? = nil,
         edgeFraction: CGFloat = defaultEdgeFraction
     ) -> EditorDropZone {
         guard barHeight > 0 else {
-            return resolve(point: point, in: size, edgeFraction: edgeFraction)
+            return resolve(
+                point: point, in: size, current: current, edgeFraction: edgeFraction)
         }
         guard point.y > barHeight else { return .center }
 
         let surface = CGSize(width: size.width, height: size.height - barHeight)
         let local = CGPoint(x: point.x, y: point.y - barHeight)
-        return resolve(point: local, in: surface, edgeFraction: edgeFraction)
+        return resolve(
+            point: local, in: surface, current: current, edgeFraction: edgeFraction)
     }
 
     /// The zone a point falls in.
@@ -62,6 +79,7 @@ extension EditorDropZone {
     static func resolve(
         point: CGPoint,
         in size: CGSize,
+        current: EditorDropZone? = nil,
         edgeFraction: CGFloat = defaultEdgeFraction
     ) -> EditorDropZone {
         guard size.width > 0, size.height > 0 else { return .center }
@@ -79,7 +97,12 @@ extension EditorDropZone {
         guard let nearest = distances.min(by: { $0.distance < $1.distance }) else {
             return .center
         }
-        return nearest.distance <= edgeFraction ? nearest.zone : .center
+
+        /// The zone in hand keeps its claim a little past its own edge, so a
+        /// pointer travelling along a boundary does not make the panel
+        /// stutter between two answers.
+        let claim = nearest.zone == current ? edgeFraction + hysteresis : edgeFraction
+        return nearest.distance <= claim ? nearest.zone : .center
     }
 
     /// The split this zone asks for: which way to divide the cell, and

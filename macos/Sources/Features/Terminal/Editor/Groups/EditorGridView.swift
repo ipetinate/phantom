@@ -137,7 +137,8 @@ private struct EditorGridCell: View {
                     perform: { item, zone in
                         center.drop(item, on: group.id, zone: zone)
                     },
-                    label: cellLabel
+                    label: cellLabel,
+                    currentZone: { dropZone }
                 )
             )
         }
