@@ -73,19 +73,40 @@ enum AppearanceCoordinator {
         }
     }
 
+    /// The defaults keys the divider setting persists under. Phantom-only
+    /// chrome preferences live in `UserDefaults` rather than `GuiConfigStore`
+    /// — an unknown key in `gui-settings` raises Ghostty's config errors.
+    static let dividerModeKey = "SidebarDividerMode"
+    static let dividerColorKey = "SidebarDividerColorHex"
+
+    /// The mode a profile with no stored choice gets: no divider at all.
+    /// The factory look ships the panes meeting edge to edge — a line
+    /// between them is an opt-in, not the default. Any explicit choice,
+    /// "default" included, is stored and wins over this.
+    static let defaultDividerModeRaw = "hidden"
+
     static var dividerMode: DividerMode {
         let defaults = UserDefaults.standard
-        switch defaults.string(forKey: "SidebarDividerMode") ?? "default" {
+        switch defaults.string(forKey: dividerModeKey) ?? defaultDividerModeRaw {
         case "hidden":
             return .hidden
         case "custom":
-            guard let hex = defaults.string(forKey: "SidebarDividerColorHex"),
+            guard let hex = defaults.string(forKey: dividerColorKey),
                   let color = NSColor(hex: hex)
             else { return .system }
             return .custom(color)
         default:
             return .system
         }
+    }
+
+    /// What the Default divider mode paints: the theme's primary swatch —
+    /// ANSI 4, the same accent the rest of the chrome keys on — so the line
+    /// belongs to the chosen theme rather than to AppKit's gray. Nil when
+    /// the theme carries no palette; each caller keeps its pre-theme
+    /// fallback for that case.
+    static var themeDividerColor: NSColor? {
+        ThemePalette.shared.primary
     }
 
     /// The layer color the sidebar pane paints: the theme's effective

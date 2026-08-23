@@ -2057,10 +2057,28 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     @objc private func sidebarTintDidChangeNotification(_ notification: Notification) {
         syncSidebarBackground()
-        // An immediate, synchronous redraw — not just a dirty flag for
-        // the next display cycle — so divider style/color changes in
-        // Settings reflect right away instead of needing a reopen.
-        sidebarSplitView?.display()
+
+        /// The divider's thickness changes when the mode crosses hidden
+        /// (1pt ↔ 0), and an autolayout `NSSplitView` bakes the thickness
+        /// into internal constraints it never rebuilds on its own — so a
+        /// mode change in Settings left the panes at their old frames with
+        /// a one-point hole where the divider had been, showing the window
+        /// through it as a see-through strip until the window was
+        /// recreated. Measured on the pane frames: `display()` alone,
+        /// `adjustSubviews()`, `needsLayout` + `layoutSubtreeIfNeeded()`,
+        /// and a live window resize all left the second pane at
+        /// `401..1280` behind a zero-width splitter. Re-assigning
+        /// `dividerStyle` is what makes the split view rebuild those
+        /// constraints — same style back, but the setter does the work —
+        /// after which the panes land at `400..1280` and the strip is gone.
+        if let splitView = sidebarSplitView {
+            let style = splitView.dividerStyle
+            splitView.dividerStyle = style == .thin ? .paneSplitter : .thin
+            splitView.dividerStyle = style
+            splitView.setPosition(sharedSidebarWidth, ofDividerAt: 0)
+            splitView.layoutSubtreeIfNeeded()
+            splitView.display()
+        }
     }
 
     /// Settings applies hot-reload the config; the surface state that

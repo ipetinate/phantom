@@ -298,8 +298,13 @@ private struct AppearanceStylePanel: View {
     @State private var blurMode: String = "off"
     @State private var blurRadius: Double = 20
     @State private var sidebarWidth: Double = 240
-    @State private var dividerMode: String = "default"
+    @State private var dividerMode: String = AppearanceCoordinator.defaultDividerModeRaw
     @State private var dividerColor: Color = .gray
+
+    /// The theme's own colours, offered as one-tap swatches beside the
+    /// custom divider's picker. Observed so a theme switch made while this
+    /// pane is open redraws the row with the new palette.
+    @ObservedObject private var themePalette: ThemePalette = .shared
 
     /// The width the divider was last dragged to, or nil while nothing has
     /// been dragged. Held in state rather than read inline so the reset row
@@ -545,21 +550,27 @@ private struct AppearanceStylePanel: View {
             }
 
             LabeledContent("Divider") {
-                HStack(spacing: 8) {
-                    Picker("", selection: $dividerMode) {
-                        Text("Default").tag("default")
-                        Text("Hidden").tag("hidden")
-                        Text("Custom").tag("custom")
+                VStack(alignment: .trailing, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Picker("", selection: $dividerMode) {
+                            Text("Default").tag("default")
+                            Text("Hidden").tag("hidden")
+                            Text("Custom").tag("custom")
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(maxWidth: 220)
+                        .onChange(of: dividerMode) { _ in saveDivider() }
+
+                        if dividerMode == "custom" {
+                            ColorPicker("", selection: $dividerColor, supportsOpacity: false)
+                                .labelsHidden()
+                                .onChange(of: dividerColor) { _ in saveDivider() }
+                        }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: 220)
-                    .onChange(of: dividerMode) { _ in saveDivider() }
 
                     if dividerMode == "custom" {
-                        ColorPicker("", selection: $dividerColor, supportsOpacity: false)
-                            .labelsHidden()
-                            .onChange(of: dividerColor) { _ in saveDivider() }
+                        dividerThemeSwatches
                     }
                 }
             }
@@ -579,6 +590,29 @@ private struct AppearanceStylePanel: View {
             Text("Starting Width is what a window with no dragging behind it opens at. Dragging a divider replaces it for every window and keeps it across launches; Reset drops that, and each window takes the slider's width back as you switch to it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The current theme's palette as one-tap divider colours. The picker
+    /// stays for arbitrary colours; these are the colours the divider most
+    /// often wants — the theme's own — one click away instead of behind an
+    /// eyedropper.
+    private var dividerThemeSwatches: some View {
+        HStack(spacing: 5) {
+            ForEach(Array(themePalette.colors.enumerated()), id: \.offset) { index, swatch in
+                Button {
+                    dividerColor = Color(nsColor: swatch)
+                    saveDivider()
+                } label: {
+                    Circle()
+                        .fill(Color(nsColor: swatch))
+                        .frame(width: 14, height: 14)
+                        .overlay(Circle().strokeBorder(.primary.opacity(0.2), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help(ThemePalette.ansiNames.indices.contains(index)
+                      ? ThemePalette.ansiNames[index] : "")
+            }
         }
     }
 
@@ -614,8 +648,9 @@ private struct AppearanceStylePanel: View {
         }
 
         let defaults = UserDefaults.standard
-        dividerMode = defaults.string(forKey: "SidebarDividerMode") ?? "default"
-        if let hex = defaults.string(forKey: "SidebarDividerColorHex"),
+        dividerMode = defaults.string(forKey: AppearanceCoordinator.dividerModeKey)
+            ?? AppearanceCoordinator.defaultDividerModeRaw
+        if let hex = defaults.string(forKey: AppearanceCoordinator.dividerColorKey),
            let color = NSColor(hex: hex) {
             dividerColor = Color(nsColor: color)
         }
@@ -623,8 +658,10 @@ private struct AppearanceStylePanel: View {
 
     private func saveDivider() {
         let defaults = UserDefaults.standard
-        defaults.set(dividerMode, forKey: "SidebarDividerMode")
-        defaults.set(NSColor(dividerColor).hexString ?? "#808080", forKey: "SidebarDividerColorHex")
+        defaults.set(dividerMode, forKey: AppearanceCoordinator.dividerModeKey)
+        defaults.set(
+            NSColor(dividerColor).hexString ?? "#808080",
+            forKey: AppearanceCoordinator.dividerColorKey)
         NotificationCenter.default.post(
             name: TerminalController.sidebarTintDidChange,
             object: nil

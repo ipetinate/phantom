@@ -173,7 +173,8 @@ final class SidebarSplitView: NSSplitView {
         switch AppearanceCoordinator.dividerMode {
         case .hidden: return .clear
         case .custom(let color): return color
-        case .system: return super.dividerColor
+        case .system:
+            return AppearanceCoordinator.themeDividerColor ?? super.dividerColor
         }
     }
 
@@ -206,8 +207,16 @@ final class SidebarSplitView: NSSplitView {
     /// this window is transparent under the glass and blur modes — it would
     /// punch a hole in the strip in exactly the configurations the report asks
     /// not to break.
+    ///
+    /// Full height minus one point at each extreme: painted to the very
+    /// first and last pixel row, the divider ran across the hairline the
+    /// window draws along its own top and bottom edges, so a coloured
+    /// divider visibly crossed the window's border. A one-point trim keeps
+    /// the frame's line intact and — unlike the titlebar-height clip
+    /// described above — is too small to read as a gap.
     override func drawDivider(in rect: NSRect) {
-        guard !rect.isEmpty else { return }
+        let trimmed = rect.intersection(bounds.insetBy(dx: 0, dy: Self.windowEdgeInset))
+        guard !trimmed.isEmpty else { return }
 
         switch AppearanceCoordinator.dividerMode {
         case .hidden:
@@ -215,9 +224,18 @@ final class SidebarSplitView: NSSplitView {
             return
         case .custom(let color):
             color.setFill()
-            rect.fill()
+            trimmed.fill()
         case .system:
-            super.drawDivider(in: rect)
+            if let themed = AppearanceCoordinator.themeDividerColor {
+                themed.setFill()
+                trimmed.fill()
+            } else {
+                super.drawDivider(in: trimmed)
+            }
         }
     }
+
+    /// How far the divider stays from the window's top and bottom edges,
+    /// clearing the border hairline the window draws there.
+    static let windowEdgeInset: CGFloat = 1
 }

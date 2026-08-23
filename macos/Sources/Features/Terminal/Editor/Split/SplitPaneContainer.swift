@@ -202,7 +202,7 @@ struct SplitPaneContainer<First: View, Second: View, Accessory: View>: View {
         SplitView(
             model.direction,
             $model.split,
-            dividerColor: Self.dividerColor,
+            systemDividerColor: Self.systemDividerFallback,
             left: first,
             right: second,
             onEqualize: { model.split = 0.5 }
@@ -219,15 +219,11 @@ struct SplitPaneContainer<First: View, Second: View, Accessory: View>: View {
         }
     }
 
-    /// The window's divider setting, minus the terminal's own colour: an
-    /// editor split has no surface configuration to ask, and the separator
-    /// is what the rest of the window's non-terminal dividers fall back to.
-    private static var dividerColor: Color {
-        switch AppearanceCoordinator.dividerMode {
-        case .hidden: return .clear
-        case .custom(let color): return Color(nsColor: color)
-        case .system: return Color(nsColor: .separatorColor)
-        }
+    /// An editor split has no surface configuration to ask for a divider
+    /// colour, so its Default-mode fallback is the system separator — the
+    /// mode resolution itself lives in `SplitView.dividerColor`.
+    private static var systemDividerFallback: Color {
+        Color(nsColor: .separatorColor)
     }
 }
 
