@@ -124,6 +124,14 @@ enum WindowBreadcrumbs {
             (NSWindow.didDeminiaturizeNotification, "didDeminiaturize"),
             (NSWindow.didChangeScreenNotification, "didChangeScreen"),
             (NSWindow.didChangeOcclusionStateNotification, "didChangeOcclusionState"),
+            /// Key changes catch what every higher layer can miss: a click
+            /// that never reaches a SwiftUI button still moves key, so a
+            /// reproduction that leaves no select breadcrumb is not
+            /// invisible here. Added after a live bug produced clicks with
+            /// no trace at all — the row's action never ran, and nothing
+            /// below it was listening.
+            (NSWindow.didBecomeKeyNotification, "didBecomeKey"),
+            (NSWindow.didResignKeyNotification, "didResignKey"),
         ]
 
         for (name, label) in watched {
