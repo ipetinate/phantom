@@ -134,18 +134,26 @@ struct SidebarGroupIcon: View {
     let icon: String
     var size: CGFloat = 12
 
-    private var isEmoji: Bool {
-        icon.count == 1 && !(icon.unicodeScalars.first?.isASCII ?? true)
-    }
+    /// The fallback for the two cases with no icon of their own to draw.
+    ///
+    /// `unknownAgent` used to reach `Image(systemName:)` with the whole
+    /// `agent:aider` string and draw an empty box — the thing `SidebarIconID`
+    /// says it exists to prevent. An unfamiliar agent gets the same plain
+    /// folder an unset icon does.
+    private static let fallback = "folder"
 
     var body: some View {
-        if let agent = SidebarIconID.agent(for: icon) {
+        switch SidebarIconID.kind(of: icon) {
+        case .agent(let agent):
             agentMark(agent)
-        } else if isEmoji {
+        case .emoji:
             Text(icon)
                 .font(.system(size: size))
-        } else {
-            Image(systemName: icon.isEmpty ? "folder" : icon)
+        case .empty, .unknownAgent:
+            Image(systemName: Self.fallback)
+                .font(.system(size: size - 1, weight: .medium))
+        case .symbol:
+            Image(systemName: icon)
                 .font(.system(size: size - 1, weight: .medium))
         }
     }

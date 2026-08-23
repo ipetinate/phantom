@@ -40,4 +40,45 @@ struct SidebarIconIDTests {
         #expect(SidebarIconID.id(for: .opencode) == "agent:opencode")
         #expect(SidebarIconID.agent(for: "agent:Claude") == nil)
     }
+
+    /// The picker's emoji field trims what it holds to one character, so the
+    /// question "is this an emoji" has to be asked about the string itself.
+    ///
+    /// It used to be asked backwards — anything absent from the picker's
+    /// curated symbol list and not an agent — and the icon browser broke that
+    /// the moment a symbol could come from outside the curated list: opening
+    /// the sheet on `rectangle.3.group` put it in the emoji field, and one
+    /// keystroke turned the tab's icon into `r`. These are the cases that
+    /// must not read as emoji.
+    @Test func onlyAnActualEmojiIsAnEmoji() {
+        #expect(SidebarIconID.kind(of: "🔥") == .emoji)
+        #expect(SidebarIconID.kind(of: "🤖") == .emoji)
+
+        for icon in ["rectangle.3.group", "folder", "text.document", "50.square.fill", "f"] {
+            #expect(SidebarIconID.kind(of: icon) == .symbol, "\(icon) read as \(SidebarIconID.kind(of: icon))")
+        }
+    }
+
+    /// The five forms, each settled before the next test can see it.
+    @Test func everyFormIsToldApart() {
+        #expect(SidebarIconID.kind(of: "") == .empty)
+        #expect(SidebarIconID.kind(of: "agent:claude") == .agent(.claude))
+        #expect(SidebarIconID.kind(of: "agent:aider") == .unknownAgent)
+        #expect(SidebarIconID.kind(of: "agent:") == .unknownAgent)
+        #expect(SidebarIconID.kind(of: "agent") == .symbol)
+    }
+
+    /// A flag is one grapheme, so it is an emoji like any other — the count
+    /// is of characters, not of scalars, and getting that backwards would put
+    /// 🇧🇷 in the symbol bucket.
+    ///
+    /// Two of them are not. There is no fourth form to put that in, so it
+    /// falls through to `symbol`, where it names nothing and draws nothing.
+    /// Nothing produces it — the emoji field trims to one character, and
+    /// `SidebarIconRecents.drawable` will not offer a name AppKit cannot
+    /// resolve — so this pins the edge rather than asking for a fifth case.
+    @Test func aFlagIsOneEmojiAndTwoAreNeither() {
+        #expect(SidebarIconID.kind(of: "🇧🇷") == .emoji)
+        #expect(SidebarIconID.kind(of: "🔥🔥") == .symbol)
+    }
 }

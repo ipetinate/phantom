@@ -1870,12 +1870,21 @@ private struct SidebarIconCell<Mark: View>: View {
     }
 }
 
-/// Visual icon picker: an evenly-filled grid of curated SF Symbols plus
-/// a compact emoji field for anything the grid doesn't cover.
+/// Visual icon picker: what was chosen lately, a grid of curated SF Symbols,
+/// the agents' marks, a compact emoji field, and a door to the rest of SF
+/// Symbols for anything none of that covers.
 private struct SidebarIconPicker: View {
     @Binding var selection: String
 
     @State private var emoji: String = ""
+
+    /// Read from the store once, in `onAppear`, and then only ever grown by a
+    /// pick out of the browser. Reading it live would reorder the top row the
+    /// moment a pick lands in it, and a grid that rearranges itself under the
+    /// cursor is a grid you misclick.
+    @State private var recents: [String] = []
+
+    @State private var isBrowsing = false
 
     @FocusState private var emojiFieldFocused: Bool
 
@@ -1905,19 +1914,50 @@ private struct SidebarIconPicker: View {
     )
 
     var body: some View {
+        if !recents.isEmpty {
+            sectionLabel("Recents")
+
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(recents, id: \.self) { icon in
+                    SidebarIconCell(isSelected: selection == icon) {
+                        choose(icon)
+                    } mark: {
+                        SidebarGroupIcon(icon: icon, size: 14)
+                            .foregroundStyle(selection == icon ? .white : .primary)
+                    }
+                    .help(Self.tooltip(for: icon))
+                }
+            }
+            .padding(.vertical, 4)
+        }
+
         sectionLabel("General")
 
         LazyVGrid(columns: columns, spacing: 6) {
             ForEach(Self.symbols, id: \.self) { symbol in
                 SidebarIconCell(isSelected: selection == symbol) {
-                    selection = symbol
-                    emoji = ""
+                    choose(symbol)
                 } mark: {
                     Image(systemName: symbol)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(selection == symbol ? .white : .primary)
                 }
             }
+
+            /// The thirty-sixth cell of a seven-column grid, alone on a sixth
+            /// row on purpose: the five full rows above it are the curated
+            /// set, and this one is not part of it. Putting it beside the
+            /// "General" heading instead would read as a heading control and
+            /// lose the "and there is more where those came from" it has here,
+            /// at the end of the list.
+            SidebarIconCell(isSelected: false) {
+                isBrowsing = true
+            } mark: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .help("All Symbols…")
         }
         .padding(.vertical, 4)
 
@@ -1928,8 +1968,7 @@ private struct SidebarIconPicker: View {
                 let id = SidebarIconID.id(for: agent)
 
                 SidebarIconCell(isSelected: selection == id) {
-                    selection = id
-                    emoji = ""
+                    choose(id)
                 } mark: {
                     SidebarGroupIcon(icon: id, size: 15)
                 }
@@ -1938,8 +1977,7 @@ private struct SidebarIconPicker: View {
 
             ForEach(Self.agentSymbols, id: \.self) { symbol in
                 SidebarIconCell(isSelected: selection == symbol) {
-                    selection = symbol
-                    emoji = ""
+                    choose(symbol)
                 } mark: {
                     Image(systemName: symbol)
                         .font(.system(size: 13, weight: .medium))
@@ -1977,16 +2015,74 @@ private struct SidebarIconPicker: View {
             }
         }
         .onAppear {
-            /// An agent id is neither a symbol nor an emoji, and without this
-            /// it would land in the emoji field — which trims to one character
-            /// on edit, so opening the sheet and touching that field would
-            /// quietly turn `agent:claude` into `a`.
-            if !selection.isEmpty,
-               !Self.symbols.contains(selection),
-               !Self.agentSymbols.contains(selection),
-               SidebarIconID.agent(for: selection) == nil {
-                emoji = selection
+            /// Only an actual emoji goes in the emoji field, because that
+            /// field trims to one character on edit. This used to ask the
+            /// question backwards — anything absent from the curated lists
+            /// and not an agent — which was true of every symbol the browser
+            /// can now return, so opening the sheet on `rectangle.3.group`
+            /// and touching the field would quietly turn it into `r`.
+            if SidebarIconID.kind(of: selection) == .emoji { emoji = selection }
+
+            recents = Self.visibleRecents(selection: selection)
+        }
+        .sheet(isPresented: $isBrowsing) {
+            SidebarIconBrowser(selection: selection) { picked in
+                choose(picked)
+
+                /// Added rather than merged: a symbol out of the browser has
+                /// no cell in the curated grid, so without a cell here the
+                /// sheet lights up nothing at all and the only sign the pick
+                /// landed is the tab itself, after Save. Added only when it
+                /// is missing, so a row already holding it does not shuffle
+                /// under the cursor on the way back.
+                if !recents.contains(picked) {
+                    recents = SidebarIconRecents.recording(picked, into: recents)
+                }
             }
+        }
+    }
+
+    /// One pick, whatever it was picked from.
+    ///
+    /// The emoji field follows the choice rather than being cleared blindly:
+    /// choosing 🔥 from the Recents row has to leave the field showing 🔥, or
+    /// the sheet says two different things about one selection.
+    private func choose(_ icon: String) {
+        selection = icon
+        emoji = SidebarIconID.kind(of: icon) == .emoji ? icon : ""
+    }
+
+    /// The stored Recents row, plus the icon this tab or group already wears
+    /// when nothing else in the sheet stands for it.
+    ///
+    /// An icon chosen from the browser last week is a symbol with no cell in
+    /// the curated grid, and a row trimmed to ten may no longer hold it — so
+    /// the sheet would open on it and light up nothing. Prepending it is not
+    /// a lie either: it *is* the most recent choice for this tab. It goes
+    /// through the same merge as a stored one, so it cannot duplicate an
+    /// entry or push the row past ten.
+    private static func visibleRecents(selection: String) -> [String] {
+        let stored = SidebarIconRecents().icons
+        guard !hasOwnCell(selection) else { return stored }
+        return SidebarIconRecents.recording(selection, into: stored)
+    }
+
+    /// The Recents row mixes all three forms, so its cells cannot all be
+    /// named by the string they hold: `agent:claude` is the file format, not
+    /// something to show a reader. The agents' own row says "Claude", and
+    /// this says the same.
+    private static func tooltip(for icon: String) -> String {
+        SidebarIconID.agent(for: icon)?.displayName ?? icon
+    }
+
+    /// Whether some other control in this sheet already shows `icon` as
+    /// chosen: a curated cell, an agent's cell, or the emoji field.
+    private static func hasOwnCell(_ icon: String) -> Bool {
+        switch SidebarIconID.kind(of: icon) {
+        case .empty, .emoji, .agent, .unknownAgent:
+            return true
+        case .symbol:
+            return symbols.contains(icon) || agentSymbols.contains(icon)
         }
     }
 
@@ -1997,6 +2093,125 @@ private struct SidebarIconPicker: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The rest of SF Symbols, searchable — what the last cell of the curated
+/// grid opens.
+///
+/// A sheet on top of the editor's sheet, not a popover. Four thousand cells
+/// want a scroll view with real height, and a popover hanging off a row of a
+/// 330-point-wide form would spend most of that height off the window. A
+/// sheet also keeps Escape meaning "close the browser" rather than "close the
+/// editor and lose the name I typed".
+private struct SidebarIconBrowser: View {
+    /// Read, not written. The picker owns what a pick means — the emoji field
+    /// to clear, the Recents row to extend — so this hands the name back and
+    /// closes rather than writing through a binding and leaving the picker to
+    /// work out where the new value came from.
+    let selection: String
+    let onPick: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var query = ""
+
+    /// Held rather than recomputed in `body`, which reads the list twice —
+    /// once for the grid and once for the count — and would search the
+    /// catalogue twice per keystroke for it.
+    @State private var results: [String] = []
+
+    @FocusState private var queryFocused: Bool
+
+    /// Ten columns against the picker's seven: this sheet is wider, and the
+    /// point here is to sweep a lot of symbols with your eyes rather than to
+    /// keep the rhythm of the curated grid.
+    private let columns = Array(
+        repeating: GridItem(.flexible(), spacing: 6),
+        count: 10
+    )
+
+    var body: some View {
+        VStack(spacing: 0) {
+            search
+
+            Divider()
+
+            if results.isEmpty {
+                Spacer()
+                Text("No symbols match.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 6) {
+                        ForEach(results, id: \.self) { symbol in
+                            SidebarIconCell(isSelected: selection == symbol) {
+                                onPick(symbol)
+                                dismiss()
+                            } mark: {
+                                Image(systemName: symbol)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(selection == symbol ? .white : .primary)
+                            }
+                            .help(symbol)
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Text(verbatim: "\(results.count) symbols")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+        }
+        .frame(width: 470, height: 520)
+        .onAppear {
+            results = SidebarIconCatalog.matches(query)
+            queryFocused = true
+        }
+        .onChange(of: query) { value in
+            results = SidebarIconCatalog.matches(value)
+        }
+    }
+
+    /// The same field the file explorer and the worktree panel use: no submit
+    /// button, filters as you type, and a clear button only once there is
+    /// something to clear.
+    private var search: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            TextField("Search symbols", text: $query)
+                .textFieldStyle(.plain)
+                .focused($queryFocused)
+
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear")
+            }
+        }
+        .padding(10)
     }
 }
 
@@ -2215,6 +2430,7 @@ private struct SidebarTabEditor: View {
             color: color == .none ? nil : color,
             colorHex: colorHex
         ))
+        SidebarIconRecents().record(icon)
     }
 }
 
@@ -2404,5 +2620,7 @@ private struct SidebarGroupEditor: View {
                 store.assign(surfaceId: surfaceId, to: created.id)
             }
         }
+
+        SidebarIconRecents().record(icon)
     }
 }
