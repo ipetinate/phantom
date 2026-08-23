@@ -530,9 +530,14 @@ final class SidebarTabManager: ObservableObject {
             refresh()
             return
         }
+        let w = model.window
         WindowBreadcrumbs.note(
-            "sidebar select: window=\(model.window.windowNumber) group=\(model.window.tabGroup?.windows.count ?? 0)")
-        model.window.makeKeyAndOrderFront(nil)
+            "sidebar select: window=\(w.windowNumber) group=\(w.tabGroup?.windows.count ?? 0) "
+            + "visible=\(w.isVisible) occl=\(w.occlusionState.rawValue) "
+            + "frame=\(Int(w.frame.origin.x)),\(Int(w.frame.origin.y)),\(Int(w.frame.width))x\(Int(w.frame.height)) "
+            + "screen=\(w.screen != nil) content=\(w.contentView != nil) "
+            + "loaded=\((w.windowController as? TerminalController)?.isWindowLoaded ?? false)")
+        w.makeKeyAndOrderFront(nil)
     }
 
     /// Resolves the repository root and current branch for a working

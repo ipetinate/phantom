@@ -748,6 +748,41 @@ final class PhantomSessionStore {
         return ([merged], [])
     }
 
+    /// Shows the restored session's front window — a turn later, never
+    /// inline, and key as well as front.
+    ///
+    /// Both halves are regressions this method exists to hold:
+    ///
+    /// A reveal issued synchronously from inside the dispatch the restore
+    /// was called in — `applicationShouldHandleReopen`, the Dock click —
+    /// left every window AppKit-visible but WindowServer-offscreen:
+    /// `isVisible` true, a sane frame, and not one pixel, with
+    /// `CGWindowListCopyWindowInfo` reporting `onscreen=false` for the whole
+    /// group. Partially committed, it produced the tab that selects but
+    /// never draws. The launch path only ever worked because launch is not
+    /// inside that dispatch.
+    ///
+    /// And front without key is an app with a dead menu bar: inside the
+    /// launch path activation used to hand key status over on its own; on
+    /// the deferred turn nothing does, and every first-responder action —
+    /// the whole File menu included — lands on nobody.
+    ///
+    /// `queue` is injectable so a test can prove the deferral without a
+    /// window server; the default is the real one.
+    static func scheduleReveal(
+        of front: NSWindow,
+        on queue: DispatchQueue = .main,
+        then followUp: @escaping () -> Void = {}
+    ) {
+        queue.async {
+            WindowBreadcrumbs.note(
+                "restore reveal: front=\(front.windowNumber) appActive=\(NSApp.isActive)")
+            front.orderFrontRegardless()
+            front.makeKey()
+            followUp()
+        }
+    }
+
     /// Splits saved states into the windows that were tabs of one window and
     /// the windows that stood alone.
     ///
@@ -978,16 +1013,31 @@ final class PhantomSessionStore {
         /// tab first. Ordering a background tab front makes it its group's
         /// selection — measured — which is exactly the request here.
         let front = selected?.window ?? anchorWindow
-        front.orderFrontRegardless()
 
-        DispatchQueue.main.async {
-            /// Said again a turn later because AppKit's tab group bookkeeping
-            /// is not consistent until the next runloop cycle, and a group
-            /// that had never been on screen may have shown itself without
-            /// moving its selection.
+        /// A turn later, never inline — the reveal must leave the dispatch
+        /// this restore was called from. Restored from inside
+        /// `applicationShouldHandleReopen` (the Dock click), an
+        /// `orderFrontRegardless` issued synchronously left every window
+        /// AppKit-visible but WindowServer-offscreen: `isVisible` true,
+        /// `isOnActiveSpace` true, a sane frame — and not one pixel, with
+        /// `CGWindowListCopyWindowInfo` reporting `onscreen=false` for the
+        /// whole group. An app with its menu bar up and no window at all,
+        /// or — when the commit landed partially — one tab that selects but
+        /// never draws. The launch path only ever worked because launch is
+        /// not inside that dispatch. Same disease, same cure as the quit
+        /// binding: do the work on the next turn, outside the transaction.
+        Self.scheduleReveal(of: front) {
+            /// Said because AppKit's tab group bookkeeping is not consistent
+            /// until the next runloop cycle, and a group that had never been
+            /// on screen may have shown itself without moving its selection.
             if let group = front.tabGroup, group.selectedWindow !== front {
                 group.selectedWindow = front
             }
+
+            WindowBreadcrumbs.note(
+                "restore revealed: front=\(front.windowNumber) visible=\(front.isVisible) "
+                + "occl=\(front.occlusionState.rawValue) "
+                + "groupWindows=\(front.tabGroup?.windows.count ?? 0)")
 
             /// Fullscreen last, and only from here: a group has to exist and
             /// be on screen before it can go fullscreen — a window that has
