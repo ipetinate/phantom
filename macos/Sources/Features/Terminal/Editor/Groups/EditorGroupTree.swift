@@ -260,6 +260,13 @@ extension EditorGroupTree {
         update(id) { $0.tabs.close(path) }
     }
 
+    /// Closes every file in every cell, which leaves the grid as the one
+    /// cell the terminal is in — the shape it starts in.
+    mutating func closeAllFiles() {
+        updateAll { $0.tabs.closeAll() }
+        heal()
+    }
+
     /// Moves a divider. Addressed by the split's own id so a drag survives
     /// the tree changing shape around it.
     mutating func setRatio(_ ratio: CGFloat, forSplit id: UUID) {
@@ -295,6 +302,20 @@ extension EditorGroupTree {
         case .split(var split):
             split.first.apply(id, body)
             split.second.apply(id, body)
+            self = .split(split)
+        }
+    }
+
+    /// Applies a change to every cell, without healing.
+    private mutating func updateAll(_ body: (inout EditorGroup) -> Void) {
+        switch self {
+        case .leaf(var group):
+            body(&group)
+            self = .leaf(group)
+
+        case .split(var split):
+            split.first.updateAll(body)
+            split.second.updateAll(body)
             self = .split(split)
         }
     }

@@ -1696,12 +1696,17 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // code, and the shell's last output reads as garbage mixed into the
         // file. Hidden, never removed: the shell and its scrollback have to
         // survive being covered.
-        editorCancellable = editorCenter.$tabs
+        // Driven by `paneVisibility` rather than by the tab set itself.
+        // `@Published` sends in `willSet`, and the editor's tabs are now
+        // computed from its group tree — so reading them from inside a sink on
+        // the tree would answer with the state before the change. The centre
+        // publishes the two facts this needs, already resolved.
+        editorCancellable = editorCenter.$paneVisibility
             .removeDuplicates()
-            .sink { [weak self] tabs in
+            .sink { [weak self] visibility in
                 guard let self else { return }
-                self.editorHostingView?.isHidden = tabs.showsTerminal
-                self.terminalPaneView?.isHidden = !tabs.showsTerminal
+                self.editorHostingView?.isHidden = visibility.showsTerminal
+                self.terminalPaneView?.isHidden = !visibility.showsTerminal
 
                 // The bar takes its height only when there is something to
                 // switch to, and the terminal is pushed down by exactly that
@@ -1709,7 +1714,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 // constraint: the terminal's top is what makes the titlebar
                 // strip meet its content, and the shell's SwiftUI content
                 // already honours the safe area.
-                let height: CGFloat = tabs.showsTabBar ? Self.paneTabBarHeightWhenShown : 0
+                let height: CGFloat = visibility.showsTabBar ? Self.paneTabBarHeightWhenShown : 0
                 self.paneTabBarHeight?.constant = height
                 // Published, so the terminal's SwiftUI content moves down by
                 // exactly the bar's height. `additionalSafeAreaInsets` was
