@@ -47,9 +47,9 @@ struct WorktreeFamilyView: View {
     @ObservedObject private var git: GitCenter = .shared
     @ObservedObject private var palette: ThemePalette = .shared
 
-    @AppStorage("SidebarShowClaude") private var showClaude = true
-    @AppStorage("SidebarShowCodex") private var showCodex = true
-    @AppStorage("SidebarShowOpenCode") private var showOpenCode = true
+    @AppStorage("SidebarShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
 
     @State private var ownFilter = ""
 

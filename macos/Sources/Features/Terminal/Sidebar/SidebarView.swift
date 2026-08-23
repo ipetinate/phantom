@@ -321,9 +321,9 @@ struct SidebarTitlebarChrome: View {
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
     @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
-    @AppStorage("SidebarShowClaude") private var showClaude = true
-    @AppStorage("SidebarShowCodex") private var showCodex = true
-    @AppStorage("SidebarShowOpenCode") private var showOpenCode = true
+    @AppStorage("SidebarShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
 
     /// Whether the pane actions (new terminal, new Claude session, new
     /// group, refresh) stay visible without a hover — off by default,
@@ -635,9 +635,9 @@ private struct SidebarGroupSection: View {
     @ObservedObject private var palette: ThemePalette = .shared
 
     @AppStorage("SidebarGroupShowPullRequests") private var showPullRequests = true
-    @AppStorage("SidebarGroupShowClaude") private var showClaude = true
-    @AppStorage("SidebarGroupShowCodex") private var showCodex = true
-    @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = true
+    @AppStorage("SidebarGroupShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarGroupShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var showWorktree = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
@@ -1303,9 +1303,9 @@ private struct SidebarTabRow: View {
 
     /// Which agents this row offers to start, mirroring the keys the sidebar
     /// header and the group header already use for their own buttons.
-    @AppStorage("SidebarTabShowClaude") private var showClaudeAction = true
-    @AppStorage("SidebarTabShowCodex") private var showCodexAction = true
-    @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = true
+    @AppStorage("SidebarTabShowClaude") private var showClaudeAction = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarTabShowCodex") private var showCodexAction = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarTabShowWorktree") private var showWorktreeAction = true
     @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 

@@ -194,24 +194,24 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarShowDevServer") private var showDevServer = true
     @AppStorage("SidebarShowPlan") private var showPlan = true
     @AppStorage("SidebarTabShowWorktree") private var tabShowWorktree = true
-    @AppStorage("SidebarTabShowClaude") private var tabShowClaude = true
-    @AppStorage("SidebarTabShowCodex") private var tabShowCodex = true
-    @AppStorage("SidebarTabShowOpenCode") private var tabShowOpenCode = true
+    @AppStorage("SidebarTabShowClaude") private var tabShowClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarTabShowCodex") private var tabShowCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarTabShowOpenCode") private var tabShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarTabAlwaysShowActions") private var tabAlwaysShowActions = false
 
     @AppStorage("SidebarGroupShowPullRequests") private var groupShowPullRequests = true
-    @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = true
-    @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = true
-    @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = true
+    @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarGroupShowNewTerminal") private var groupShowNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var groupShowWorktree = true
     @AppStorage("SidebarGroupShowCount") private var groupShowCount = true
     @AppStorage("SidebarGroupAlwaysShowActions") private var groupAlwaysShowActions = false
 
     @AppStorage("SidebarChromeShowWorktree") private var chromeShowWorktree = true
-    @AppStorage("SidebarShowClaude") private var chromeShowClaude = true
-    @AppStorage("SidebarShowCodex") private var chromeShowCodex = true
-    @AppStorage("SidebarShowOpenCode") private var chromeShowOpenCode = true
+    @AppStorage("SidebarShowClaude") private var chromeShowClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarShowCodex") private var chromeShowCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarShowOpenCode") private var chromeShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarChromeAlwaysShowActions") private var chromeAlwaysShowActions = false
 
     @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
