@@ -85,22 +85,31 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     private var editorTerminalDirectoryCancellable: AnyCancellable?
     private var editorHostingView: NSView?
 
-    /// The terminal half of the right pane, hidden while the editor has
-    /// the floor.
-    private weak var terminalPaneView: NSView?
-    private var editorCancellable: AnyCancellable?
+    /// The window's terminal view, and the grid cell it currently sits in is
+    /// not what keeps it alive — this is.
+    ///
+    /// Strong, and that is load-bearing: the terminal moves between cells by
+    /// being re-parented, and between `removeFromSuperview` and the next
+    /// `addSubview` the view hierarchy holds no reference to it at all. Weak,
+    /// it would deallocate in that gap and take its pty — and the shell — with
+    /// it. Released in `releaseSidebarChrome`, which is where every strong
+    /// reference into this window's view tree has to be dropped so the window
+    /// can deallocate and the shell can be signalled.
+    private var terminalPaneView: NSView?
     private var terminalTitleCancellable: AnyCancellable?
 
-    /// The pane tab bar, coloured with the rest of the pane.
-    private weak var paneTabBarView: NSView?
-
-    /// The pane tab bar's height constraint, zero while no file is open.
-    private var paneTabBarHeight: NSLayoutConstraint?
+    /// The right-hand pane, which the titlebar measurement asks about.
+    ///
+    /// The pane rather than the terminal: it spans the window's full height,
+    /// so its safe area is what the window actually reserves. The terminal is
+    /// a cell inside the grid now, already below the titlebar, and its own
+    /// safe area is zero — reading that as "reserved" made the shortfall the
+    /// whole strip and inset the sidebar by it in an ordinary window.
+    private weak var rightPaneView: NSView?
 
     /// The bar's own height: the tab row, the strip its scroller draws in,
     /// and the divider under both. Derived rather than written out, so
     /// changing the row's height cannot leave the terminal overlapping it.
-    private static let paneTabBarHeightWhenShown: CGFloat = EditorTabBar.height + 1
 
     /// Width constraints swapped when the sidebar collapses.
     private var sidebarExpandedConstraints: [NSLayoutConstraint] = []
@@ -122,7 +131,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// window and the strip's height in native fullscreen. See
     /// `syncTitlebarStripInsets`.
     private var terminalTitlebarFillerBottom: NSLayoutConstraint?
-    private var paneTabBarTopConstraint: NSLayoutConstraint?
+    private var paneGridTopConstraint: NSLayoutConstraint?
 
     /// The sidebar pane container and its glass layer (glass effect
     /// modes cover every pane, so the sidebar carries its own).
@@ -802,7 +811,6 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         terminalTitlebarFiller?.layer?.backgroundColor = paneColor?.cgColor
         editorHostingView?.layer?.backgroundColor = paneColor?.cgColor
-        paneTabBarView?.layer?.backgroundColor = paneColor?.cgColor
 
         guard let sidebarBackgroundView else { return }
         sidebarBackgroundView.layer?.backgroundColor = paneColor?.cgColor
@@ -1572,12 +1580,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         let rightPane = NSView()
         rightPane.translatesAutoresizingMaskIntoConstraints = false
 
-        // The terminal joins first, before anything constrains itself to
-        // it. Activating a constraint between two views with no common
-        // ancestor raises, and raising here leaves the app running with no
-        // window at all — it appears in the Dock and never shows itself.
-        rightPane.addSubview(terminalContainer)
+        // The terminal is not a subview of the pane any more: it is a cell of
+        // the grid, moved into whichever cell shows it. Held here so that the
+        // gap between one cell and the next cannot deallocate it.
         self.terminalPaneView = terminalContainer
+        self.rightPaneView = rightPane
 
         let titlebarFiller = NSView()
         titlebarFiller.translatesAutoresizingMaskIntoConstraints = false
@@ -1601,7 +1608,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // insets its content under the detached titlebar, so this is the only
         // thing left to paint that band.
         let fillerBottom = titlebarFiller.bottomAnchor.constraint(
-            equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
+            equalTo: rightPane.safeAreaLayoutGuide.topAnchor
         )
         NSLayoutConstraint.activate([
             titlebarFiller.topAnchor.constraint(equalTo: rightPane.topAnchor),
@@ -1612,122 +1619,45 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         self.terminalTitlebarFiller = titlebarFiller
         self.terminalTitlebarFillerBottom = fillerBottom
 
-        // The pane's tab bar, above whichever surface is showing. Added after
-        // the terminal so that constraining to it is legal: a constraint
-        // between views with no common ancestor raises, and raising here
-        // leaves the app running with no window at all.
-        let tabBarHosting = NSHostingView(
-            rootView: EditorPaneTabBar(
+        // One hosting view for the whole pane: every cell's tab bar, every
+        // cell's surface, and the terminal among them. What used to be two
+        // siblings toggled by `isHidden` — a bar over the terminal and an
+        // editor beside it — is a grid whose own contents decide what shows.
+        let gridHosting = NSHostingView(
+            rootView: EditorGridView(
                 center: editorCenter,
-                // The one cell the grid starts as. When the grid draws
-                // several, each hands its own bar its own id — the pane's
-                // single bar is the degenerate case of that, not a special
-                // one.
-                groupID: editorCenter.activeGroupID,
-                terminalDirectory: editorTerminalDirectory
-            ).interfaceFont()
-        )
-        tabBarHosting.translatesAutoresizingMaskIntoConstraints = false
-        // Layer-backed and coloured by `syncSidebarBackground`, exactly like
-        // the editor beside it. Without this the bar had no background at all:
-        // the tab labels floated over whatever was behind, and text scrolling
-        // under it passed straight through the gap where the terminal's own
-        // tab draws nothing.
-        tabBarHosting.wantsLayer = true
-        // Belt and braces with the `maxWidth: .infinity` on its content: the
-        // bar follows the pane's width and never argues about it, whatever
-        // SwiftUI decides its ideal size is.
-        tabBarHosting.setContentHuggingPriority(.init(1), for: .horizontal)
-        tabBarHosting.setContentCompressionResistancePriority(.init(1), for: .horizontal)
-        rightPane.addSubview(tabBarHosting)
-        let tabBarHeight = tabBarHosting.heightAnchor.constraint(equalToConstant: 0)
-        // Offset by the same strip the filler carries, so the bar sits under
-        // the titlebar rather than behind it in fullscreen. The terminal's
-        // own content lines up with it either way: its SwiftUI inset is the
-        // bar's height, applied on top of whatever the window or its scroll
-        // view has already pushed the content down by.
-        let tabBarTop = tabBarHosting.topAnchor.constraint(
-            equalTo: terminalContainer.safeAreaLayoutGuide.topAnchor
-        )
-        NSLayoutConstraint.activate([
-            tabBarTop,
-            tabBarHosting.leadingAnchor.constraint(equalTo: rightPane.leadingAnchor),
-            tabBarHosting.trailingAnchor.constraint(equalTo: rightPane.trailingAnchor),
-            tabBarHeight,
-        ])
-        self.paneTabBarHeight = tabBarHeight
-        self.paneTabBarTopConstraint = tabBarTop
-        self.paneTabBarView = tabBarHosting
-
-        let editorHosting = NSHostingView(
-            rootView: EditorPaneView(
-                center: editorCenter,
-                groupID: editorCenter.activeGroupID,
                 terminalDirectory: editorTerminalDirectory,
-                search: workspaceSearch
+                search: workspaceSearch,
+                terminal: terminalContainer
             ).interfaceFont()
         )
-        editorHosting.translatesAutoresizingMaskIntoConstraints = false
-        editorHosting.isHidden = true
+        gridHosting.translatesAutoresizingMaskIntoConstraints = false
         // Layer-backed and coloured by `syncSidebarBackground`, exactly like
-        // the sidebar pane: the SwiftUI content above it draws nothing of
-        // its own, so the window's opacity and blur reach the editor the
-        // same way they reach everything else. Painting an opaque colour in
-        // SwiftUI instead — which is what this did first — left a solid
-        // slab in the middle of a translucent window.
-        editorHosting.wantsLayer = true
-        rightPane.addSubview(editorHosting)
-        self.editorHostingView = editorHosting
+        // the sidebar pane: the SwiftUI content above it draws nothing of its
+        // own, so the window's opacity and blur reach the editor the same way
+        // they reach everything else. Painting an opaque colour in SwiftUI
+        // instead — which is what this did first — left a solid slab in the
+        // middle of a translucent window.
+        gridHosting.wantsLayer = true
+        rightPane.addSubview(gridHosting)
+        self.editorHostingView = gridHosting
 
-        terminalContainer.translatesAutoresizingMaskIntoConstraints = false
+        // Below the titlebar, measured rather than assumed: the pane carries a
+        // safe area of its own — the probe in `probePaneInsets` reads 32pt on
+        // an ordinary window, the same as the terminal used to report — so the
+        // grid hangs off the pane's guide and needs no arithmetic. The offset
+        // is the part of the strip the window has stopped reserving, which is
+        // nothing until native fullscreen; see `syncTitlebarStripInsets`.
+        let gridTop = gridHosting.topAnchor.constraint(
+            equalTo: rightPane.safeAreaLayoutGuide.topAnchor
+        )
         NSLayoutConstraint.activate([
-            terminalContainer.topAnchor.constraint(equalTo: rightPane.topAnchor),
-            terminalContainer.leadingAnchor.constraint(equalTo: rightPane.leadingAnchor),
-            terminalContainer.bottomAnchor.constraint(equalTo: rightPane.bottomAnchor),
-            terminalContainer.trailingAnchor.constraint(equalTo: rightPane.trailingAnchor),
-            // The terminal container's guide, not the pane's: this view was
-            // inserted between the split view and the terminal, and a plain
-            // `NSView` in that position reports no safe area of its own, so
-            // the editor started at the window's very top and its text
-            // scrolled up into the titlebar.
-            editorHosting.topAnchor.constraint(equalTo: tabBarHosting.bottomAnchor),
-            editorHosting.leadingAnchor.constraint(equalTo: rightPane.leadingAnchor),
-            editorHosting.bottomAnchor.constraint(equalTo: rightPane.bottomAnchor),
-            editorHosting.trailingAnchor.constraint(equalTo: rightPane.trailingAnchor),
+            gridTop,
+            gridHosting.leadingAnchor.constraint(equalTo: rightPane.leadingAnchor),
+            gridHosting.trailingAnchor.constraint(equalTo: rightPane.trailingAnchor),
+            gridHosting.bottomAnchor.constraint(equalTo: rightPane.bottomAnchor),
         ])
-
-        // Both views are toggled, not just the editor. The editor draws no
-        // background of its own — that is what lets the window's blur reach
-        // it — so a terminal left visible underneath shows *through* the
-        // code, and the shell's last output reads as garbage mixed into the
-        // file. Hidden, never removed: the shell and its scrollback have to
-        // survive being covered.
-        // Driven by `paneVisibility` rather than by the tab set itself.
-        // `@Published` sends in `willSet`, and the editor's tabs are now
-        // computed from its group tree — so reading them from inside a sink on
-        // the tree would answer with the state before the change. The centre
-        // publishes the two facts this needs, already resolved.
-        editorCancellable = editorCenter.$paneVisibility
-            .removeDuplicates()
-            .sink { [weak self] visibility in
-                guard let self else { return }
-                self.editorHostingView?.isHidden = visibility.showsTerminal
-                self.terminalPaneView?.isHidden = !visibility.showsTerminal
-
-                // The bar takes its height only when there is something to
-                // switch to, and the terminal is pushed down by exactly that
-                // much. An `additionalSafeAreaInsets` rather than a moved top
-                // constraint: the terminal's top is what makes the titlebar
-                // strip meet its content, and the shell's SwiftUI content
-                // already honours the safe area.
-                let height: CGFloat = visibility.showsTabBar ? Self.paneTabBarHeightWhenShown : 0
-                self.paneTabBarHeight?.constant = height
-                // Published, so the terminal's SwiftUI content moves down by
-                // exactly the bar's height. `additionalSafeAreaInsets` was
-                // tried first and did nothing: the terminal fills its bounds
-                // and never consults the safe area.
-                self.editorCenter.paneTabBarInset = height
-            }
+        self.paneGridTopConstraint = gridTop
 
         // The terminal's own tab is labelled with the window's title, which
         // the shell rewrites as it goes. KVO rather than a one-time read, so
@@ -2200,14 +2130,20 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         let shortfall = SidebarLayoutModel.titlebarShortfall(
             titlebarHeight: visibleTitlebarHeight(of: window),
-            reservedByWindow: terminalPaneView?.safeAreaInsets.top ?? 0
+            reservedByWindow: rightPaneView?.safeAreaInsets.top ?? 0
         )
 
-        // The filler's bottom and the tab bar's top hang off the terminal's
+        // Asked of the pane, not of the terminal. The terminal is a cell of
+        // the grid now — already below the titlebar, so its own safe area is
+        // zero — and reading that as "what the window reserves" made the
+        // shortfall the whole strip and inset the sidebar by it on an
+        // ordinary window.
+        //
+        // The filler's bottom and the grid's top both hang off the pane's
         // safe area, so both take the shortfall as their offset: nothing
         // moves at zero, and in fullscreen both land on the strip's edge.
         terminalTitlebarFillerBottom?.constant = shortfall
-        paneTabBarTopConstraint?.constant = shortfall
+        paneGridTopConstraint?.constant = shortfall
 
         // Assigned only on a real change: this runs on every divider drag
         // and every appearance sync, and a `@Published` write invalidates
@@ -2486,8 +2422,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         sidebarCollapsedConstraint = nil
         terminalTitlebarFiller = nil
         terminalTitlebarFillerBottom = nil
-        paneTabBarTopConstraint = nil
-        paneTabBarHeight = nil
+        paneGridTopConstraint = nil
+        // The terminal, whose only strong reference this is once the grid has
+        // let go of it. Without this the window never deallocates, the surface
+        // tree never releases its pty, and the shell runs on after its tab has
+        // left the screen.
+        terminalPaneView = nil
         editorHostingView = nil
     }
 

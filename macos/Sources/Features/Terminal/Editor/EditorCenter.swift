@@ -260,6 +260,23 @@ final class EditorCenter: ObservableObject {
         refreshPaneVisibility()
     }
 
+    /// Divides the cell in focus, carrying what it is showing into the new
+    /// half — the keyboard's form of a drag to that edge, routed through the
+    /// same `drop` so the two cannot disagree.
+    ///
+    /// Whatever the cell is showing travels: a file if it is showing one, the
+    /// terminal if it is showing that. A cell showing the terminal and holding
+    /// nothing else has nothing to divide, and `drop` already answers that
+    /// with the layout it started in.
+    func divideFocusedCell(_ zone: EditorDropZone) {
+        let cell = tabs
+        if let path = cell.selectedPath {
+            drop(.file(path), on: activeGroupID, zone: zone)
+        } else if cell.showsTerminal {
+            drop(.terminal, on: activeGroupID, zone: zone)
+        }
+    }
+
     /// Closes a cell, its files with it, and lets the sibling take the space.
     ///
     /// The files are closed through `close` rather than dropped with the

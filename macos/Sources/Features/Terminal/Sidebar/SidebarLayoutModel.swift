@@ -153,6 +153,13 @@ final class SidebarSplitView: NSSplitView {
         if routeEditingCommand(event) { return true }
 
         if let center = editorCenter,
+           let zone = EditorCommands.divideZone(
+               keyCode: event.keyCode, modifiers: event.modifierFlags) {
+            center.divideFocusedCell(zone)
+            return true
+        }
+
+        if let center = editorCenter,
            let characters = event.charactersIgnoringModifiers,
            let command = EditorCommands.paneCommand(
                for: characters,
