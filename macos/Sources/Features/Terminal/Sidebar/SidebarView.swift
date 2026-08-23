@@ -1377,6 +1377,28 @@ private struct SidebarTabRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            /// The tab's own colour, opening the row rather than sitting
+            /// between the icon and the title.
+            ///
+            /// It was a 6pt dot there, which is the same shape and the same
+            /// size as the unread dot `statusIndicator` draws for
+            /// `needsAttention` — one row carrying two round marks that mean
+            /// unrelated things, and the colour one landed where a badge
+            /// belongs. A bar at the leading edge cannot be read as
+            /// notification: nothing else on the row is a bar. It stays a row
+            /// element and not a border on `rowBackground`, so the icon and
+            /// the title move over for it.
+            ///
+            /// Left inside the same `if let` the dot used, because that is
+            /// what keeps an uncoloured tab laying out exactly as before: a
+            /// view that is absent adds no `HStack` spacing, while a
+            /// zero-width placeholder would still push the icon over by 6.
+            if let accent = override?.accentColor {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(accent)
+                    .frame(width: 3, height: iconBoxHeight)
+            }
+
             // A tab opened for a file wears that file's icon, from whichever
             // icon theme is active — the same artwork the explorer and the
             // Git panel show it with, so the three read as one thing. A hand
@@ -1385,13 +1407,7 @@ private struct SidebarTabRow: View {
                 SidebarGroupIcon(icon: icon, size: 13)
                     .foregroundStyle(.secondary)
             } else if let file = override?.fileName, !file.isEmpty {
-                FileIconView(icon: icons.icon(forFile: file), size: 14)
-            }
-
-            if let accent = override?.accentColor {
-                Circle()
-                    .fill(accent)
-                    .frame(width: 6, height: 6)
+                FileIconView(icon: icons.icon(forFile: file), size: iconBoxHeight)
             }
 
             VStack(alignment: .leading, spacing: isCompact ? 2 : 4) {
@@ -1621,6 +1637,17 @@ private struct SidebarTabRow: View {
             }
         }
     }
+
+    /// The box the row opens with: the file icon's frame, and with it the
+    /// height of the colour bar that precedes the icon.
+    ///
+    /// Measured from `FileIconView`, which frames itself square at the size
+    /// it is given and is the tallest of the things that can start a row —
+    /// rather than picked to look right, which is how the bar would drift out
+    /// of line the next time the icon is resized. Density is not part of it:
+    /// the icon is the one piece of the row compact leaves alone, so both
+    /// densities center the same bar against the same icon.
+    private var iconBoxHeight: CGFloat { 14 }
 
     /// The shared line box every chip element is centered within.
     private var chipLineHeight: CGFloat { 11 }
