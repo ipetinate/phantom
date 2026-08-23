@@ -318,6 +318,50 @@ struct PhantomSessionStoreTests {
         #expect(standalones.map(\.id) == [1])
     }
 
+    /// The healing rule for the sidebar: however a session file was split —
+    /// two tab groups, loose standalones, any mix — it comes back as one
+    /// group. The splits this undoes were manufactured by bugs (⌘N minting a
+    /// loose window, a tab request degrading when its parent was a husk) and
+    /// then faithfully preserved by every save/restore cycle after, which is
+    /// how one accident became a permanent ghost tab.
+    @Test func aSplitSessionIsUnifiedIntoOneGroup() {
+        let states = [
+            FakeSessionState(id: 1, tabGroupID: 0, tabIndex: 0),
+            FakeSessionState(id: 2),
+            FakeSessionState(id: 3, tabGroupID: 1, tabIndex: 0),
+            FakeSessionState(id: 4, tabGroupID: 0, tabIndex: 1),
+            FakeSessionState(id: 5),
+        ]
+
+        let (groups, standalones) = PhantomSessionStore.partition(states)
+        let unified = PhantomSessionStore.unified(groups: groups, standalones: standalones)
+
+        #expect(unified.groups.count == 1)
+        #expect(unified.standalones.isEmpty)
+        #expect(unified.groups[0].map(\.id) == [1, 4, 3, 2, 5])
+    }
+
+    @Test func unifyingNothingStaysNothing() {
+        let unified = PhantomSessionStore.unified(
+            groups: [[FakeSessionState]](), standalones: [FakeSessionState]())
+        #expect(unified.groups.isEmpty)
+        #expect(unified.standalones.isEmpty)
+    }
+
+    /// A healthy single-group session passes through unchanged in content —
+    /// the healing must not reorder what was never split.
+    @Test func aHealthySessionIsUntouchedByUnification() {
+        let states = [
+            FakeSessionState(id: 1, tabGroupID: 0, tabIndex: 0),
+            FakeSessionState(id: 2, tabGroupID: 0, tabIndex: 1),
+        ]
+        let (groups, standalones) = PhantomSessionStore.partition(states)
+        let unified = PhantomSessionStore.unified(groups: groups, standalones: standalones)
+
+        #expect(unified.groups.count == 1)
+        #expect(unified.groups[0].map(\.id) == [1, 2])
+    }
+
     /// The file measured behind the bug this suite exists for: a real
     /// `session.json` with four states, the first of which has no
     /// `tabGroupID`, `tabIndex` or `isSelectedTab` at all — not `null`,

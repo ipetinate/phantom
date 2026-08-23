@@ -14,7 +14,6 @@ struct SettingsRootView: View {
         case icon
         case sidebar
         case files
-        case behaviors
         case keyboardShortcuts
         case languageServers
         case agents
@@ -28,27 +27,28 @@ struct SettingsRootView: View {
             case .appearance: return "Appearance"
             case .icon: return "Icon"
             case .sidebar: return "Sidebar"
-            case .files: return "Files"
-            case .behaviors: return "Behaviors"
+            case .files: return "Editor"
             case .keyboardShortcuts: return "Keyboard Shortcuts"
-            case .languageServers: return "Language Servers"
+            case .languageServers: return "Languages"
             case .agents: return "Agents"
             case .worktrees: return "Worktrees"
             }
         }
 
-        var icon: String {
+        /// SF Symbol, or nil for a pane that ships its own artwork — the
+        /// same shape `SidebarPane.symbol` uses, and for the same reason: the
+        /// worktrees mark is this app's own drawing, not one of Apple's.
+        var icon: String? {
             switch self {
+            case .worktrees: return nil
             case .general: return "gearshape"
             case .appearance: return "paintpalette"
             case .icon: return "app.badge"
             case .sidebar: return "sidebar.left"
             case .files: return "doc.text"
-            case .behaviors: return "slider.horizontal.3"
             case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
             case .agents: return "sparkles"
-            case .worktrees: return "arrow.triangle.branch"
             }
         }
     }
@@ -58,8 +58,16 @@ struct SettingsRootView: View {
     var body: some View {
         NavigationSplitView {
             List(SettingsSection.allCases, selection: $selection) { section in
-                Label(section.title, systemImage: section.icon)
-                    .tag(section)
+                Label {
+                    Text(section.title)
+                } icon: {
+                    if let symbol = section.icon {
+                        Image(systemName: symbol)
+                    } else {
+                        WorktreeIcon(size: 13)
+                    }
+                }
+                .tag(section)
             }
             .listStyle(.sidebar)
             // Wide enough for the longest section name at the window's
@@ -75,13 +83,11 @@ struct SettingsRootView: View {
             case .appearance:
                 AppearanceSettingsView(ghostty: ghostty, store: store)
             case .icon:
-                IconSettingsView()
+                AppIconPickerView()
             case .sidebar:
                 SidebarSettingsView(ghostty: ghostty, store: store)
             case .files:
                 FilesSettingsView()
-            case .behaviors:
-                BehaviorsSettingsView(ghostty: ghostty, store: store)
             case .keyboardShortcuts:
                 KeyboardShortcutsSettingsView()
             case .languageServers:
@@ -92,7 +98,6 @@ struct SettingsRootView: View {
                 WorktreesSettingsView()
             }
         }
-        .frame(minWidth: 960, minHeight: 600)
     }
 }
 
@@ -101,8 +106,42 @@ struct GeneralSettingsView: View {
     let ghostty: Ghostty.App
     @ObservedObject var store: GuiConfigStore
 
+    @AppStorage("SidebarRestoreAgentSessions") private var restoreAgentSessions = true
+
+    @State private var restoreWindows = true
+
     var body: some View {
         Form {
+            Section {
+                /// `never`, not `default`.
+                ///
+                /// The domain is `always` / `default` / `never`, and this
+                /// wrote the middle value when switched off — "follow the
+                /// system" — while every reader in the app only bails on
+                /// `never`. So turning the switch off restored the windows
+                /// anyway. `default` stays reachable from the config file,
+                /// which is the boundary this window already declares.
+                Toggle("Restore Windows on Launch", isOn: $restoreWindows)
+                    .toggleStyle(.switch)
+                    .onChange(of: restoreWindows) { value in
+                        store.set("window-save-state", value ? "always" : "never")
+                        store.apply(ghostty: ghostty)
+                    }
+
+                /// Disabled with its parent, and next to it. It used to sit
+                /// two panes away from the switch that decides whether it
+                /// can happen at all.
+                Toggle("Resume Agent Sessions on Restore", isOn: $restoreAgentSessions)
+                    .toggleStyle(.switch)
+                    .disabled(!restoreWindows)
+            } header: {
+                Text("On Launch")
+            } footer: {
+                Text("Restored tabs that were running a Claude Code session run `claude --continue` to pick the conversation back up.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 LabeledContent("Phantom Settings File") {
                     Button("Open in Editor") {
@@ -123,10 +162,21 @@ struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("General")
+        .onAppear {
+            restoreWindows = (store.string("window-save-state") ?? "always") == "always"
+        }
     }
 }
 
-/// Sidebar behavior: visibility, ordering and which tab info shows.
+/// Where the sidebar's parts are, and which of them show.
+///
+/// Grouped by **surface** — toolbar, terminal rows, group headers — because
+/// that is how a reader arrives: they are looking at a row and want something
+/// off it. Before this the agent buttons lived in another pane entirely, so
+/// no surface could be seen whole.
+///
+/// Four or more show/hide items on one surface fold into a single row; see
+/// `SettingsMultiSelect` for why, and for the reaction that prompted it.
 struct SidebarSettingsView: View {
     let ghostty: Ghostty.App
     @ObservedObject var store: GuiConfigStore
@@ -144,17 +194,28 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarShowDevServer") private var showDevServer = true
     @AppStorage("SidebarShowPlan") private var showPlan = true
     @AppStorage("SidebarTabShowWorktree") private var tabShowWorktree = true
+    @AppStorage("SidebarTabShowClaude") private var tabShowClaude = true
+    @AppStorage("SidebarTabShowCodex") private var tabShowCodex = true
+    @AppStorage("SidebarTabShowOpenCode") private var tabShowOpenCode = true
     @AppStorage("SidebarTabAlwaysShowActions") private var tabAlwaysShowActions = false
 
     @AppStorage("SidebarGroupShowPullRequests") private var groupShowPullRequests = true
     @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = true
+    @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = true
+    @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = true
     @AppStorage("SidebarGroupShowNewTerminal") private var groupShowNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var groupShowWorktree = true
     @AppStorage("SidebarGroupShowCount") private var groupShowCount = true
     @AppStorage("SidebarGroupAlwaysShowActions") private var groupAlwaysShowActions = false
 
     @AppStorage("SidebarChromeShowWorktree") private var chromeShowWorktree = true
+    @AppStorage("SidebarShowClaude") private var chromeShowClaude = true
+    @AppStorage("SidebarShowCodex") private var chromeShowCodex = true
+    @AppStorage("SidebarShowOpenCode") private var chromeShowOpenCode = true
     @AppStorage("SidebarChromeAlwaysShowActions") private var chromeAlwaysShowActions = false
+
+    @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
+    @AppStorage("SidebarNewTabHomeDirectory") private var newTabHomeDirectory = ""
 
     var body: some View {
         Form {
@@ -165,9 +226,8 @@ struct SidebarSettingsView: View {
                         store.set("sidebar", value ? "true" : "false")
                         store.apply(ghostty: ghostty)
                     }
-
             } footer: {
-                Text("The sidebar toggle applies to new windows. Sidebar style (background, width, tab item look) lives in Appearance.")
+                Text("Applies to new windows. How the sidebar looks — background, width, tab item style — is in Appearance.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -180,157 +240,125 @@ struct SidebarSettingsView: View {
                 Toggle("Worktrees", isOn: $showWorktreesPane)
                     .toggleStyle(.switch)
             } header: {
-                Text("Panels")
+                Text("Panes")
             } footer: {
                 Text("Terminals is always available. With everything else off there is nothing to switch between, so the tabs disappear and the sidebar is just the terminal list.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
+            FileExplorerSettingsSection()
+
             Section {
-                Toggle("Show New Terminal in Worktree", isOn: $chromeShowWorktree)
-                    .toggleStyle(.switch)
-                Toggle("Always Show Toolbar Icons", isOn: $chromeAlwaysShowActions)
+                SettingsMultiSelect(
+                    title: "Buttons",
+                    options: [
+                        .init(id: "worktree", title: "New Terminal in Worktree",
+                              short: "Worktree", isOn: $chromeShowWorktree),
+                        .init(id: "claude", title: "Claude Code",
+                              short: "Claude", isOn: $chromeShowClaude),
+                        .init(id: "codex", title: "Codex", isOn: $chromeShowCodex),
+                        .init(id: "opencode", title: "OpenCode", isOn: $chromeShowOpenCode),
+                    ],
+                    emptyLabel: "Hidden")
+
+                Toggle("Always Show Buttons", isOn: $chromeAlwaysShowActions)
                     .toggleStyle(.switch)
             } header: {
                 Text("Toolbar")
             } footer: {
-                Text("New Terminal, New Claude Session, New Group and Refresh appear on hover by default. The sidebar show/hide button is always visible either way.")
+                Text("New Terminal, New Group and Refresh are always offered and are not listed here. Buttons appear on hover unless you keep them visible; the sidebar show/hide button is visible either way.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section {
-                Toggle("Show Working Directory", isOn: $showDirectory)
-                    .toggleStyle(.switch)
-                Toggle("Show Git Branch", isOn: $showGitBranch)
-                    .toggleStyle(.switch)
-                Toggle("Show Uncommitted Changes", isOn: $showGitStatus)
-                    .toggleStyle(.switch)
-                Toggle("Show Open Pull Request", isOn: $showPullRequest)
-                    .toggleStyle(.switch)
-                Toggle("Show Dev Server Port", isOn: $showDevServer)
-                    .toggleStyle(.switch)
-                Toggle("Show Plan Tag", isOn: $showPlan)
-                    .toggleStyle(.switch)
-                Toggle("Show Switch Worktree", isOn: $tabShowWorktree)
-                    .toggleStyle(.switch)
-                Toggle("Always Show Tab Actions", isOn: $tabAlwaysShowActions)
+                SettingsMultiSelect(
+                    title: "Information",
+                    options: [
+                        .init(id: "directory", title: "Working Directory",
+                              short: "Directory", isOn: $showDirectory),
+                        .init(id: "branch", title: "Git Branch",
+                              short: "Branch", isOn: $showGitBranch),
+                        .init(id: "status", title: "Uncommitted Changes",
+                              short: "Changes", isOn: $showGitStatus),
+                        .init(id: "pr", title: "Open Pull Request",
+                              short: "Pull Request", isOn: $showPullRequest),
+                        .init(id: "devserver", title: "Dev Server Port",
+                              short: "Dev Server", isOn: $showDevServer),
+                        .init(id: "plan", title: "Plan Tag", short: "Plan", isOn: $showPlan),
+                    ])
+
+                SettingsMultiSelect(
+                    title: "Buttons",
+                    options: [
+                        .init(id: "worktree", title: "Switch Worktree",
+                              short: "Worktree", isOn: $tabShowWorktree),
+                        .init(id: "claude", title: "Claude Code",
+                              short: "Claude", isOn: $tabShowClaude),
+                        .init(id: "codex", title: "Codex", isOn: $tabShowCodex),
+                        .init(id: "opencode", title: "OpenCode", isOn: $tabShowOpenCode),
+                    ],
+                    emptyLabel: "Hidden")
+
+                Toggle("Always Show Buttons", isOn: $tabAlwaysShowActions)
                     .toggleStyle(.switch)
             } header: {
-                Text("Tab Info")
+                Text("Terminal Rows")
             } footer: {
-                Text("A tab's agent buttons appear on hover — turn the last one on to keep them visible. Which agents they offer is in Agents. The plan tag only ever shows while the Claude session that wrote the plan is running in that tab. Switch Worktree appears only on a terminal sitting at a prompt, because it types a cd into it.")
+                Text("The plan tag shows only while the Claude session that wrote the plan is running in that row. Switch Worktree appears only on a terminal sitting at a prompt, because it types a cd into it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section {
-                Toggle("Show Pull Requests", isOn: $groupShowPullRequests)
-                    .toggleStyle(.switch)
-                Toggle("Show New Claude Session", isOn: $groupShowClaude)
-                    .toggleStyle(.switch)
-                Toggle("Show New Terminal", isOn: $groupShowNewTerminal)
-                    .toggleStyle(.switch)
-                Toggle("Show New Terminal in Worktree", isOn: $groupShowWorktree)
-                    .toggleStyle(.switch)
+                SettingsMultiSelect(
+                    title: "Buttons",
+                    options: [
+                        .init(id: "prs", title: "Pull Requests", isOn: $groupShowPullRequests),
+                        .init(id: "newterminal", title: "New Terminal",
+                              short: "Terminal", isOn: $groupShowNewTerminal),
+                        .init(id: "worktree", title: "New Terminal in Worktree",
+                              short: "Worktree", isOn: $groupShowWorktree),
+                        .init(id: "claude", title: "Claude Code",
+                              short: "Claude", isOn: $groupShowClaude),
+                        .init(id: "codex", title: "Codex", isOn: $groupShowCodex),
+                        .init(id: "opencode", title: "OpenCode", isOn: $groupShowOpenCode),
+                    ],
+                    emptyLabel: "Hidden")
+
                 Toggle("Show Terminal Count", isOn: $groupShowCount)
                     .toggleStyle(.switch)
-                Toggle("Always Show Group Actions", isOn: $groupAlwaysShowActions)
+                Toggle("Always Show Buttons", isOn: $groupAlwaysShowActions)
                     .toggleStyle(.switch)
             } header: {
-                Text("Group")
+                Text("Group Headers")
             } footer: {
-                Text("The action icons above appear in a group's header on hover by default — turn this on to keep them visible. The group's icon, name and color are set per group, from its context menu.")
+                Text("A group's own icon, name and color are set from its context menu in the sidebar, not here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
+            Section {
+                Picker("Position", selection: $newTabPosition) {
+                    Text("Bottom of List").tag("end")
+                    Text("Top of List").tag("start")
+                }
+                .pickerStyle(.segmented)
+
+                TextField("Home Directory", text: $newTabHomeDirectory, prompt: Text("~/"))
+            } header: {
+                Text("New Terminals")
+            } footer: {
+                Text("Terminals the sidebar opens start in the home directory unless a group's project path applies. Type a path like `~/dev` to change it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Sidebar")
         .onAppear {
             sidebarEnabled = store.bool("sidebar")
-        }
-    }
-}
-
-/// Behavioral options grouped by area — nothing here changes looks.
-struct BehaviorsSettingsView: View {
-    let ghostty: Ghostty.App
-    @ObservedObject var store: GuiConfigStore
-
-    @AppStorage("SidebarRestoreAgentSessions") private var restoreAgentSessions = true
-    @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
-    @AppStorage("SidebarNewTabHomeDirectory") private var newTabHomeDirectory = ""
-    @AppStorage("AgentNotificationsEnabled") private var agentNotifications = true
-    @AppStorage(FileOpenTarget.defaultsKey)
-    private var fileOpenTarget = FileOpenTarget.alwaysNewTerminal.rawValue
-
-    @State private var restoreWindows = true
-
-    var body: some View {
-        Form {
-            Section("General") {
-                Toggle("Restore Windows on Launch", isOn: $restoreWindows)
-                    .toggleStyle(.switch)
-                    .onChange(of: restoreWindows) { value in
-                        store.set("window-save-state", value ? "always" : "default")
-                        store.apply(ghostty: ghostty)
-                    }
-            }
-
-            Section {
-                Toggle("Resume Agent Sessions on Restore", isOn: $restoreAgentSessions)
-                    .toggleStyle(.switch)
-
-                Toggle("Notify on Agent Activity", isOn: $agentNotifications)
-                    .toggleStyle(.switch)
-            } header: {
-                Text("Terminal")
-            } footer: {
-                Text("When windows are restored, tabs that were running a Claude Code session run `claude --continue` to pick the conversation back up.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Picker("New Terminal Position", selection: $newTabPosition) {
-                    Text("Bottom of List").tag("end")
-                    Text("Top of List").tag("start")
-                }
-
-                TextField(
-                    "New Terminal Home Directory",
-                    text: $newTabHomeDirectory,
-                    prompt: Text("~/")
-                )
-            } header: {
-                Text("Sidebar")
-            } footer: {
-                Text("New terminals and agents created by the sidebar start in the default home directory (`~/`) unless a group's project path applies. Type a path like `~/dev` to change it.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Picker("Opening a File", selection: $fileOpenTarget) {
-                    ForEach(FileOpenTarget.allCases) { target in
-                        Text(target.title).tag(target.rawValue)
-                    }
-                }
-            } header: {
-                Text("Panels")
-            } footer: {
-                Text("Reuse only applies to a terminal sitting at a prompt. One that's still running something — an editor from the last file, a dev server — always gets a new terminal instead, so a command can never land inside whatever is already open there.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Behaviors")
-        .onAppear {
-            restoreWindows = (store.string("window-save-state") ?? "always") == "always"
         }
     }
 }
@@ -344,75 +372,10 @@ struct AgentsSettingsView: View {
     @State private var openCodeInstalled = OpenCodeHooksInstaller.isInstalled
     @State private var feedback: String?
 
-    @AppStorage("SidebarShowClaude") private var sidebarShowClaude = true
-    @AppStorage("SidebarShowCodex") private var sidebarShowCodex = true
-    @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = true
-    @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = true
-    @AppStorage("SidebarShowOpenCode") private var sidebarShowOpenCode = true
-    @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = true
-    @AppStorage("SidebarTabShowClaude") private var tabShowClaude = true
-    @AppStorage("SidebarTabShowCodex") private var tabShowCodex = true
-    @AppStorage("SidebarTabShowOpenCode") private var tabShowOpenCode = true
+    @AppStorage("AgentNotificationsEnabled") private var agentNotifications = true
 
     var body: some View {
         Form {
-            Section("Sidebar") {
-                Toggle(isOn: $sidebarShowClaude) {
-                    HStack(spacing: 6) { ClaudeIcon(size: 14, tint: .original); Text("Claude Code") }
-                }
-                .toggleStyle(.switch)
-                Toggle(isOn: $sidebarShowCodex) {
-                    HStack(spacing: 6) { CodexIcon(size: 14, originalColors: true); Text("Codex") }
-                }
-                .toggleStyle(.switch)
-                Toggle(isOn: $sidebarShowOpenCode) {
-                    HStack(spacing: 6) { OpenCodeIcon(size: 14, originalColors: true); Text("OpenCode") }
-                }
-                .toggleStyle(.switch)
-            }
-
-            Section {
-                Toggle(isOn: $groupShowClaude) {
-                    HStack(spacing: 6) { ClaudeIcon(size: 14, tint: .original); Text("Claude Code") }
-                }
-                .toggleStyle(.switch)
-                Toggle(isOn: $groupShowCodex) {
-                    HStack(spacing: 6) { CodexIcon(size: 14, originalColors: true); Text("Codex") }
-                }
-                .toggleStyle(.switch)
-                Toggle(isOn: $groupShowOpenCode) {
-                    HStack(spacing: 6) { OpenCodeIcon(size: 14, originalColors: true); Text("OpenCode") }
-                }
-                .toggleStyle(.switch)
-            } header: {
-                Text("Groups")
-            } footer: {
-                Text("Control the new-agent buttons independently in the main sidebar and in each group header.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Toggle(isOn: $tabShowClaude) {
-                    HStack(spacing: 6) { ClaudeIcon(size: 14, tint: .original); Text("Claude Code") }
-                }
-                .toggleStyle(.switch)
-                Toggle(isOn: $tabShowCodex) {
-                    HStack(spacing: 6) { CodexIcon(size: 14, originalColors: true); Text("Codex") }
-                }
-                .toggleStyle(.switch)
-                Toggle(isOn: $tabShowOpenCode) {
-                    HStack(spacing: 6) { OpenCodeIcon(size: 14, originalColors: true); Text("OpenCode") }
-                }
-                .toggleStyle(.switch)
-            } header: {
-                Text("Tabs")
-            } footer: {
-                Text("These start the agent in the tab you hovered, rather than in a new one — so they are hidden while that tab already has a session running, where the command would land in the agent's prompt as a question instead.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section {
                 agentHookRow(
                     title: "Claude Code",
@@ -462,6 +425,17 @@ struct AgentsSettingsView: View {
                 Text("Hooks")
             } footer: {
                 Text("Installs Phantom hooks for each agent while preserving existing configuration. Hooks update the tab activity indicator when an agent is working, waiting, or done.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Notify on Agent Activity", isOn: $agentNotifications)
+                    .toggleStyle(.switch)
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("A notification when an agent finishes or needs an answer, for the times its window is not the one you are looking at.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

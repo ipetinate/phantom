@@ -289,10 +289,34 @@ final class CodeCompletionDocPanel: NSPanel {
         switch documentation.format {
         case .markdown:
             let split = CodeHoverInfo.split(markdown: documentation.text)
-            return (split.signature, split.documentation)
+            return (Self.flattened(split.signature), Self.flattened(split.documentation))
         case .plainText:
             let text = documentation.text.trimmingCharacters(in: .whitespacesAndNewlines)
             return (nil, text.isEmpty ? nil : text)
+        }
+    }
+
+    /// The split's blocks as the two flat strings this card draws.
+    ///
+    /// The hover card keeps them apart so each fence can be coloured by the
+    /// language its tag names; this one draws one signature line and one body
+    /// and has a `detail` of its own to fall back on, so the structure has
+    /// nowhere to go. Joining prose and code with a blank line reproduces
+    /// exactly what the split used to hand back — the same separator its own
+    /// assembly step put between two blocks of different kinds.
+    private static func flattened(_ blocks: [CodeHoverInfo.Block]) -> String? {
+        let joined = blocks.map(text(of:)).joined(separator: "\n\n")
+        return joined.isEmpty ? nil : joined
+    }
+
+    private static func flattened(_ block: CodeHoverInfo.Block?) -> String? {
+        block.map(text(of:))
+    }
+
+    private static func text(of block: CodeHoverInfo.Block) -> String {
+        switch block {
+        case .prose(let text): return text
+        case .code(let source, _): return source
         }
     }
 

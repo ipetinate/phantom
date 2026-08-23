@@ -152,11 +152,11 @@ struct CodeLineMoveTests {
 
 /// The command as the app declares it, and as the reader sees it.
 struct MoveLineDeclarationTests {
-    @Test func bothDirectionsShipOnShiftOptionArrows() {
+    @Test func bothDirectionsShipOnOptionArrows() {
         #expect(PhantomShortcutMap.defaults.shortcuts(for: .moveLineUp)
-            == [PhantomShortcut(key: PhantomShortcut.upArrow, modifiers: [.shift, .option])])
+            == [PhantomShortcut(key: PhantomShortcut.upArrow, modifiers: [.option])])
         #expect(PhantomShortcutMap.defaults.shortcuts(for: .moveLineDown)
-            == [PhantomShortcut(key: PhantomShortcut.downArrow, modifiers: [.shift, .option])])
+            == [PhantomShortcut(key: PhantomShortcut.downArrow, modifiers: [.option])])
     }
 
     @Test func theyBelongToTheEditorSoTheTerminalKeepsTheKeysElsewhere() {
@@ -217,54 +217,52 @@ struct MoveLineKeyTests {
         textView.allowsUndo = true
         textView.string = text
         textView.commandShortcuts = [
-            "moveLineUp": [EditorShortcut(key: PhantomShortcut.upArrow, modifiers: [.shift, .option])],
-            "moveLineDown": [
-                EditorShortcut(key: PhantomShortcut.downArrow, modifiers: [.shift, .option]),
-            ],
+            "moveLineUp": [EditorShortcut(key: PhantomShortcut.upArrow, modifiers: [.option])],
+            "moveLineDown": [EditorShortcut(key: PhantomShortcut.downArrow, modifiers: [.option])],
         ]
         textView.setSelectedRange(NSRange(location: caret, length: 0))
-        return textView
+        return EditorFocus.give(to: textView)
     }
 
     /// An arrow event carries the function-key bit, and on many keyboards the
     /// numeric-pad bit too. Both are in `deviceIndependentFlagsMask`, which is
     /// what the match used to compare against — so this is the case that used
     /// to fail while the same test with a letter passed.
-    @Test func shiftOptionUpMovesTheLineUp() {
+    @Test func optionUpMovesTheLineUp() {
         let textView = self.textView("a\nb\nc", caret: 2)
-        let up = event(PhantomShortcut.upArrow, [.shift, .option, .function, .numericPad])
+        let up = event(PhantomShortcut.upArrow, [.option, .function, .numericPad])
 
         #expect(textView.performKeyEquivalent(with: up))
         #expect(textView.string == "b\na\nc")
         #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
     }
 
-    @Test func shiftOptionDownMovesTheLineDown() {
+    @Test func optionDownMovesTheLineDown() {
         let textView = self.textView("a\nb\nc", caret: 2)
-        let down = event(PhantomShortcut.downArrow, [.shift, .option, .function])
+        let down = event(PhantomShortcut.downArrow, [.option, .function])
 
         #expect(textView.performKeyEquivalent(with: down))
         #expect(textView.string == "a\nc\nb")
     }
 
     /// `performKeyEquivalent` is documented in this file as only seeing ⌘
-    /// combinations, and whether that is true of ⇧⌥ is AppKit's business, not
+    /// combinations, and whether that is true of ⌥ is AppKit's business, not
     /// ours. So `keyDown` answers too, and this pins that the second path
     /// works on its own — otherwise the command would depend on which claim
     /// about AppKit happens to be right.
     @Test func keyDownMovesTheLineToo() {
         let textView = self.textView("a\nb\nc", caret: 2)
-        textView.keyDown(with: event(PhantomShortcut.upArrow, [.shift, .option, .function]))
+        textView.keyDown(with: event(PhantomShortcut.upArrow, [.option, .function]))
 
         #expect(textView.string == "b\na\nc")
     }
 
-    /// A boundary is still ours to swallow: handing ⇧⌥↑ back to AppKit at the
-    /// top of a file starts extending the selection by paragraphs, so holding
-    /// the shortcut would stop moving lines and start selecting them.
+    /// A boundary is still ours to swallow: handing ⌥↑ back to AppKit at the
+    /// top of a file jumps the caret to the start of the paragraph, so holding
+    /// the shortcut would stop moving lines and start moving the caret.
     @Test func theTopOfTheFileSwallowsTheKeyWithoutMovingAnything() {
         let textView = self.textView("a\nb", caret: 0)
-        let up = event(PhantomShortcut.upArrow, [.shift, .option, .function])
+        let up = event(PhantomShortcut.upArrow, [.option, .function])
 
         #expect(textView.performKeyEquivalent(with: up))
         #expect(textView.string == "a\nb")
@@ -299,7 +297,7 @@ struct MoveLineKeyTests {
     @Test func theWholeMoveIsASingleUndoStep() throws {
         let textView = self.textView("a\nb\nc", caret: 2)
         #expect(textView.performKeyEquivalent(with:
-            event(PhantomShortcut.upArrow, [.shift, .option, .function])))
+            event(PhantomShortcut.upArrow, [.option, .function])))
         #expect(textView.string == "b\na\nc")
 
         let undo = try #require(textView.undoManager)

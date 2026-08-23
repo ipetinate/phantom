@@ -1,7 +1,13 @@
 import SwiftUI
 
-/// The completion preferences, as the detail half of the Language Servers
-/// screen.
+/// The completion preferences, as one section of the Editor pane.
+///
+/// A `View` whose body is a `Section` rather than a screen of its own.
+/// This used to be the detail half of the Language Servers list, reached
+/// through an entry that showed itself only when the search text matched
+/// one of four hardcoded words — a settings screen you had to already
+/// know about in order to find. It belongs with the rest of the editor's
+/// settings, and it leaves the Language Servers list about servers again.
 ///
 /// The three globals are `@AppStorage`, which is what makes them live: a
 /// change here lands in `UserDefaults` immediately, and every other reader
@@ -10,19 +16,12 @@ import SwiftUI
 /// same write. The per-language table cannot be, because `@AppStorage` has
 /// no dictionary, so those rows go through `CompletionSettingsStore` and
 /// tell the screen themselves.
-struct CompletionSettingsForm: View {
-    /// The contributed languages to list alongside the compiled-in ones.
-    ///
-    /// Passed in rather than read from `LanguageResolver.shared` here, so
-    /// the list is a function of what the parent already resolved and the
-    /// two halves of the screen cannot disagree about which extensions
-    /// exist.
-    let languages: LanguageCatalog
-
-    /// Told to the parent so the sidebar's summary line repaints. Nothing
-    /// publishes the per-language blob, and the row above says how many
-    /// languages are switched off.
-    var onChange: () -> Void = {}
+struct CompletionSettingsSection: View {
+    /// Read here rather than handed in. It used to be a parameter so that
+    /// the two halves of the Language Servers screen could not disagree
+    /// about which extensions exist; there is no second half now, and the
+    /// resolver is the same singleton either way.
+    @ObservedObject private var languages = LanguageResolver.shared
 
     @AppStorage(CompletionSettingsStore.enabledKey) private var isEnabled = true
     @AppStorage(CompletionSettingsStore.bufferWordsKey) private var usesBufferWords = true
@@ -37,100 +36,103 @@ struct CompletionSettingsForm: View {
     /// pointer and snap back on the next redraw.
     @State private var revision = 0
 
-    private var delay: CompletionDelay { .named(delayRaw) }
+    /// Folded away until asked for. Two dozen languages is the longest
+    /// list in this pane and the one least often wanted: the answer for
+    /// nearly everybody is the three rows above it.
+    @State private var showsLanguages = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 8) {
-                Image(systemName: "list.bullet.rectangle")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 26, height: 26)
-                Text("Completion")
-                    .font(.title2.weight(.semibold))
-                Spacer()
+        Section {
+            Toggle("Suggest as You Type", isOn: $isEnabled)
+                .toggleStyle(.switch)
+
+            Picker("Ask for Suggestions", selection: $delayRaw) {
+                ForEach(CompletionDelay.allCases) { option in
+                    Text(verbatim: Self.title(for: option)).tag(option.rawValue)
+                }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+            .disabled(!isEnabled)
 
-            Form {
-                Section {
-                    Toggle("Suggest as You Type", isOn: $isEnabled)
-                        .toggleStyle(.switch)
-                } footer: {
-                    Text("Off, nothing opens the list — not a trigger character, not an explicit request. The per-language switches below cannot bring it back; this one is the master.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            Toggle("Include Words from the File", isOn: $usesBufferWords)
+                .toggleStyle(.switch)
+                .disabled(!isEnabled)
 
-                Section {
-                    Picker("Ask For Suggestions", selection: $delayRaw) {
-                        ForEach(CompletionDelay.allCases) { option in
-                            Text(option.title).tag(option.rawValue)
-                        }
-                    }
-                    .disabled(!isEnabled)
-
-                    LabeledContent("Delay") {
-                        Text(verbatim: delay.detail)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Toggle("Include Words From the File", isOn: $usesBufferWords)
-                        .toggleStyle(.switch)
-                        .disabled(!isEnabled)
-                } header: {
-                    Text("Behaviour")
-                } footer: {
-                    Text("A pause coalesces a burst of typing into one request instead of one per character. Typing a trigger character — a dot, usually — and asking explicitly both skip it, because each is already a pause.\n\nWords from the file are what still completes when no server is installed for a language; they are ranked below anything a server said.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section {
-                    ForEach(rows) { row in
-                        Toggle(isOn: binding(for: row.languageID)) {
-                            HStack(spacing: 6) {
-                                Text(verbatim: row.title)
-                                if row.isContributed {
-                                    Text("Extension")
-                                        .font(.caption2.weight(.semibold))
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 1)
-                                        .background(
-                                            Capsule().fill(Color.secondary.opacity(0.15))
-                                        )
-                                        .foregroundStyle(.secondary)
-                                }
+            DisclosureGroup(isExpanded: $showsLanguages) {
+                ForEach(rows) { row in
+                    Toggle(isOn: binding(for: row.languageID)) {
+                        HStack(spacing: 6) {
+                            Text(verbatim: row.title)
+                            if row.isContributed {
+                                Text("Extension")
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(
+                                        Capsule().fill(Color.secondary.opacity(0.15))
+                                    )
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        .toggleStyle(.switch)
-                        .disabled(!isEnabled)
                     }
+                    .toggleStyle(.switch)
+                    .disabled(!isEnabled)
+                }
 
-                    if hasStoredPreferences {
-                        Button("Follow Defaults for All Languages") {
-                            CompletionSettingsStore.clearLanguagePreferences()
-                            revision += 1
-                            onChange()
-                        }
+                if hasStoredPreferences {
+                    Button("Follow Defaults for All Languages") {
+                        CompletionSettingsStore.clearLanguagePreferences()
+                        revision += 1
                     }
-                } header: {
-                    Text("Languages")
-                } footer: {
-                    Text("A language nobody has touched is not stored at all — it follows whatever this build's default is, so the default can change without overwriting a choice you made. Only the languages Phantom can complete for are listed; a file type with no server and no extension behind it follows the master switch above.")
-                        .font(.caption)
+                }
+            } label: {
+                LabeledContent("By Language") {
+                    Text(verbatim: languageSummary)
                         .foregroundStyle(.secondary)
                 }
             }
-            .formStyle(.grouped)
+        } header: {
+            Text("Completion")
+        } footer: {
+            Text("""
+            With Suggest as You Type off, nothing opens the list — not a \
+            trigger character, not an explicit request. Nothing below can \
+            bring it back; that switch is the master.
+
+            A pause coalesces a burst of typing into one request instead of \
+            one per character. A trigger character — a dot, usually — and an \
+            explicit request both skip it, because each is already a pause. \
+            Words from the file are what still completes when no server is \
+            installed for a language, and they rank below anything a server \
+            said.
+
+            A language nobody has touched is not stored at all: it follows \
+            this build's default, so the default can change without \
+            overwriting a choice you made. Only the languages Phantom can \
+            complete for are listed.
+            """)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: isEnabled) { _ in onChange() }
-        .onChange(of: usesBufferWords) { _ in onChange() }
-        .onChange(of: delayRaw) { _ in onChange() }
+    }
+
+    /// The picker's own label, adjective and milliseconds together.
+    ///
+    /// The number used to sit in a read-only row underneath, which restated
+    /// the choice above it and — being the one control in the group nothing
+    /// disabled — stayed lit after the master switch went off. A
+    /// parenthesis carries the same fact without a row, and "Immediately"
+    /// needs no number to say what it means.
+    private static func title(for option: CompletionDelay) -> String {
+        option == .immediate ? option.title : "\(option.title) (\(option.detail))"
+    }
+
+    /// What the folded row admits without being opened. The count of
+    /// switched-off languages is the only part worth a glance; which they
+    /// are is what opening it is for.
+    private var languageSummary: String {
+        let disabled = CompletionSettingsStore.byLanguage.values.filter { !$0 }.count
+        guard disabled > 0 else { return "All Languages" }
+        return disabled == 1 ? "1 Language Off" : "\(disabled) Languages Off"
     }
 
     /// Reads the store on every evaluation rather than caching, so a value
@@ -149,7 +151,6 @@ struct CompletionSettingsForm: View {
             set: { newValue in
                 CompletionSettingsStore.setEnabled(newValue, forLanguage: languageID)
                 revision += 1
-                onChange()
             }
         )
     }
@@ -180,7 +181,7 @@ struct CompletionSettingsForm: View {
             ))
         }
 
-        for contributed in languages.contributed
+        for contributed in languages.catalog.contributed
         where seen.insert(contributed.language.languageID).inserted {
             rows.append(LanguageCompletionRow(
                 languageID: contributed.language.languageID,

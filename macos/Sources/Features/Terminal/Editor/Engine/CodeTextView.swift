@@ -1696,7 +1696,6 @@ final class CodeNSTextView: NSTextView {
             info,
             theme: hoverTheme,
             font: font ?? .monospacedSystemFont(ofSize: 12, weight: .regular),
-            language: hoverLanguage,
             anchor: anchor,
             over: self
         )
@@ -3096,68 +3095,40 @@ final class CodeNSTextView: NSTextView {
         setSelectedRange(move.selection)
     }
 
+    /// The reader's own bindings, and nothing else.
+    ///
+    /// What used to follow this was a hardcoded `switch` answering ⌘S, ⇧⌘S,
+    /// ⇧⌘F, ⌘F, ⌃⌘R, ⌥⌘F, ⌃⌘G and ⌘W whenever the lookup above missed. Its
+    /// comment called that "keeping the defaults working", which it was not:
+    /// `PhantomShortcutStore` already returns each action's default until the
+    /// reader touches it, and an empty list once they clear it. So the
+    /// fallback could only ever fire *against* an explicit choice — a cleared
+    /// Save still saved, a Save moved to ⌥⌘S still answered ⌘S. `runCommand`
+    /// covers all fifteen ids, ⌘F's text-finder plumbing included, so nothing
+    /// is lost by deleting it.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        /// The reader's own bindings first, so a remapped command wins over
-        /// the combination this app happens to ship with. Falling through
-        /// when nothing matches is what keeps the defaults working before
-        /// anybody has configured anything.
+        /// Focus, not visibility, and not tree order.
+        ///
+        /// `performKeyEquivalent` is offered to the whole view tree of the key
+        /// window, so a hidden editor is still asked — and this view had no
+        /// guard of any kind. The contract stated in `PhantomShortcutAction`
+        /// is "these answer while a file is open **and focused**, so the
+        /// terminal keeps its own keys everywhere else", and until now that
+        /// held only because of where the two views happen to sit relative to
+        /// each other. It holds by construction now.
+        guard holdsFocus else { return super.performKeyEquivalent(with: event) }
+
         if let id = boundCommand(for: event), runCommand(id) { return true }
 
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard modifiers.contains(.command) else {
-            return super.performKeyEquivalent(with: event)
-        }
-
-        switch event.charactersIgnoringModifiers?.lowercased() {
-        case "s":
-            if modifiers.contains(.shift) { onSaveAll?() } else { onSave?() }
-            return true
-        /// ⇧⌘F, asked for by name. Workspace search had it and moved to ⌥⌘F,
-        /// which is the pair VS Code uses the other way round — so the two
-        /// swapped rather than one of them losing a shortcut. Both are
-        /// remappable, and the menu shows whichever is bound.
-        case "f" where modifiers.contains(.shift):
-            guard let onFormat else { break }
-            onFormat()
-            return true
-        case "f" where modifiers == .command:
-            // Plain ⌘F is the in-file find bar. Claimed explicitly because
-            // the terminal owns ⌘F at the window level and answered first —
-            // the find bar this view already has was never reached. Claimed
-            // *here* means only while the editor holds focus, so the
-            // terminal's own search is untouched.
-            //
-            // The sender carries the action in its `tag`, which is the part
-            // that is easy to get wrong: passing `self` sends tag 0, and tag 0
-            // is not a finder action, so nothing happened at all.
-            let sender = NSMenuItem()
-            sender.tag = NSTextFinder.Action.showFindInterface.rawValue
-            performTextFinderAction(sender)
-            return true
-        case "r" where modifiers.contains(.control):
-            guard let onRename else { break }
-            onRename(selectedRange().location)
-            return true
-        case "f" where modifiers.contains(.option):
-            guard let onSearchWorkspace else { break }
-            onSearchWorkspace()
-            return true
-        case "g" where modifiers.contains(.control):
-            guard let onFindReferences else { break }
-            onFindReferences(selectedRange().location)
-            return true
-        case "w":
-            // Only claimed when there is a handler: without one this is
-            // still the terminal's close, and swallowing it would leave a
-            // window nothing can shut.
-            guard let onCloseTab else { break }
-            onCloseTab()
-            return true
-        default:
-            break
-        }
-
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// Whether the caret is in this view — directly, or in something it owns.
+    private var holdsFocus: Bool {
+        guard let responder = window?.firstResponder else { return false }
+        if responder === self { return true }
+        guard let view = responder as? NSView else { return false }
+        return view.isDescendant(of: self)
     }
 
     /// This view's own undo stack.

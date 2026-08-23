@@ -446,8 +446,18 @@ final class LSPProcess: @unchecked Sendable {
 
     /// Runs on the stdout handler's serial queue, which is the only reason
     /// the decoder needs no lock of its own.
+    ///
+    /// That queue is also why the decoder is told which replies are still
+    /// wanted. It is one queue for the whole conversation, so every byte a
+    /// server sends is converted in series and the next answer waits behind
+    /// whatever came before it. A server that ignores `$/cancelRequest` —
+    /// measured, `tailwindcss-language-server` does — turns a burst of typing
+    /// into a queue of megabyte answers to questions nobody is asking any
+    /// more, and the one reply the reader is waiting for arrives after all of
+    /// them, past its own deadline. Asking `isPending` first drops those for
+    /// the price of the parse.
     private func ingestStandardOutput(_ data: Data) {
-        for result in decoder.append(data) {
+        for result in decoder.append(data, wantsResponse: { self.isPending($0) }) {
             switch result {
             case .success(let message):
                 handle(message)
@@ -549,6 +559,16 @@ final class LSPProcess: @unchecked Sendable {
     @discardableResult
     private func takePending(_ id: LSPRequestID) -> CheckedContinuation<LSPValue, Error>? {
         lock.withLock { pending.removeValue(forKey: id) }
+    }
+
+    /// Whether anything is still waiting on a reply with this id.
+    ///
+    /// A peek rather than a take: the answer still has to be decoded and
+    /// handed to `handle`, which is where the continuation is claimed. Losing
+    /// the race against a timeout that fires in between costs nothing — the
+    /// reply is then dropped by `handle` exactly as it always was.
+    private func isPending(_ id: LSPRequestID) -> Bool {
+        lock.withLock { pending[id] != nil }
     }
 
     private func scheduleTimeout(for id: LSPRequestID, method: String, after seconds: TimeInterval) {

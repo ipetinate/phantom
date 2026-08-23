@@ -137,6 +137,56 @@ extension LSPValue: Codable {
 }
 
 extension LSPValue {
+    /// The same value, out of what `JSONSerialization` produces.
+    ///
+    /// The two number cases are the whole reason this is written out rather
+    /// than left to a cast chain. `JSONSerialization` answers every number
+    /// with an `NSNumber`, and a JSON `true` is an `NSNumber` too — one that
+    /// casts happily to `Int` and comes out as `1`. `CFBooleanGetTypeID` is
+    /// the only reliable way to tell the two apart, so it is asked first.
+    ///
+    /// Integers stay integers for the reason `Codable`'s ordering documents:
+    /// ids, line numbers and character offsets have to survive the round trip
+    /// as integers rather than coming back as `3.0`. That ordering is *Int
+    /// before Double*, and it is followed here rather than approximated —
+    /// `JSONSerialization` reports `2.0` and `1e3` as doubles where
+    /// `JSONDecoder` answered `.integer`, so a whole value is taken as one
+    /// whatever the spelling. Only a number that is not exactly an `Int`
+    /// stays a double, which is the same rule read from the other side.
+    init(json: Any) {
+        switch json {
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                self = .bool(number.boolValue)
+                return
+            }
+            let encoding = String(cString: number.objCType)
+            guard encoding == "d" || encoding == "f" else {
+                self = .integer(number.intValue)
+                return
+            }
+            let double = number.doubleValue
+            self = Int(exactly: double).map(LSPValue.integer) ?? .double(double)
+
+        case let string as String:
+            self = .string(string)
+
+        case let array as [Any]:
+            self = .array(array.map(LSPValue.init(json:)))
+
+        case let object as [String: Any]:
+            var values = [String: LSPValue](minimumCapacity: object.count)
+            for (key, value) in object { values[key] = LSPValue(json: value) }
+            self = .object(values)
+
+        /// `NSNull`, and anything a future `JSONSerialization` might invent.
+        /// Null is the honest answer to both: this type models JSON, so a
+        /// value outside JSON is one there is nothing to say about.
+        default:
+            self = .null
+        }
+    }
+
     var isNull: Bool { self == .null }
 
     var boolValue: Bool? {
@@ -411,7 +461,132 @@ extension LSPMessage {
 
     /// Decodes one complete body. The framing is `LSPMessageDecoder`'s job.
     static func decode(body: Data) throws -> LSPMessage {
-        try JSONDecoder().decode(LSPMessage.self, from: body)
+        try LSPMessage(body: try parse(body: body))
+    }
+
+    /// The body as plain JSON objects, before any of it becomes an
+    /// `LSPValue`.
+    ///
+    /// **Not `JSONDecoder`, and the gap is not a micro-optimisation.**
+    /// `LSPValue.init(from:)` is a seven-way `try?` chain per node, so every
+    /// object in a payload throws and discards five decoding errors before
+    /// the sixth attempt succeeds. Measured on a real
+    /// `tailwindcss-language-server` completion answer — 23,632 items, 5.4 MB
+    /// — that is **1.0 s** in a release build, against 33 ms for
+    /// `JSONSerialization` plus 225 ms to walk its result into `LSPValue`.
+    /// The typing budget for a completion is 1.5 s (`LSPTimeout`), so the
+    /// decoder alone was two thirds of it.
+    ///
+    /// Splitting the parse from the conversion is also what makes
+    /// `responseID(in:)` below possible: the id can be read for the price of
+    /// the 33 ms half, and a reply nobody is waiting for never pays the rest.
+    ///
+    /// `LSPValue`'s `Codable` conformance stays as it is — encoding goes
+    /// through it, and so do the small documents (`initializationOptions`,
+    /// schema associations) that are parsed once rather than per keystroke.
+    static func parse(body: Data) throws -> [String: Any] {
+        let json = try JSONSerialization.jsonObject(with: body)
+        guard let object = json as? [String: Any] else {
+            throw LSPBodyError.notAnObject
+        }
+        return object
+    }
+
+    /// The id of a **reply**, or nil when this body is anything else.
+    ///
+    /// Nil for a request or a notification, which are identified by carrying
+    /// a `method`, and nil for the malformed-request reply whose id is null —
+    /// that one correlates with nothing and can only be logged.
+    ///
+    /// The point of asking before converting is that a reply's id is enough
+    /// to know whether anyone still wants it. Servers are not obliged to
+    /// honour `$/cancelRequest`, and measured, `tailwindcss-language-server`
+    /// does not: five cancelled completions still delivered five 5.4 MB
+    /// answers. Converting each of them costs a second of a serial queue that
+    /// the *next* answer is then waiting behind, which is how a list stops
+    /// appearing at all rather than merely appearing late.
+    static func responseID(in json: [String: Any]) -> LSPRequestID? {
+        guard json["method"] == nil else { return nil }
+        return requestID(json["id"])
+    }
+
+    /// One message out of an already-parsed body.
+    ///
+    /// JSON-RPC has no type tag; the shape *is* the tag. `method` plus `id`
+    /// is a request, `method` alone is a notification, and anything else is a
+    /// response — including one whose id is null.
+    init(body json: [String: Any]) throws {
+        let id = Self.requestID(json["id"])
+
+        if let method = json["method"] as? String {
+            let params = Self.value(json["params"])
+            if let id {
+                self = .request(LSPRequest(id: id, method: method, params: params))
+            } else {
+                self = .notification(LSPNotification(method: method, params: params))
+            }
+            return
+        }
+
+        self = .response(LSPResponse(
+            id: id,
+            result: Self.value(json["result"]),
+            error: try Self.error(json["error"])
+        ))
+    }
+
+    /// An id, or nil for both "absent" and "null" — the two cases a reply
+    /// that cannot be correlated arrives as.
+    private static func requestID(_ json: Any?) -> LSPRequestID? {
+        switch json {
+        case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID():
+            return .number(number.intValue)
+        case let string as String:
+            return .string(string)
+        default:
+            return nil
+        }
+    }
+
+    /// A field that distinguishes absent from null: `"result": null` is a
+    /// *successful* answer — it is what `shutdown` returns — and an absent
+    /// result alongside an error is a different message entirely.
+    private static func value(_ json: Any?) -> LSPValue? {
+        guard let json else { return nil }
+        return LSPValue(json: json)
+    }
+
+    /// The error object, refused rather than ignored when it is malformed.
+    ///
+    /// Reading a broken error as "no error" would turn a failed request into
+    /// a successful one carrying a null result, which the caller has no way
+    /// to tell from a server that answered nothing.
+    private static func error(_ json: Any?) throws -> LSPResponseError? {
+        guard let json, !(json is NSNull) else { return nil }
+        guard let object = json as? [String: Any],
+              let code = (object["code"] as? NSNumber)?.intValue,
+              let message = object["message"] as? String
+        else {
+            throw LSPBodyError.malformedError
+        }
+        return LSPResponseError(code: code, message: message, data: value(object["data"]))
+    }
+}
+
+/// What a body can be wrong about once its framing was right.
+///
+/// Reported through `LSPFramingError.invalidBody`, which carries the reason
+/// as text — these cases exist so that text says something more useful than
+/// a `JSONSerialization` error about byte 0.
+enum LSPBodyError: Error, CustomStringConvertible {
+    case notAnObject
+    case malformedError
+
+    var description: String {
+        switch self {
+        case .notAnObject: return "body is not a JSON object"
+        case .malformedError: return "error object has no code and message"
+        }
     }
 }
 
@@ -445,8 +620,8 @@ enum LSPFramingError: Error, Hashable, Sendable {
 /// and slicing by `Index` looks correct until the first hover response
 /// containing "configuração", at which point every subsequent message is
 /// offset and the session is dead. Nothing here ever converts the payload
-/// to text; the body is sliced as `Data` and handed to `JSONDecoder`, which
-/// does its own UTF-8.
+/// to text; the body is sliced as `Data` and handed to `JSONSerialization`,
+/// which does its own UTF-8.
 ///
 /// `Data` indices are not guaranteed to start at zero — a `Data` that has
 /// had its prefix removed can keep a non-zero `startIndex`, and a slice
@@ -477,13 +652,24 @@ final class LSPMessageDecoder {
     /// Failures are returned inline rather than thrown, because one corrupt
     /// message is not a reason to stop reading the ones after it — see
     /// `resynchronize`.
+    ///
+    /// - Parameter wantsResponse: Whether a reply with this id is still
+    ///   wanted. Consulted after the body has been framed and parsed but
+    ///   *before* it is converted, so a reply nobody is waiting for costs the
+    ///   parse and nothing else — see `LSPMessage.responseID(in:)` for the
+    ///   measurement that put it here. Answering `true` for everything, the
+    ///   default, is the behaviour this had before and is what a caller with
+    ///   no notion of pending requests wants.
     @discardableResult
-    func append(_ chunk: Data) -> [Result<LSPMessage, LSPFramingError>] {
+    func append(
+        _ chunk: Data,
+        wantsResponse: (LSPRequestID) -> Bool = { _ in true }
+    ) -> [Result<LSPMessage, LSPFramingError>] {
         buffer.append(chunk)
 
         var results: [Result<LSPMessage, LSPFramingError>] = []
-        while let result = takeNext() {
-            results.append(result)
+        while let step = takeNext(wantsResponse: wantsResponse) {
+            if case .decoded(let result) = step { results.append(result) }
         }
         return results
     }
@@ -494,18 +680,31 @@ final class LSPMessageDecoder {
         buffer.removeAll(keepingCapacity: false)
     }
 
+    /// What one pass of `takeNext` got through.
+    ///
+    /// `abandoned` is not a failure and not a message: the bytes were a
+    /// well-formed reply to a request that has since been cancelled or timed
+    /// out, and the caller has nothing to do with it. It is a case of its own
+    /// rather than nil because nil means "the buffer needs more bytes", which
+    /// would stop the loop with complete messages still sitting behind this
+    /// one.
+    private enum Step {
+        case decoded(Result<LSPMessage, LSPFramingError>)
+        case abandoned
+    }
+
     /// One pass. Returns nil when the buffer needs more bytes before
     /// anything more can be said about it.
     ///
     /// Every non-nil path consumes at least one byte, which is what keeps
     /// the caller's loop from spinning on a buffer it can't make progress
     /// on.
-    private func takeNext() -> Result<LSPMessage, LSPFramingError>? {
+    private func takeNext(wantsResponse: (LSPRequestID) -> Bool) -> Step? {
         guard let terminator = buffer.range(of: LSPWireFormat.headerTerminator) else {
             guard buffer.count > Self.maxHeaderBytes else { return nil }
             let count = buffer.count
             resynchronize(from: 1)
-            return .failure(.headerTooLong(byteCount: count))
+            return .decoded(.failure(.headerTooLong(byteCount: count)))
         }
 
         let header = Self.headerText(buffer[buffer.startIndex..<terminator.lowerBound])
@@ -514,13 +713,13 @@ final class LSPMessageDecoder {
         guard let declared = Self.contentLength(in: header) else {
             buffer.removeSubrange(buffer.startIndex..<bodyStart)
             resynchronize(from: 0)
-            return .failure(.missingContentLength(header: header))
+            return .decoded(.failure(.missingContentLength(header: header)))
         }
 
         guard declared <= Self.maxBodyBytes else {
             buffer.removeSubrange(buffer.startIndex..<bodyStart)
             resynchronize(from: 0)
-            return .failure(.messageTooLarge(declared: declared))
+            return .decoded(.failure(.messageTooLarge(declared: declared)))
         }
 
         let available = buffer.distance(from: bodyStart, to: buffer.endIndex)
@@ -530,13 +729,23 @@ final class LSPMessageDecoder {
         let body = Data(buffer[bodyStart..<bodyEnd])
 
         do {
-            let message = try LSPMessage.decode(body: body)
+            let json = try LSPMessage.parse(body: body)
+
+            /// The bytes are consumed either way — the stream has moved past
+            /// them and the framing must not be left mid-message just
+            /// because the payload turned out to be uninteresting.
+            if let id = LSPMessage.responseID(in: json), !wantsResponse(id) {
+                buffer.removeSubrange(buffer.startIndex..<bodyEnd)
+                return .abandoned
+            }
+
+            let message = try LSPMessage(body: json)
             buffer.removeSubrange(buffer.startIndex..<bodyEnd)
-            return .success(message)
+            return .decoded(.success(message))
         } catch {
             buffer.removeSubrange(buffer.startIndex..<bodyStart)
             resynchronize(from: 0)
-            return .failure(.invalidBody(byteCount: declared, reason: "\(error)"))
+            return .decoded(.failure(.invalidBody(byteCount: declared, reason: "\(error)")))
         }
     }
 

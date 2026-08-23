@@ -167,7 +167,7 @@ class AppDelegate: NSObject,
         // directory, which would leave the settings window editing a file the
         // renderer never reads.
         let configPath = ProcessInfo.processInfo.environment["GHOSTTY_CONFIG_PATH"]
-            ?? GuiConfigStore.bootstrapMainConfigPath()
+            ?? GuiConfigStore.bootstrap()
         ghostty = Ghostty.App(configPath: configPath)
         super.init()
 
@@ -214,12 +214,9 @@ class AppDelegate: NSObject,
             "ApplePressAndHoldEnabled": false,
         ])
 
-        // Put the chosen app icon back on.
-        //
-        // `NSWorkspace.setIcon` writes to the bundle, and a rebuild replaces
-        // the bundle — so a fresh build comes up wearing the icon compiled into
-        // it, whatever was picked in Settings. Re-applying at launch is what
-        // makes the choice survive that.
+        // Put the chosen app icon back on. The override is in-memory only
+        // (`NSApp.applicationIconImage`), so every launch starts from the
+        // compiled-in icon until this runs.
         PhantomAppIconStore.restore()
 
         // Store our start time
@@ -451,10 +448,25 @@ class AppDelegate: NSObject,
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        WindowBreadcrumbs.note(
+            "lastWindowClosed: AppKit believes the last window closed; "
+            + "answering \(derivedConfig.shouldQuitAfterLastWindowClosed), "
+            + "app windows=\(NSApp.windows.count) "
+            + "terminals=\(TerminalController.all.count)")
         return derivedConfig.shouldQuitAfterLastWindowClosed
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if let event = NSApp.currentEvent {
+            WindowBreadcrumbs.note(
+                "shouldTerminate: event=\(event.type.rawValue) "
+                + "eventWindow=\(event.window?.windowNumber ?? -1) "
+                + "key=\(event.type == .keyDown ? event.charactersIgnoringModifiers ?? "" : "") "
+                + "windows=\(NSApp.windows.count)")
+        } else {
+            WindowBreadcrumbs.note(
+                "shouldTerminate: no current event (programmatic) windows=\(NSApp.windows.count)")
+        }
         /// The session as it stands at the moment the reader asked to quit,
         /// while every window they have is certainly still theirs. Everything
         /// after this point is the quit happening — windows the review closes,
@@ -499,6 +511,8 @@ class AppDelegate: NSObject,
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        WindowBreadcrumbs.note("willTerminate: the app is going down through AppKit")
+
         // We have no notifications we want to persist after death,
         // so remove them all now. In the future we may want to be
         // more selective and only remove surface-targeted notifications.
@@ -532,27 +546,47 @@ class AppDelegate: NSObject,
         guard applicationHasBecomeActive else { return true }
 
         /// No visible windows. The session, if there is one, is what the
-        /// reader is reopening the app to get back — see `newWindow`. This is
-        /// asked before the window check below because a restore is the
-        /// better answer whenever there is a session to restore.
-        if PhantomSessionStore.shared.restoreIfNeeded() { return false }
-
-        /// Nothing was restored: either there is no session, or the reader
-        /// asked for none to be kept. Open a window, unless one is already on
-        /// its way up — with `flag` false that can still happen, in the race
-        /// where a window is initializing and not yet visible when the dock
-        /// icon is clicked.
+        /// reader is reopening the app to get back — see `newWindow`.
         ///
-        /// Not `TerminalController.all.isEmpty`, which was the check here and
-        /// is never empty after the first window closes: it counts windows
-        /// AppKit has not released yet. So with `window-save-state = never`
-        /// — or on a first ever launch — clicking the dock icon did nothing
-        /// at all, and went on doing nothing. See
-        /// `PhantomSessionStore.isOpen`.
-        guard !PhantomSessionStore.hasReachableTerminalWindows else { return true }
+        /// **Everything below runs a turn later, and that is the fix, not a
+        /// nicety.** Window work performed inside this delegate call is
+        /// inside AppKit's reopen transaction, and windows built there kept
+        /// reaching the screen half-made: first the reveal alone was
+        /// deferred and the *front* window started committing — but the tab
+        /// joins still ran in here, and a reopen-restored group kept one or
+        /// two members AppKit-visible and WindowServer-offscreen. Clicking
+        /// those rows closed the visible window and showed nothing, which
+        /// read as the app dying; the same group also answered "last
+        /// window" queries in join order rather than launch order, which is
+        /// what made a new terminal land second-to-last. A launch restore
+        /// never showed any of it — launch is not inside this dispatch. So
+        /// the whole restore leaves it too, and the return value is decided
+        /// from a peek at the session file, which counts without decoding.
+        return !Self.scheduleReopenWork(for: self)
+    }
 
-        _ = TerminalController.newWindow(ghostty)
-        return false
+    /// The reopen's window work, scheduled off the reopen transaction.
+    ///
+    /// Answers whether there is work at all — the caller's return value —
+    /// from state alone: a readable non-empty session that is allowed to
+    /// restore, or no reachable terminal window (which means a blank one
+    /// must open). Split from the delegate method and static so the
+    /// decision can be pinned by tests without an application.
+    static func scheduleReopenWork(for delegate: AppDelegate) -> Bool {
+        let store = PhantomSessionStore.shared
+        let mayRestore = PhantomSessionStore.mayRestore(
+            windowSaveState: delegate.ghostty.config.windowSaveState)
+        let hasSession = mayRestore && store.hasRestorableSession
+        let needsWindow = !PhantomSessionStore.hasReachableTerminalWindows
+
+        guard hasSession || needsWindow else { return false }
+
+        DispatchQueue.main.async {
+            if store.restoreIfNeeded() { return }
+            guard !PhantomSessionStore.hasReachableTerminalWindows else { return }
+            _ = TerminalController.newWindow(delegate.ghostty)
+        }
+        return true
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
@@ -844,6 +878,19 @@ class AppDelegate: NSObject,
     @objc private func ghosttyNewWindow(_ notification: Notification) {
         let configAny = notification.userInfo?[Ghostty.Notification.NewSurfaceConfigKey]
         let config = configAny as? Ghostty.SurfaceConfiguration
+
+        /// With the sidebar on, ⌘N makes a terminal in the sidebar, not a
+        /// loose window. The fork replaced macOS tabs with the sidebar, so
+        /// "window" stopped being a unit the reader ever asked for — every
+        /// terminal is a row, and a window outside the group is the ghost
+        /// row: selected in parallel, listed by the Dock under the same
+        /// name, saved by the session store as a second group and restored
+        /// split forever. The reader who reported this created "tabs" with
+        /// ⌘N all along — the expectation is the design.
+        if ghostty.config.sidebar, let parent = TerminalController.liveTabParent() {
+            _ = TerminalController.newTab(ghostty, from: parent, withBaseConfig: config)
+            return
+        }
         _ = TerminalController.newWindow(ghostty, withBaseConfig: config)
     }
 
@@ -1074,6 +1121,12 @@ class AppDelegate: NSObject,
         // back, windows exist, so the next New Window is an ordinary one.
         if PhantomSessionStore.shared.restoreIfNeeded() { return }
 
+        /// Same routing as the core's ⌘N — see `ghosttyNewWindow`. The menu
+        /// item is the other spelling of the same request.
+        if ghostty.config.sidebar, let parent = TerminalController.liveTabParent() {
+            _ = TerminalController.newTab(ghostty, from: parent)
+            return
+        }
         _ = TerminalController.newWindow(ghostty)
     }
 

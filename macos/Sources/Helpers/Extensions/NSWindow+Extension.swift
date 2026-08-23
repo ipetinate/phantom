@@ -53,6 +53,9 @@ extension NSWindow {
         if let error {
             Ghostty.logger.error("addTabbedWindow failed: \(error.localizedDescription, privacy: .public)")
         }
+        WindowBreadcrumbs.note(
+            "join: child=\(child.windowNumber) into=\(windowNumber) "
+            + "ok=\(success) groupNow=\(tabGroup?.windows.count ?? 0)")
 
         return success
     }

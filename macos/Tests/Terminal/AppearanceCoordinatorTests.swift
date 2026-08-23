@@ -70,8 +70,19 @@ struct AppearanceCoordinatorTests {
         return try body()
     }
 
-    @Test func dividerModeDefaultsToSystem() {
+    /// A profile with no stored choice gets no divider — the factory look
+    /// ships the panes meeting edge to edge (see
+    /// `AppearanceCoordinator.defaultDividerModeRaw`).
+    @Test func dividerModeDefaultsToHidden() {
         withDividerMode(nil) {
+            #expect(AppearanceCoordinator.dividerMode.isHidden)
+        }
+    }
+
+    /// An explicit "default" choice is a choice: it must survive the
+    /// factory fallback moving to hidden.
+    @Test func anExplicitDefaultChoiceStaysSystem() {
+        withDividerMode("default") {
             #expect(AppearanceCoordinator.dividerMode.isHidden == false)
             if case .system = AppearanceCoordinator.dividerMode {} else {
                 Issue.record("expected .system")
@@ -134,7 +145,7 @@ struct AppearanceCoordinatorTests {
             let split = SplitView(
                 .horizontal,
                 .constant(0.5),
-                dividerColor: .clear,
+                systemDividerColor: .clear,
                 left: { Color.clear },
                 right: { Color.clear },
                 onEqualize: {}
@@ -148,7 +159,7 @@ struct AppearanceCoordinatorTests {
             let split = SplitView(
                 .horizontal,
                 .constant(0.5),
-                dividerColor: .clear,
+                systemDividerColor: .clear,
                 left: { Color.clear },
                 right: { Color.clear },
                 onEqualize: {}

@@ -9,8 +9,12 @@ struct SplitView<L: View, R: View>: View {
     /// Direction of the split
     let direction: SplitViewDirection
 
-    /// Divider color
-    let dividerColor: Color
+    /// What the Default divider mode falls back to when the theme offers no
+    /// swatch of its own — the caller's historical divider colour. The full
+    /// mode resolution lives in `dividerColor` below, so every split in the
+    /// window answers the one setting the same way; callers only supply
+    /// this fallback.
+    let systemDividerColor: Color
 
     /// Minimum increment (in points) that this split can be resized by, in
     /// each direction. Both `height` and `width` should be whole numbers
@@ -42,6 +46,35 @@ struct SplitView<L: View, R: View>: View {
     var splitterVisibleSize: CGFloat {
         AppearanceCoordinator.dividerMode.isHidden ? 0 : 1
     }
+
+    /// The colour the divider paints, resolved from the window-wide setting:
+    /// the divider setting covers every divider in the window — a user who
+    /// turned dividers off doesn't want one reappearing between panes. The
+    /// Default mode takes the theme's own swatch when there is one.
+    ///
+    /// Reads `dividerStyleGeneration` first, and that read is load-bearing:
+    /// it runs during body evaluation, which makes the generation a
+    /// dependency of this view — the bump in `onReceive` then invalidates
+    /// exactly this split when the divider settings change.
+    var dividerColor: Color {
+        _ = dividerStyleGeneration
+        switch AppearanceCoordinator.dividerMode {
+        case .hidden: return .clear
+        case .custom(let color): return Color(nsColor: color)
+        case .system:
+            guard let themed = AppearanceCoordinator.themeDividerColor else {
+                return systemDividerColor
+            }
+            return Color(nsColor: themed)
+        }
+    }
+
+    /// Bumped when the divider settings change, so the mode and colour
+    /// picked in Settings land on every open split immediately — without
+    /// this, a split re-read the setting only on its next unrelated
+    /// re-render, which is the "transparent strip until relaunch" bug's
+    /// SwiftUI sibling.
+    @State private var dividerStyleGeneration = 0
 
     private let splitterInvisibleSize: CGFloat = 6
 
@@ -76,13 +109,18 @@ struct SplitView<L: View, R: View>: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel(splitViewLabel)
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: TerminalController.sidebarTintDidChange)
+        ) { _ in
+            dividerStyleGeneration &+= 1
+        }
     }
 
     /// Initialize a split view that can be resized by manually dragging the divider.
     init(
         _ direction: SplitViewDirection,
         _ split: Binding<CGFloat>,
-        dividerColor: Color,
+        systemDividerColor: Color,
         resizeIncrements: NSSize = .init(width: 1, height: 1),
         @ViewBuilder left: (() -> L),
         @ViewBuilder right: (() -> R),
@@ -90,7 +128,7 @@ struct SplitView<L: View, R: View>: View {
     ) {
         self.direction = direction
         self._split = split
-        self.dividerColor = dividerColor
+        self.systemDividerColor = systemDividerColor
         self.resizeIncrements = resizeIncrements
         self.left = left()
         self.right = right()

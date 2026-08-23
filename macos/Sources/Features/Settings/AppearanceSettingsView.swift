@@ -86,24 +86,34 @@ struct AppearanceSettingsView: View {
                 ProgressView("Loading themes…")
                 Spacer()
             } else {
+                /// Themes loose on the page, the controls under them in a
+                /// grouped `Form`, both in one scroll.
+                ///
+                /// Making each theme group a `Section` of that form gave every
+                /// row of cards a card of its own — four stacked backgrounds
+                /// for what is one thing to browse, and a grid is not a list of
+                /// settings. The cards go back to sitting on the window itself;
+                /// the controls keep the grouped rows, footers and metrics the
+                /// other panes have.
+                ///
+                /// The form is asked for its intrinsic height with its own
+                /// scrolling off, so it lays out as a block of this page rather
+                /// than as a second scroller inside the first — and a wheel over
+                /// it, having nothing there to scroll, reaches the page.
+                /// The search field stays above all of it, pinned, because it
+                /// filters the grid that scrolls beneath it.
                 ScrollView {
-                    let groups = groups
+                    VStack(alignment: .leading, spacing: 0) {
+                        themeGrids
+                            .padding(14)
 
-                    VStack(alignment: .leading, spacing: 18) {
-                        currentAndCustomThemes
-                        if !groups.dark.isEmpty {
-                            themeSection("Dark", groups.dark)
+                        Form {
+                            AppearanceStylePanel(ghostty: ghostty, store: store)
                         }
-                        if !groups.light.isEmpty {
-                            themeSection("Light", groups.light)
-                        }
-
-                        Divider()
-                            .padding(.top, 6)
-
-                        AppearanceStylePanel(ghostty: ghostty, store: store)
+                        .formStyle(.grouped)
+                        .scrollDisabled(true)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(14)
                 }
             }
         }
@@ -139,6 +149,23 @@ struct AppearanceSettingsView: View {
             Button("Import…") { importThemes() }
         }
         .padding(10)
+    }
+
+    /// Everything there is to browse: the theme in use and the user's own on
+    /// the first row, then the curated dark and light sets.
+    private var themeGrids: some View {
+        let groups = groups
+
+        return VStack(alignment: .leading, spacing: 18) {
+            currentAndCustomThemes
+
+            if !groups.dark.isEmpty {
+                themeSection("Dark", groups.dark)
+            }
+            if !groups.light.isEmpty {
+                themeSection("Light", groups.light)
+            }
+        }
     }
 
     /// The theme in use gets its own card, so what is active is visible
@@ -192,7 +219,7 @@ struct AppearanceSettingsView: View {
                         }
                     } label: {
                         HStack(spacing: 3) {
-                            Text(isExpanded ? "Show Less" : "Show All (\(themes.count))")
+                            Text(verbatim: isExpanded ? "Show Less" : "Show All (\(themes.count))")
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 8, weight: .semibold))
                                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
@@ -255,6 +282,10 @@ struct AppearanceSettingsView: View {
 
 /// Every style control in one place, sectioned by area — the specific
 /// settings tabs keep only behavior.
+///
+/// Emits bare `Section`s rather than wrapping them, so they belong to the
+/// Appearance form and take its metrics instead of being a second, differently
+/// spaced surface drawn inside the first.
 private struct AppearanceStylePanel: View {
     let ghostty: Ghostty.App
     @ObservedObject var store: GuiConfigStore
@@ -267,8 +298,18 @@ private struct AppearanceStylePanel: View {
     @State private var blurMode: String = "off"
     @State private var blurRadius: Double = 20
     @State private var sidebarWidth: Double = 240
-    @State private var dividerMode: String = "default"
+    @State private var dividerMode: String = AppearanceCoordinator.defaultDividerModeRaw
     @State private var dividerColor: Color = .gray
+
+    /// The theme's own colours, offered as one-tap swatches beside the
+    /// custom divider's picker. Observed so a theme switch made while this
+    /// pane is open redraws the row with the new palette.
+    @ObservedObject private var themePalette: ThemePalette = .shared
+
+    /// The width the divider was last dragged to, or nil while nothing has
+    /// been dragged. Held in state rather than read inline so the reset row
+    /// can appear and disappear with it.
+    @State private var draggedSidebarWidth: Double?
 
     @AppStorage("SidebarTabDensity") private var tabDensity = "default"
 
@@ -318,136 +359,198 @@ private struct AppearanceStylePanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            styleGroup("Interface") {
-                LabeledContent("App Font") {
-                    Button(interfaceFontFamily.isEmpty ? "System Default" : interfaceFontFamily) {
-                        FontPickerWindowController.shared.show(
-                            title: "Interface Font",
-                            currentFamily: interfaceFontFamily.isEmpty ? nil : interfaceFontFamily,
-                            preview: .interface
-                        ) { picked in
-                            interfaceFontFamily = picked ?? ""
-                            UserDefaults.standard.set(interfaceFontFamily, forKey: AppFont.interfaceFamilyKey)
-                        }
+        Group {
+            appSection
+            terminalSection
+            sidebarSection
+        }
+    }
+
+    /// Phantom's own chrome, which is a different question from what the
+    /// terminal is drawn in — and the reason this is its own section rather
+    /// than the first row of the next one.
+    private var appSection: some View {
+        Section {
+            LabeledContent("App Font") {
+                Button(interfaceFontFamily.isEmpty ? "System Default" : interfaceFontFamily) {
+                    FontPickerWindowController.shared.show(
+                        title: "Interface Font",
+                        currentFamily: interfaceFontFamily.isEmpty ? nil : interfaceFontFamily,
+                        preview: .interface
+                    ) { picked in
+                        interfaceFontFamily = picked ?? ""
+                        UserDefaults.standard.set(interfaceFontFamily, forKey: AppFont.interfaceFamilyKey)
                     }
-                    .frame(maxWidth: 220, alignment: .leading)
+                }
+            }
+            /// Hung off a row rather than the panel, because the panel is three
+            /// sections and a modifier written across it is attached to each
+            /// of them — three `populate()` calls on a single appearance.
+            .onAppear { populate() }
+        } header: {
+            Text("App")
+        } footer: {
+            Text("The font Phantom's own interface is set in — the sidebar, this window, its menus. The terminal and the editor keep their own, below and in Editor.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var terminalSection: some View {
+        Section {
+            LabeledContent("Font Family") {
+                Button(fontFamily.isEmpty ? "System Default" : fontFamily) {
+                    FontPickerWindowController.shared.show(
+                        title: "Terminal Font",
+                        currentFamily: fontFamily.isEmpty ? nil : fontFamily,
+                        preview: .terminal
+                    ) { picked in
+                        fontFamily = picked ?? ""
+                        apply("font-family", fontFamily)
+                    }
                 }
             }
 
-            styleGroup("Terminal") {
-                LabeledContent("Font Family") {
-                    Button(fontFamily.isEmpty ? "System Default" : fontFamily) {
-                        FontPickerWindowController.shared.show(
-                            title: "Terminal Font",
-                            currentFamily: fontFamily.isEmpty ? nil : fontFamily,
-                            preview: .terminal
-                        ) { picked in
-                            fontFamily = picked ?? ""
-                            apply("font-family", fontFamily)
+            LabeledContent("Font Size") {
+                HStack {
+                    Slider(value: $fontSize, in: 8...32, step: 1) { editing in
+                        if !editing { apply("font-size", String(Int(fontSize))) }
+                    }
+                    Text(verbatim: "\(Int(fontSize)) pt")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, alignment: .trailing)
+                }
+            }
+
+            /// A pop-up rather than five icon segments.
+            ///
+            /// A segmented control stops carrying a choice somewhere around
+            /// four items, and this one has five — of which four are small
+            /// abstract marks that need their label to be read. A `.menu`
+            /// `Picker` keeps both the drawing and the word, arrows through
+            /// the options from the keyboard, and reads itself out to
+            /// VoiceOver, none of which a hand-built track does for free.
+            Picker("Cursor Style", selection: $cursorStyle) {
+                ForEach(Self.cursorStyles, id: \.value) { style in
+                    Label {
+                        Text(style.label)
+                    } icon: {
+                        if let image = Self.cursorIcon(for: style.value) {
+                            Image(nsImage: image)
                         }
                     }
-                    .frame(maxWidth: 220, alignment: .leading)
+                    .tag(style.value)
                 }
-                Text("Applies to new terminals right away; open tabs need to be reopened to pick it up.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            }
+            .pickerStyle(.menu)
+            .onChange(of: cursorStyle) { value in
+                apply("cursor-style", value)
+            }
 
-                LabeledContent("Font Size") {
+            LabeledContent("Background") {
+                /// "Glass" is the blurred background. The system glass
+                /// material used to be a fourth option, but it cannot hold a
+                /// seam-free surface across the two panes — each pane gets
+                /// its own material and they never match.
+                Picker("", selection: $blurMode) {
+                    Text("Solid").tag("solid")
+                    Text("Clear").tag("off")
+                    Text("Glass").tag("radius")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 240)
+                .onChange(of: blurMode) { _ in applyEffectChange() }
+            }
+
+            if blurMode == "radius" {
+                LabeledContent("Blur Intensity") {
                     HStack {
-                        Slider(value: $fontSize, in: 8...32, step: 1) { editing in
-                            if !editing { apply("font-size", String(Int(fontSize))) }
+                        Slider(value: $blurRadius, in: 1...80, step: 1) { editing in
+                            if !editing { applyBlur() }
                         }
-                        Text("\(Int(fontSize)) pt")
+                        Text(verbatim: "\(Int(blurRadius))")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                             .frame(width: 44, alignment: .trailing)
                     }
                 }
-
-                LabeledContent("Cursor Style") {
-                    IconSegmentedControl(
-                        segments: Self.cursorStyles.map {
-                            .init(
-                                value: $0.value,
-                                label: $0.label,
-                                image: Self.cursorIcon(for: $0.value)
-                            )
-                        },
-                        selection: $cursorStyle
-                    )
-                    .frame(height: 24)
-                    .onChange(of: cursorStyle) { value in
-                        apply("cursor-style", value)
-                    }
-                }
             }
 
-            styleGroup("Effect") {
-                LabeledContent("Style") {
-                    // "Glass" is the blurred background. The system glass
-                    // material used to be a fourth option, but it can't hold
-                    // a seam-free surface across the two panes — each pane
-                    // gets its own material and they never match.
-                    Picker("", selection: $blurMode) {
-                        Text("Solid").tag("solid")
-                        Text("Clear").tag("off")
-                        Text("Glass").tag("radius")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: 240)
-                    .onChange(of: blurMode) { _ in applyEffectChange() }
-                }
-
-                if blurMode == "radius" {
-                    LabeledContent("Intensity") {
-                        HStack {
-                            Slider(value: $blurRadius, in: 1...80, step: 1) { editing in
-                                if !editing { applyBlur() }
-                            }
-                            Text("\(Int(blurRadius))")
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                                .frame(width: 44, alignment: .trailing)
-                        }
-                    }
-                }
-
-                if blurMode != "off" {
-                    LabeledContent("Opacity") {
-                        HStack {
-                            Slider(value: $backgroundOpacity, in: 0...1) { editing in
-                                if !editing {
-                                    apply("background-opacity", String(format: "%.2f", backgroundOpacity))
-                                }
-                            }
-                            Text(String(format: "%.2f", backgroundOpacity))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                                .frame(width: 44, alignment: .trailing)
-                        }
-                    }
-                }
-            }
-
-            styleGroup("Sidebar") {
-                LabeledContent("Default Width") {
+            if blurMode != "off" {
+                LabeledContent("Opacity") {
                     HStack {
-                        Slider(value: $sidebarWidth, in: 180...480, step: 10) { editing in
+                        Slider(value: $backgroundOpacity, in: 0...1) { editing in
                             if !editing {
-                                store.set("sidebar-width", String(Int(sidebarWidth)))
-                                store.apply(ghostty: ghostty)
+                                apply("background-opacity", String(format: "%.2f", backgroundOpacity))
                             }
                         }
-                        Text("\(Int(sidebarWidth)) pt")
+                        Text(verbatim: String(format: "%.2f", backgroundOpacity))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
-                            .frame(width: 48, alignment: .trailing)
+                            .frame(width: 44, alignment: .trailing)
                     }
                 }
+            }
+        } header: {
+            Text("Terminal")
+        } footer: {
+            Text("A font or size reaches new terminals right away; tabs already open take it when they are reopened. Clear pins the background fully transparent, which is why it offers no opacity of its own.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
 
-                LabeledContent("Divider") {
+    /// Named for the style rather than for the surface, because there is a
+    /// whole pane called Sidebar and it answers a different question: that one
+    /// is what the sidebar shows, this one is what it looks like.
+    private var sidebarSection: some View {
+        Section {
+            LabeledContent("Starting Width") {
+                HStack {
+                    Slider(value: $sidebarWidth, in: 180...480, step: 10) { editing in
+                        if !editing {
+                            store.set("sidebar-width", String(Int(sidebarWidth)))
+                            store.apply(ghostty: ghostty)
+                        }
+                    }
+                    Text(verbatim: "\(Int(sidebarWidth)) pt")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .trailing)
+                }
+            }
+            /// Watches the defaults so the row below appears the moment a
+            /// divider is dragged in another window, and disappears with the
+            /// reset — the setting is app-wide, so this window is never the
+            /// only thing writing it.
+            .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+                let width = SidebarWidthOverride.width()
+                if width != draggedSidebarWidth { draggedSidebarWidth = width }
+            }
+
+            /// Only offered once there is something to undo. Dragging a
+            /// divider writes an app-wide width that every window then opens
+            /// at, ahead of the slider above — which left the slider looking
+            /// broken, with nothing anywhere to put it back in charge.
+            if let dragged = draggedSidebarWidth {
+                LabeledContent("Dragged Width") {
+                    HStack(spacing: 8) {
+                        Text(verbatim: "\(Int(dragged)) pt")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+
+                        Button("Reset") {
+                            SidebarWidthOverride.clear()
+                            draggedSidebarWidth = nil
+                        }
+                    }
+                }
+            }
+
+            LabeledContent("Divider") {
+                VStack(alignment: .trailing, spacing: 8) {
                     HStack(spacing: 8) {
                         Picker("", selection: $dividerMode) {
                             Text("Default").tag("default")
@@ -465,42 +568,51 @@ private struct AppearanceStylePanel: View {
                                 .onChange(of: dividerColor) { _ in saveDivider() }
                         }
                     }
+
+                    if dividerMode == "custom" {
+                        dividerThemeSwatches
+                    }
                 }
             }
 
-            styleGroup("Tab Item") {
-                LabeledContent("Style") {
-                    Picker("", selection: $tabDensity) {
-                        Text("Default").tag("default")
-                        Text("Compact").tag("compact")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: 200)
+            LabeledContent("Tab Items") {
+                Picker("", selection: $tabDensity) {
+                    Text("Default").tag("default")
+                    Text("Compact").tag("compact")
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 200)
             }
+        } header: {
+            Text("Sidebar Style")
+        } footer: {
+            Text("Starting Width is what a window with no dragging behind it opens at. Dragging a divider replaces it for every window and keeps it across launches; Reset drops that, and each window takes the slider's width back as you switch to it.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        .onAppear { populate() }
     }
 
-    private func styleGroup<Content: View>(
-        _ title: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-
-            VStack(alignment: .leading, spacing: 10) {
-                content()
+    /// The current theme's palette as one-tap divider colours. The picker
+    /// stays for arbitrary colours; these are the colours the divider most
+    /// often wants — the theme's own — one click away instead of behind an
+    /// eyedropper.
+    private var dividerThemeSwatches: some View {
+        HStack(spacing: 5) {
+            ForEach(Array(themePalette.colors.enumerated()), id: \.offset) { index, swatch in
+                Button {
+                    dividerColor = Color(nsColor: swatch)
+                    saveDivider()
+                } label: {
+                    Circle()
+                        .fill(Color(nsColor: swatch))
+                        .frame(width: 14, height: 14)
+                        .overlay(Circle().strokeBorder(.primary.opacity(0.2), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help(ThemePalette.ansiNames.indices.contains(index)
+                      ? ThemePalette.ansiNames[index] : "")
             }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-            )
         }
     }
 
@@ -511,6 +623,7 @@ private struct AppearanceStylePanel: View {
         backgroundOpacity = store.double("background-opacity", default: 1)
         cursorStyle = store.string("cursor-style") ?? ""
         sidebarWidth = store.double("sidebar-width", default: 240)
+        draggedSidebarWidth = SidebarWidthOverride.width()
 
         switch store.string("background-blur") ?? "false" {
         case "false":
@@ -535,8 +648,9 @@ private struct AppearanceStylePanel: View {
         }
 
         let defaults = UserDefaults.standard
-        dividerMode = defaults.string(forKey: "SidebarDividerMode") ?? "default"
-        if let hex = defaults.string(forKey: "SidebarDividerColorHex"),
+        dividerMode = defaults.string(forKey: AppearanceCoordinator.dividerModeKey)
+            ?? AppearanceCoordinator.defaultDividerModeRaw
+        if let hex = defaults.string(forKey: AppearanceCoordinator.dividerColorKey),
            let color = NSColor(hex: hex) {
             dividerColor = Color(nsColor: color)
         }
@@ -544,8 +658,10 @@ private struct AppearanceStylePanel: View {
 
     private func saveDivider() {
         let defaults = UserDefaults.standard
-        defaults.set(dividerMode, forKey: "SidebarDividerMode")
-        defaults.set(NSColor(dividerColor).hexString ?? "#808080", forKey: "SidebarDividerColorHex")
+        defaults.set(dividerMode, forKey: AppearanceCoordinator.dividerModeKey)
+        defaults.set(
+            NSColor(dividerColor).hexString ?? "#808080",
+            forKey: AppearanceCoordinator.dividerColorKey)
         NotificationCenter.default.post(
             name: TerminalController.sidebarTintDidChange,
             object: nil
@@ -590,6 +706,32 @@ private struct AppearanceStylePanel: View {
         applyBlur()
     }
 
+}
+
+/// The sidebar width the user last dragged to.
+///
+/// Dragging a divider writes one app-wide width (`TerminalController`'s
+/// `sidebarWidthDefaultsKey`) that every window then opens at, ahead of the
+/// configured `sidebar-width`. Nothing ever cleared it, so the slider in
+/// Appearance stopped having any visible effect the first time a divider
+/// moved, and the only way back was `defaults delete`.
+///
+/// Reading and clearing live here, next to the control that offers the reset,
+/// and take the store as a parameter so a test can use its own.
+enum SidebarWidthOverride {
+    /// The dragged width, or nil when there is none. Zero counts as none —
+    /// the same reading `TerminalController.sharedSidebarWidth` does, since
+    /// `UserDefaults.double(forKey:)` cannot tell an absent key from a 0.
+    static func width(in defaults: UserDefaults = .standard) -> Double? {
+        let saved = defaults.double(forKey: TerminalController.sidebarWidthDefaultsKey)
+        return saved > 0 ? saved : nil
+    }
+
+    /// Drops it, putting the configured width back in charge. Open windows
+    /// take it as each becomes key, which is where they re-read this.
+    static func clear(in defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: TerminalController.sidebarWidthDefaultsKey)
+    }
 }
 
 /// One theme in the grid: a miniature Phantom window — sidebar strip,
@@ -735,13 +877,18 @@ private struct ThemeCreatorView: View {
     @ObservedObject var catalog: ThemeCatalog
     let seed: TerminalTheme?
 
+    /// Called once the theme is written and applied. The editor is a window,
+    /// so finishing has to mean the window goes away — it used to stay open
+    /// under a line of text saying what had just happened, which is a receipt
+    /// for something the screen behind it already shows.
+    let onSaved: () -> Void
+
     @State private var name = ""
     @State private var background = Color(nsColor: NSColor(hex: "#282a36")!)
     @State private var foreground = Color(nsColor: NSColor(hex: "#f8f8f2")!)
     @State private var cursor = Color(nsColor: NSColor(hex: "#f8f8f2")!)
     @State private var selectionBackground = Color(nsColor: NSColor(hex: "#44475a")!)
     @State private var palette: [Color] = Self.draculaPalette.map { Color(nsColor: $0) }
-    @State private var savedName: String?
     @State private var isPickingSeed = false
     @State private var startedFrom: String?
 
@@ -829,12 +976,6 @@ private struct ThemeCreatorView: View {
             }
 
             HStack {
-                if let savedName {
-                    Label("Saved and applied: \(savedName)", systemImage: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 Spacer()
 
                 Button("Save & Apply") { save() }
@@ -959,7 +1100,7 @@ private struct ThemeCreatorView: View {
         store.set("theme", url.path)
         store.apply(ghostty: ghostty)
         catalog.reload()
-        savedName = trimmedName
+        onSaved()
     }
 
     private func hex(_ color: Color) -> String {
@@ -1039,6 +1180,12 @@ final class ThemeCreatorWindowController: NSWindowController {
         )
         window.title = "Create Theme"
         window.isReleasedWhenClosed = false
+
+        /// The floor lives here rather than in a SwiftUI frame, because the
+        /// height above it is now measured from the content — a minimum
+        /// written into the view would be a second answer, and the taller of
+        /// the two would win whether or not it was the true one.
+        window.contentMinSize = NSSize(width: 640, height: 360)
         window.center()
         window.setFrameAutosaveName("PhantomThemeCreator")
         super.init(window: window)
@@ -1049,22 +1196,57 @@ final class ThemeCreatorWindowController: NSWindowController {
     }
 
     func show(ghostty: Ghostty.App, store: GuiConfigStore) {
-        window?.contentView = NSHostingView(
-            rootView: ThemeCreatorWindowView(ghostty: ghostty, store: store).themedChrome()
+        let host = NSHostingView(
+            rootView: ThemeCreatorWindowView(ghostty: ghostty, store: store) { [weak self] in
+                self?.close()
+            }
+            .themedChrome()
         )
+        window?.contentView = host
+        fitToContent(host)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Takes the window's height from the editor instead of from the number it
+    /// was created with, which left a band of empty window under the last row.
+    ///
+    /// A hosting view's fitting height is its content's own even with a scroll
+    /// view in between, so the scroll can stay for the case this doesn't fit:
+    /// a display shorter than the editor, which the visible frame is the
+    /// measure of.
+    ///
+    /// The floor is applied here too. `contentMinSize` governs what a drag can
+    /// do to the window and not what this assigns it, so a measurement that
+    /// came back small would otherwise open a window smaller than the one the
+    /// user is allowed to make.
+    private func fitToContent(_ host: NSView) {
+        guard let window else { return }
+
+        host.layoutSubtreeIfNeeded()
+        let wanted = host.fittingSize.height
+        guard wanted > 0 else { return }
+
+        let screen = window.screen ?? NSScreen.main
+        let chrome = window.frame.height - window.contentRect(forFrameRect: window.frame).height
+        let ceiling = (screen?.visibleFrame.height ?? wanted + chrome) - chrome
+
+        var size = window.contentRect(forFrameRect: window.frame).size
+        size.height = min(max(wanted, window.contentMinSize.height), ceiling)
+        window.setContentSize(size)
     }
 }
 
 private struct ThemeCreatorWindowView: View {
     let ghostty: Ghostty.App
     @ObservedObject var store: GuiConfigStore
+    let onSaved: () -> Void
 
     @StateObject private var catalog: ThemeCatalog
 
-    init(ghostty: Ghostty.App, store: GuiConfigStore) {
+    init(ghostty: Ghostty.App, store: GuiConfigStore, onSaved: @escaping () -> Void) {
         self.ghostty = ghostty
         self.store = store
+        self.onSaved = onSaved
         _catalog = StateObject(wrappedValue: ThemeCatalog(userThemesDir: store.themesDirURL))
     }
 
@@ -1074,11 +1256,12 @@ private struct ThemeCreatorWindowView: View {
                 ghostty: ghostty,
                 store: store,
                 catalog: catalog,
-                seed: catalog.themes.first { $0.name == store.currentThemeName }
+                seed: catalog.themes.first { $0.name == store.currentThemeName },
+                onSaved: onSaved
             )
             .padding(16)
         }
-        .frame(minWidth: 640, minHeight: 520)
+        .frame(minWidth: 640)
         .onAppear { catalog.loadIfNeeded() }
     }
 }

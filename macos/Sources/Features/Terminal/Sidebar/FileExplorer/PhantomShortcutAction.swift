@@ -82,7 +82,7 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         case .moveLineUp: return "Move Line Up"
         case .moveLineDown: return "Move Line Down"
         case .attachLineToAgent: return "Attach Line to Agent"
-        case .attachLineToAgentPicker: return "Attach Line to Agent In…"
+        case .attachLineToAgentPicker: return "Attach Line to a Chosen Terminal…"
         }
     }
 
@@ -108,12 +108,12 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
 
     /// What the command answers to out of the box.
     ///
-    /// A list rather than one shortcut so a default can be *nothing*, which
-    /// is the honest answer for a command that has only ever been reachable
-    /// from the context menu: inventing a combination for it here would
-    /// claim keys the reader never agreed to give up. It is also the state
-    /// the reader can put any command into, so it had better be a state the
-    /// defaults can express.
+    /// A list rather than one shortcut, and an empty list is a legal answer:
+    /// it is the state the reader can put any command into by removing its
+    /// last shortcut, so it had better be a state the defaults can express
+    /// too. Nothing ships in it today — Go to Definition was the last one,
+    /// and shipping the only symbol command with no keys read as an
+    /// oversight rather than as the decision the empty list is meant to be.
     var defaultShortcuts: [PhantomShortcut] {
         switch self {
         case .newFile: return [PhantomShortcut(key: "n", modifiers: [.command, .shift])]
@@ -127,19 +127,42 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         /// remappable from here — which is the point of the swap being a
         /// default rather than a constant somewhere in the editor.
         case .searchWorkspace: return [PhantomShortcut(key: "f", modifiers: [.command, .option])]
-        case .goToDefinition: return []
+        /// ⌃⌘J, which puts the three symbol commands on one pair of
+        /// modifiers — definition, references, rename — so that learning any
+        /// of them teaches the other two.
+        ///
+        /// J rather than the D everything about the word "definition"
+        /// suggests: macOS spends ⌃⌘D on Look Up in every text view, and
+        /// this is one. ⌃⌘J is also where Xcode keeps Jump to Definition,
+        /// which is the habit a reader most likely arrives with.
+        case .goToDefinition: return [PhantomShortcut(key: "j", modifiers: [.command, .control])]
         case .findReferences: return [PhantomShortcut(key: "g", modifiers: [.command, .control])]
         case .renameSymbol: return [PhantomShortcut(key: "r", modifiers: [.command, .control])]
         case .formatDocument: return [PhantomShortcut(key: "f", modifiers: [.command, .shift])]
 
-        /// ⇧⌥↑ and ⇧⌥↓, which is what was asked for. Nothing else claims
-        /// them: not the terminal's own bindings, not the main menu, and not
-        /// the completion list — which answers to bare arrows only, and only
-        /// while it is open.
+        /// ⌥↑ and ⌥↓, the pairing VS Code and JetBrains both ship for this.
+        ///
+        /// These shadow AppKit's own ⌥-arrow paragraph motion, which is the
+        /// one real cost: a reader who expects ⌥↑ to jump a paragraph gets a
+        /// moved line instead. Taken deliberately — every editor this fork is
+        /// measured against binds move-line here, and paragraph motion has
+        /// ⌘↑/⌘↓ and the mouse.
+        ///
+        /// It also leaves ⇧⌥↑/↓ free, which is where duplicate-line goes if
+        /// it is ever built: the same editors pair the two commands on
+        /// exactly those keys, so move-line sitting on ⇧⌥ was occupying the
+        /// obvious home of the command that comes after it.
+        ///
+        /// Nothing inside Phantom competes: not the main menu, and not the
+        /// completion list, which claims the `moveUp:`/`moveDown:` selectors
+        /// the *bare* arrows send, and only while it is open. The terminal is
+        /// a near miss worth writing down — Ghostty's defaults bind ⌥← and
+        /// ⌥→ to the shell's word motion and leave ⌥↑/↓ alone, so the pair
+        /// taken here is free and the pair beside it is not.
         case .moveLineUp:
-            return [PhantomShortcut(key: PhantomShortcut.upArrow, modifiers: [.shift, .option])]
+            return [PhantomShortcut(key: PhantomShortcut.upArrow, modifiers: [.option])]
         case .moveLineDown:
-            return [PhantomShortcut(key: PhantomShortcut.downArrow, modifiers: [.shift, .option])]
+            return [PhantomShortcut(key: PhantomShortcut.downArrow, modifiers: [.option])]
 
         /// ⌘K, the combination Cursor and VS Code taught for "add this line
         /// to the chat". The terminal's own ⌘K is untouched: the editor and

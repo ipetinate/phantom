@@ -88,6 +88,11 @@ struct FontPickerView: View {
         case interface
     }
 
+    /// One key for both fields, even though only the terminal one shows the
+    /// toggle: the interface list is never filtered, so a second key would
+    /// be a second thing to keep in step and nothing to read it.
+    static let monospacedOnlyKey = "FontPickerMonospacedOnly"
+
     let currentFamily: String?
     let preview: PreviewKind
     let onPick: (String?) -> Void
@@ -102,7 +107,13 @@ struct FontPickerView: View {
     /// proportional family breaks alignment — the list defaults to
     /// monospaced families for that field, with an escape hatch for a
     /// nerd-font variant macOS doesn't report as fixed-pitch.
-    @State private var monospaceOnly = true
+    ///
+    /// Persisted rather than `@State`, because reaching for that escape
+    /// hatch is a fact about the reader's font collection and not about
+    /// this visit to the picker. As `@State` it came back ticked every
+    /// time the window opened, so anyone whose font macOS mis-reports had
+    /// to untick it again on every trip back to change their mind.
+    @AppStorage(FontPickerView.monospacedOnlyKey) private var monospaceOnly = true
 
     private var matchingFamilies: [String] {
         let base = (preview == .terminal && monospaceOnly)

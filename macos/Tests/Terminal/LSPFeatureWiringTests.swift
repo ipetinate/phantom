@@ -82,7 +82,7 @@ struct EditorShortcutTests {
     /// both halves are pinned here — a swap that only half happened would
     /// leave one command silently unreachable.
     @Test func commandShiftFFormats() {
-        let textView = CodeNSTextView()
+        let textView = EditorFocus.ready(CodeNSTextView())
         var formatted = false
         textView.onFormat = { formatted = true }
 
@@ -96,7 +96,7 @@ struct EditorShortcutTests {
     /// what made an arrow key unbindable, since an arrow always carries the
     /// function bit.
     @Test func capsLockDoesNotBreakABinding() {
-        let textView = CodeNSTextView()
+        let textView = EditorFocus.ready(CodeNSTextView())
         var formatted = false
         textView.onFormat = { formatted = true }
         textView.commandShortcuts = [
@@ -109,7 +109,7 @@ struct EditorShortcutTests {
     }
 
     @Test func commandOptionFSearchesTheWorkspace() {
-        let textView = CodeNSTextView()
+        let textView = EditorFocus.ready(CodeNSTextView())
         var searched = false
         textView.onSearchWorkspace = { searched = true }
 
@@ -121,7 +121,7 @@ struct EditorShortcutTests {
     /// bindings arriving as values — and the default must stop working when
     /// the reader has moved the command somewhere else.
     @Test func aRemappedFormatShortcutIsTheOneThatWorks() {
-        let textView = CodeNSTextView()
+        let textView = EditorFocus.ready(CodeNSTextView())
         var formatted = false
         textView.onFormat = { formatted = true }
         textView.commandShortcuts = [
@@ -135,7 +135,7 @@ struct EditorShortcutTests {
     /// Two shortcuts, one command — asked for by name, and the thing a single
     /// stored shortcut per command could not express.
     @Test func aSecondShortcutForTheSameCommandAlsoWorks() {
-        let textView = CodeNSTextView()
+        let textView = EditorFocus.ready(CodeNSTextView())
         var count = 0
         textView.onFormat = { count += 1 }
         textView.commandShortcuts = [
@@ -151,7 +151,7 @@ struct EditorShortcutTests {
     }
 
     @Test func controlCommandRRenames() {
-        let textView = CodeNSTextView()
+        let textView = EditorFocus.ready(CodeNSTextView())
         var offset: Int?
         textView.onRename = { offset = $0 }
 
@@ -160,7 +160,7 @@ struct EditorShortcutTests {
     }
 
     @Test func controlCommandGFindsReferences() {
-        let textView = CodeNSTextView()
+        let textView = EditorFocus.ready(CodeNSTextView())
         var asked = false
         textView.onFindReferences = { _ in asked = true }
 
@@ -172,7 +172,7 @@ struct EditorShortcutTests {
     /// it for references would trade a shortcut people use constantly for
     /// one they use occasionally.
     @Test func shiftCommandGIsLeftToTheFindBar() {
-        let textView = CodeNSTextView()
+        let textView = EditorFocus.ready(CodeNSTextView())
         textView.onFindReferences = { _ in
             Issue.record("references stole the find bar's previous-match key")
         }
@@ -184,7 +184,7 @@ struct EditorShortcutTests {
     /// same rule ⌘W already follows, since swallowing it would leave a
     /// window nothing can close.
     @Test func anUnhandledCommandIsNotClaimed() {
-        let textView = CodeNSTextView()
+        let textView = EditorFocus.ready(CodeNSTextView())
         #expect(!textView.performKeyEquivalent(with: event("f", [.command, .option])))
         #expect(!textView.performKeyEquivalent(with: event("r", [.command, .control])))
         #expect(!textView.performKeyEquivalent(with: event("g", [.command, .control])))

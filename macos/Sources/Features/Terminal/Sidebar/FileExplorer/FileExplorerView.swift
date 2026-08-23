@@ -50,7 +50,7 @@ struct FileExplorerView: View {
     }
 
     private func surface(for tab: SidebarTabModel?) -> Ghostty.SurfaceView? {
-        guard let controller = tab?.window.windowController as? BaseTerminalController
+        guard let controller = tab?.window?.windowController as? BaseTerminalController
         else { return nil }
         return controller.focusedSurface ?? controller.surfaceTree.root?.leftmostLeaf()
     }

@@ -5,7 +5,12 @@ import SwiftUI
 /// A grid of the real artwork rather than a list of names: the thing being
 /// chosen is a picture, and a picker that describes pictures in words makes the
 /// reader open each one to find out what it is.
-struct IconSettingsView: View {
+///
+/// A pane of its own, under Appearance. Folding it into Appearance as a row
+/// that opened a sheet saved a line in the list and cost the artwork the page
+/// it is worth looking at: choosing between twelve pictures is the whole task
+/// here, not a field to fill in on the way to something else.
+struct AppIconPickerView: View {
     @State private var selection: PhantomAppIcon = PhantomAppIconStore.current
 
     /// Held as the raw name because `IconSegmentedControl` binds to a string,
@@ -16,11 +21,6 @@ struct IconSettingsView: View {
         PhantomAppIconVariant(rawValue: variantName) ?? .default
     }
 
-    /// Set when `NSWorkspace` refuses to write the icon, which it does when the
-    /// bundle is somewhere unwritable. Silence there would read as the picker
-    /// being broken.
-    @State private var failure: String?
-
     private let columns = [GridItem(.adaptive(minimum: 96), spacing: 16)]
 
     var body: some View {
@@ -28,8 +28,8 @@ struct IconSettingsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 style
 
-                // Grouped by family, and driven by `Family.allCases` so a new
-                // group is a new case rather than another block of this view.
+                /// Grouped by family, and driven by `Family.allCases` so a new
+                /// group is a new case rather than another block of this view.
                 ForEach(PhantomAppIcon.Family.allCases) { family in
                     let icons = PhantomAppIcon.all(in: family)
                     if !icons.isEmpty {
@@ -53,10 +53,10 @@ struct IconSettingsView: View {
 
                 Text(
                     """
-                    The icon is applied to the app on disk, so the Dock and the \
-                    app switcher follow immediately. A rebuild from source \
-                    resets it, and Phantom puts your choice back on the next \
-                    launch.
+                    The Dock and the app switcher follow immediately, and a \
+                    Phantom pinned in the Dock keeps the choice while it isn't \
+                    running. Finder and Launchpad always show the built-in \
+                    icon — changing it there would break the app's signature.
                     """
                 )
                 .font(.callout)
@@ -64,12 +64,6 @@ struct IconSettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
             .padding(20)
-        }
-        .alert(
-            failure ?? "",
-            isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })
-        ) {
-            Button("OK") { failure = nil }
         }
     }
 
@@ -84,19 +78,31 @@ struct IconSettingsView: View {
     /// `IconSegmentedControl` rather than a segmented `Picker` for the reason
     /// that type already documents: it paints the selected segment with the
     /// terminal theme's accent, like the rest of these panes.
+    ///
+    /// It sits beside its title and is sized to the three words in it. As a
+    /// `LabeledContent` row the track took the whole width of the window, and
+    /// three segments spread across a pane read as a toolbar rather than as a
+    /// choice — `fixedSize` asks for the width the labels need, which is also
+    /// the width at which none of them is shortened to fit.
     private var style: some View {
         VStack(alignment: .leading, spacing: 6) {
-            LabeledContent("Style") {
+            HStack(spacing: 12) {
+                Text("Style")
+                    .font(.headline)
+
                 IconSegmentedControl(
                     segments: PhantomAppIconVariant.allCases.map {
                         .init(value: $0.rawValue, label: $0.title, image: nil)
                     },
                     selection: $variantName
                 )
+                .fixedSize(horizontal: true, vertical: false)
                 .frame(height: 24)
                 .onChange(of: variantName) { name in
                     choose(PhantomAppIconVariant(rawValue: name) ?? .default)
                 }
+
+                Spacer()
             }
 
             Text("Each style is a fixed image — none of them follow the system's light/dark mode.")
@@ -107,16 +113,11 @@ struct IconSettingsView: View {
 
     private func choose(_ icon: PhantomAppIcon) {
         selection = icon
-        report(PhantomAppIconStore.apply(icon))
+        PhantomAppIconStore.apply(icon)
     }
 
     private func choose(_ variant: PhantomAppIconVariant) {
-        report(PhantomAppIconStore.apply(variant))
-    }
-
-    private func report(_ applied: Bool) {
-        guard !applied else { return }
-        failure = "The icon couldn't be applied. Phantom needs to be able to write to its own bundle."
+        PhantomAppIconStore.apply(variant)
     }
 }
 

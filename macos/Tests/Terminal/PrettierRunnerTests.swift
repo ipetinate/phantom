@@ -209,6 +209,124 @@ struct PrettierRunnerTests {
         #expect(formatted?.hasSuffix(directory.lastPathComponent) == true)
     }
 
+    // MARK: What reaches the reader
+
+    /// The regression this section exists for: a save banner read
+    /// *"Prettier couldn't format this file: The operation couldn't be
+    /// completed. (Ghostty.PrettierFailure error 3.)"*, which is what
+    /// `localizedDescription` answers for a bare Swift enum. It told the
+    /// reader nothing, and it told whoever read the report less than
+    /// nothing — 3 is the runtime's tag, and the runtime orders the payload
+    /// cases first, so the number pointed at `failed` while the fault was
+    /// `notFound`.
+    @Test func everyFailureDescribesItselfRatherThanItsTag() {
+        let failures: [PrettierFailure] = [
+            .notFound,
+            .launchFailed(reason: "No such file or directory"),
+            .timedOut(seconds: 10),
+            .failed(status: 2, message: "SyntaxError: Unexpected token (3:1)"),
+        ]
+
+        for failure in failures {
+            #expect(failure.localizedDescription == failure.reason)
+            #expect(!failure.localizedDescription.contains("PrettierFailure"))
+        }
+    }
+
+    /// The one the reader actually hit: a project carrying a `.prettierrc`
+    /// that never installed Prettier, on a machine that has none on `PATH`
+    /// either. The banner has to say that, because it is the whole fix.
+    @Test func aMissingPrettierSaysSoInWords() {
+        #expect(
+            PrettierFailure.notFound.localizedDescription
+                == "prettier isn't installed in this project or on PATH."
+        )
+    }
+
+    /// Prettier 3.9.6's real shape for a parse error, pasted from a run. The
+    /// sentence is the first line; the rest is a code frame drawn in a
+    /// monospaced column an alert does not have.
+    @Test func aParseErrorsCodeFrameStaysOutOfTheBanner() {
+        let stderr = """
+            [error] /p/main.tsx: SyntaxError: Declaration or statement expected. (3:1)
+            [error]   1 | const a = 1
+            [error]   2 |
+            [error] > 3 | }
+            [error]     | ^
+            [error]   4 |
+            """
+
+        #expect(
+            PrettierFailure.failed(status: 2, message: stderr).reason
+                == "/p/main.tsx: SyntaxError: Declaration or statement expected. (3:1)"
+        )
+    }
+
+    /// A config naming a plugin that will not load, which is the case that
+    /// prints a Node stack trace — twenty frames of Prettier's own bundle in
+    /// the run this was taken from, enough to push the sentence out of an
+    /// alert entirely.
+    @Test func aPluginsStackTraceStaysOutOfTheBanner() {
+        let stderr = """
+            [error] /p/main.ts: Error: Cannot find package 'prettier-plugin-nope' imported from /p/noop.js
+            [error]     at __node_internal_ (file:///p/node_modules/prettier/index.mjs:14106:11)
+            [error]     at new NodeError (file:///p/node_modules/prettier/index.mjs:14071:5)
+            [error]     at packageResolve (file:///p/node_modules/prettier/index.mjs:15012:9)
+            """
+
+        #expect(
+            PrettierFailure.failed(status: 2, message: stderr).reason
+                == "/p/main.ts: Error: Cannot find package 'prettier-plugin-nope' imported from /p/noop.js"
+        )
+    }
+
+    /// Why the banner is not simply the first line. A malformed config takes
+    /// three to say anything: on its own, `Invalid configuration for file`
+    /// names no fault.
+    @Test func aConfigurationErrorKeepsTheLinesThatNameTheFault() {
+        let stderr = """
+            [error] Invalid configuration for file "/p/main.ts":
+            [error] YAML Error in /p/.prettierrc:
+            [error] Flow map must end with a } at line 2, column 1:
+            [error]\u{20}
+            [error] { "semi": false
+            [error]\u{20}
+            [error] ^
+            [error]\u{20}
+            """
+
+        #expect(
+            PrettierFailure.failed(status: 2, message: stderr).reason == """
+                Invalid configuration for file "/p/main.ts":
+                YAML Error in /p/.prettierrc:
+                Flow map must end with a } at line 2, column 1:
+                { "semi": false
+                """
+        )
+    }
+
+    /// The bound on an unmeasured shape — a plugin free to print an essay.
+    @Test func aBannerIsNotUnbounded() {
+        let stderr = (1...40).map { "[error] line \($0)" }.joined(separator: "\n")
+        let lines = PrettierFailure.failed(status: 2, message: stderr).reason
+            .split(separator: "\n")
+
+        #expect(lines.count == 4)
+        #expect(lines.first == "line 1")
+    }
+
+    /// Trimming that removed everything would leave a banner saying nothing
+    /// at all, which is the failure this whole section is about. A wall of
+    /// text beats that.
+    @Test func aMessageThatIsNothingButScaffoldingSurvivesWhole() {
+        let stderr = "[error]   1 | const a = 1\n[error]     | ^\n"
+
+        #expect(
+            PrettierFailure.failed(status: 2, message: stderr).reason
+                == "[error]   1 | const a = 1\n[error]     | ^"
+        )
+    }
+
     // MARK: Stubs
 
     private func makeRoot() throws -> URL {

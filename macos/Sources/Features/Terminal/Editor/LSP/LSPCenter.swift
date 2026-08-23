@@ -1545,6 +1545,18 @@ final class LSPCenter: ObservableObject {
             return nil
         }
 
+        /// After the handshake and before the first `didOpen`, so the first
+        /// JSON file opened is already matched against a schema rather than
+        /// being validated bare and revalidated a moment later.
+        ///
+        /// `try?`, and the server is left running either way: a JSON file
+        /// without its schema is the brace matcher this build already
+        /// shipped, and refusing to start over a notification would take
+        /// that away too.
+        if let associations = JSONSchemaAssociations.payload(for: definition) {
+            try? process.notify(JSONSchemaAssociations.notification, params: associations)
+        }
+
         status[key] = .running
         servers[key] = process
         listen(to: process, key: key)
@@ -1804,15 +1816,13 @@ final class LSPCenter: ObservableObject {
     }
 
     /// Hover comes back as a string, a `{ value: }`, or an array of either.
+    ///
+    /// The shapes moved to `LSPHoverContents` when the third one turned out
+    /// to need more than its `value`: a `MarkedString` names the language its
+    /// code is written in, and dropping that name is what sent
+    /// `tailwindcss-language-server`'s CSS to the card as reflowed prose.
     nonisolated static func hoverText(from contents: LSPValue?) -> String? {
-        guard let contents else { return nil }
-        if let text = contents.stringValue { return text.isEmpty ? nil : text }
-        if let value = contents["value"]?.stringValue { return value.isEmpty ? nil : value }
-        if let array = contents.arrayValue {
-            let joined = array.compactMap { hoverText(from: $0) }.joined(separator: "\n\n")
-            return joined.isEmpty ? nil : joined
-        }
-        return nil
+        LSPHoverContents.markdown(from: contents)
     }
 
     /// Definition answers with one location or a list of them.

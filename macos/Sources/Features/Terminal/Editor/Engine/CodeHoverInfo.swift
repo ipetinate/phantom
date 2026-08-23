@@ -18,16 +18,44 @@ struct CodeHoverInfo: Equatable {
         let color: NSColor
     }
 
+    /// A run of hover content the card draws as one thing.
+    ///
+    /// Two cases because there are two ways to draw text and the payload
+    /// says which: prose is proportional and reflowed, source is
+    /// monospaced, kept line for line, and coloured. Collapsing them — which
+    /// is what a single `String` did — means one of the two is always drawn
+    /// as the other.
+    enum Block: Equatable {
+        /// Prose, with markdown's *inline* marks still in it. The card
+        /// parses those; block syntax has already been resolved by `split`.
+        case prose(String)
+
+        /// Source, and the language its fence named.
+        ///
+        /// **Nil is a real answer, not a missing one.** An untagged fence,
+        /// and a tag this build has no rules for — `text`, `diff`,
+        /// `mermaid` — both mean "draw this monospaced and do not pretend
+        /// to know what it is". Guessing the document's language instead
+        /// colours a fence of shell output as if it were the file around
+        /// it. See `CodeLanguage.resolve(fenceInfo:)`.
+        case code(String, language: CodeLanguage?)
+    }
+
     var problems: [Problem] = []
 
-    /// The declaration, as the server wrote it inside a fenced code block.
-    var signature: String?
+    /// The declaration, as the server wrote it inside its leading fenced
+    /// code block.
+    var signature: Block?
 
-    /// The prose that followed the declaration.
-    var documentation: String?
+    /// What followed the declaration, in order.
+    ///
+    /// A list rather than one string, because a doc comment interleaves the
+    /// two: prose, then a `@see` example, then more prose. Flattened, the
+    /// example lost its fences and was drawn as a sentence.
+    var documentation: [Block] = []
 
     var isEmpty: Bool {
-        problems.isEmpty && signature == nil && documentation == nil
+        problems.isEmpty && signature == nil && documentation.isEmpty
     }
 
     /// Splits a language server's hover payload into declaration and prose.
@@ -39,13 +67,20 @@ struct CodeHoverInfo: Equatable {
     /// ordinary readable text. Rendered as one blob it is either all code or
     /// all prose, and both are worse than the split.
     ///
-    /// A later fenced block — a `@see` example, a second overload — keeps its
-    /// content and loses its fences: the text is still worth reading and the
-    /// markers are not. A fenced block with no prose *before* it is still the
-    /// declaration, however many there are: `rust-analyzer` answers with the
-    /// module path in one block and the signature in the next, and taking
-    /// only the first put the module path in the code font and the real
-    /// signature into the prose.
+    /// A later fenced block — a `@see` example, a second overload — becomes a
+    /// `.code` block of its own rather than being flattened into the prose
+    /// around it. It used to lose its fences and its font with them, which
+    /// made an example read as a sentence. A fenced block with no prose
+    /// *before* it is still the declaration, however many there are:
+    /// `rust-analyzer` answers with the module path in one block and the
+    /// signature in the next, and taking only the first put the module path
+    /// in the code font and the real signature into the prose.
+    ///
+    /// **Every fence keeps the language its info string names**, resolved
+    /// through `CodeLanguage.resolve(fenceInfo:)` — the same table the
+    /// markdown preview uses, so a ```` ```css ```` fence is coloured by the
+    /// same rules in both places. The declaration takes the language of the
+    /// *first* leading fence, since the later ones are continuations of it.
     ///
     /// Documentation is also **reflowed**: a doc comment arrives wrapped to
     /// whatever column its author's editor used, and wrapping it again at the
@@ -67,11 +102,19 @@ struct CodeHoverInfo: Equatable {
     /// keyword-only`. A heading becomes emphasis, which the card already
     /// draws bold; a quote loses a marker that says nothing once the line is
     /// on its own.
-    static func split(markdown: String) -> (signature: String?, documentation: String?) {
+    static func split(markdown: String) -> (signature: Block?, documentation: [Block]) {
         var signature: [String] = []
+        var signatureLanguage: CodeLanguage?
+        var hasOpenedSignatureFence = false
+
+        var documentation: [Block] = []
         var blocks: [ProseBlock] = []
         var paragraph: [String] = []
         var listItem: [String]?
+
+        var example: [String] = []
+        var exampleLanguage: CodeLanguage?
+
         var isInFence = false
         var isQuoting = false
         var hasSeenProse = false
@@ -90,17 +133,51 @@ struct CodeHoverInfo: Equatable {
             paragraph = []
         }
 
+        /// Everything said since the last code block, as one block, so the
+        /// reflow above still happens across a whole run of prose and stops
+        /// at the example that interrupts it.
+        func endProse() {
+            endParagraph()
+            defer { blocks = [] }
+            guard let text = Self.assemble(blocks) else { return }
+            documentation.append(.prose(text))
+        }
+
+        func endExample() {
+            endProse()
+            guard let text = Self.trimmed(example) else { return }
+            documentation.append(.code(text, language: exampleLanguage))
+            example = []
+            exampleLanguage = nil
+        }
+
         for line in markdown.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("```") {
-                isInFence.toggle()
-                /// A second declaration block gets a blank line above it, so
-                /// the module path and the signature `rust-analyzer` sends read
-                /// as the two things they are rather than as one declaration
-                /// four lines long. The fences themselves are gone by the time
-                /// anything downstream could tell.
-                if isInFence, !hasSeenProse, !signature.isEmpty { signature.append("") }
+                if isInFence {
+                    isInFence = false
+                    if hasSeenProse { endExample() }
+                    continue
+                }
+
+                isInFence = true
+                let language = Self.language(ofFence: String(trimmed.dropFirst(3)))
+                if hasSeenProse {
+                    exampleLanguage = language
+                } else {
+                    /// A second declaration block gets a blank line above it,
+                    /// so the module path and the signature `rust-analyzer`
+                    /// sends read as the two things they are rather than as
+                    /// one declaration four lines long. The fences themselves
+                    /// are gone by the time anything downstream could tell —
+                    /// which is why the first one's language is kept here.
+                    if !signature.isEmpty { signature.append("") }
+                    if !hasOpenedSignatureFence {
+                        signatureLanguage = language
+                        hasOpenedSignatureFence = true
+                    }
+                }
                 endParagraph()
                 isQuoting = false
                 continue
@@ -108,7 +185,7 @@ struct CodeHoverInfo: Equatable {
 
             if isInFence {
                 if hasSeenProse {
-                    blocks.append(ProseBlock(kind: .verbatim, text: line))
+                    example.append(line)
                 } else {
                     signature.append(line)
                 }
@@ -172,16 +249,39 @@ struct CodeHoverInfo: Equatable {
 
             paragraph.append(trimmed)
         }
-        endParagraph()
 
-        return (trimmed(signature), assemble(blocks))
+        /// An unclosed fence is the normal state of a doc comment somebody is
+        /// halfway through writing, and its content is still worth drawing as
+        /// what it is.
+        if isInFence, hasSeenProse {
+            endExample()
+        } else {
+            endProse()
+        }
+
+        let declaration = Self.trimmed(signature)
+            .map { Block.code($0, language: signatureLanguage) }
+        return (declaration, documentation)
     }
 
     /// A run of prose that has to stay together.
     private struct ProseBlock {
-        enum Kind { case paragraph, listItem, verbatim }
+        enum Kind { case paragraph, listItem }
         let kind: Kind
         let text: String
+    }
+
+    /// The language a fence's info string names, or nil for a fence that
+    /// names none this build knows.
+    ///
+    /// Both halves are borrowed rather than rewritten: `MarkdownCodeBlock`
+    /// already defines what the *first word* of an info string is — `ts
+    /// title="app.ts"` is a real fence and its language is `ts` — and
+    /// `CodeLanguage.resolve(fenceInfo:)` already maps that word onto the
+    /// highlighter. A second copy of either rule here is a second copy that
+    /// drifts.
+    private static func language(ofFence info: String) -> CodeLanguage? {
+        CodeLanguage.resolve(fenceInfo: MarkdownCodeBlock(info: info, code: "").languageHint)
     }
 
     /// The text of an ATX heading, or nil when the line is not one.
@@ -245,8 +345,11 @@ struct CodeHoverInfo: Equatable {
         return rest.dropFirst().first == " "
     }
 
-    /// Joins the blocks back up: a blank line between paragraphs, a single
-    /// newline inside a list or a code example.
+    /// Joins one run of prose back up: a blank line between paragraphs, a
+    /// single newline between the items of a list.
+    ///
+    /// Code no longer passes through here — a fence is its own `Block` now —
+    /// which is why the tight rule has only lists left to apply to.
     private static func assemble(_ blocks: [ProseBlock]) -> String? {
         var result = ""
         var previous: ProseBlock.Kind?

@@ -96,9 +96,15 @@ enum WindowGhostRescue {
 /// Development builds only. The file answers a developer's question, and
 /// writing a log nobody will read into every user's disk is not a feature.
 enum WindowBreadcrumbs {
+    /// Synchronous on purpose. The events this file exists for happen at
+    /// the edge of process death, and an async write is exactly the note
+    /// that dies in the queue while the process exits — which has already
+    /// cost one investigation its last three lines. A blocking file append
+    /// a handful of times per session is invisible; a missing final
+    /// breadcrumb is the whole tool gone.
     static func note(_ event: String) {
         guard DevelopmentBuild.isActive else { return }
-        queue.async { append(event) }
+        queue.sync { append(event) }
     }
 
     /// Watches the moments a window can become an orphan, app-wide: Space
@@ -118,6 +124,14 @@ enum WindowBreadcrumbs {
             (NSWindow.didDeminiaturizeNotification, "didDeminiaturize"),
             (NSWindow.didChangeScreenNotification, "didChangeScreen"),
             (NSWindow.didChangeOcclusionStateNotification, "didChangeOcclusionState"),
+            /// Key changes catch what every higher layer can miss: a click
+            /// that never reaches a SwiftUI button still moves key, so a
+            /// reproduction that leaves no select breadcrumb is not
+            /// invisible here. Added after a live bug produced clicks with
+            /// no trace at all — the row's action never ran, and nothing
+            /// below it was listening.
+            (NSWindow.didBecomeKeyNotification, "didBecomeKey"),
+            (NSWindow.didResignKeyNotification, "didResignKey"),
         ]
 
         for (name, label) in watched {
@@ -132,7 +146,8 @@ enum WindowBreadcrumbs {
                     "visible=\(window.isVisible) " +
                     "onActiveSpace=\(window.isOnActiveSpace) " +
                     "miniaturized=\(window.isMiniaturized) " +
-                    "occluded=\(!window.occlusionState.contains(.visible))")
+                    "occluded=\(!window.occlusionState.contains(.visible)) " +
+                    "group=\(window.tabGroup?.windows.count ?? 0)")
             })
         }
 

@@ -94,6 +94,18 @@ extension Ghostty {
                 return false
             }
 
+            /// Quit never goes through `performActionForItem`. Performed from
+            /// inside key-equivalent dispatch, `terminate:` was observed —
+            /// under lldb, on a breakpoint at `exit` — reaching `exit()`
+            /// without ever consulting `applicationShouldTerminate` or
+            /// `applicationWillTerminate`: no confirm dialog over running
+            /// processes, and no final session save, so the quit lost
+            /// whatever the debounced save hadn't flushed. The same
+            /// `terminate:` sent outside the menu-perform machinery consults
+            /// the delegate normally, so the quit binding is deferred out of
+            /// this event and sent clean.
+            if Self.handledAsDeferredQuit(item) { return true }
+
             let index = parentMenu.index(of: item)
             guard index >= 0 else {
                 return false
@@ -102,6 +114,28 @@ extension Ghostty {
             parentMenu.performActionForItem(at: index)
             return true
         }
+    }
+}
+
+extension Ghostty.MenuShortcutManager {
+    /// How the quit binding leaves the key-equivalent dispatch. Replaceable
+    /// so a test can observe the routing without terminating the test host —
+    /// the default is the real thing.
+    static var deferredQuit: () -> Void = {
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
+
+    /// Answers a quit-bound menu item by deferring `terminate:` instead of
+    /// performing the item. See `performGhosttyBindingMenuKeyEquivalent` for
+    /// why: performed from inside key-equivalent dispatch, `terminate:` was
+    /// observed reaching `exit()` without consulting the app delegate — no
+    /// confirmation, no final session save.
+    static func handledAsDeferredQuit(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(NSApplication.terminate(_:)) else { return false }
+        WindowBreadcrumbs.note(
+            "quit binding: deferring terminate out of key-equivalent dispatch")
+        deferredQuit()
+        return true
     }
 }
 

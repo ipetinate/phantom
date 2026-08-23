@@ -33,13 +33,40 @@ extension TerminalRestorableState: PhantomSessionState {}
 /// This store is that persistence. It mirrors every open terminal window
 /// (surface trees, working directories, frames, tab colors, title
 /// overrides) to a file and, on launch, restores from it instead of
-/// trusting macOS's saved state. macOS's own restore is kept as the
-/// bootstrap for the first launch after this lands: while the store is
-/// empty, macOS restores as usual and the store simply records what ended
-/// up open; once the store has a session, the macOS restore path stands
-/// down and this store is authoritative.
+/// trusting macOS's saved state. It is the only thing that restores a
+/// terminal window — see `ownsTerminalRestoration`.
 final class PhantomSessionStore {
     static let shared = PhantomSessionStore()
+
+    /// This store, and nothing else, brings a terminal window back.
+    ///
+    /// Both were live: AppKit re-created the windows it had seen at quit
+    /// while this store rebuilt the same session from its own file, and
+    /// neither knew about the other. The stand-down added for that asked
+    /// whether this store *happened* to have a session on disk at the moment
+    /// AppKit got round to asking — an answer that depends on the file's
+    /// contents and on which of the two ran first, so "only one of them
+    /// acts" held by arithmetic rather than by construction.
+    ///
+    /// The decision is made here instead, once, and read by both places that
+    /// could let AppKit act: `TerminalController.windowDidLoad`, which no
+    /// longer registers a terminal window for restoration at all, and
+    /// `TerminalWindowRestoration.restoreWindow`, which declines whatever a
+    /// saved-state bundle written by an older build still asks for.
+    ///
+    /// This store wins because it is the only one that *can*: it knows the
+    /// worktree a terminal belongs to, the agent session running in it, its
+    /// sidebar group and its editor, none of which AppKit can reconstruct
+    /// from a window. What AppKit knew and this store does not is where a
+    /// window physically was — its Space and its display. A restored window
+    /// keeps its frame, its tab group, its tab order and which tab was
+    /// showing, and opens on whichever Space the reader is on.
+    ///
+    /// This does not overrule `window-save-state`. `never` still means
+    /// nothing comes back from either: this store refuses in
+    /// `restoreIfNeeded`, and AppKit is told to keep no windows at all
+    /// (`NSQuitAlwaysKeepsWindows`, in `AppDelegate`).
+    static let ownsTerminalRestoration = true
 
     /// While restoring from the store, saves are suspended so a partial
     /// window set can never overwrite the saved session.
@@ -263,7 +290,31 @@ final class PhantomSessionStore {
     /// Deliberately **not** the predicate the save filter uses. See
     /// `isPartOfSession`.
     static var hasReachableTerminalWindows: Bool {
-        TerminalController.all.contains { isReachable($0.window) }
+        TerminalController.all.contains {
+            isReachableTerminal(
+                hasClosed: $0.hasClosed,
+                isVisible: $0.window?.isVisible ?? false,
+                isMiniaturized: $0.window?.isMiniaturized ?? false)
+        }
+    }
+
+    /// Whether a terminal counts as one the reader can still get back to.
+    ///
+    /// The closed term is not redundant with the other two. A window that was
+    /// closed while something held its controller can be *shown again* —
+    /// picking it out of the Dock's window list does exactly that — and from
+    /// then on it reports `isVisible`, so reachability alone says the reader
+    /// has a terminal. They do not: they have a husk (see
+    /// `BaseTerminalController.hasClosed`). Counting it is worse than cosmetic
+    /// — it is what makes the next Dock click decide the session is already up
+    /// and restore nothing, leaving the reader with a bare frame and their
+    /// terminals still on disk.
+    static func isReachableTerminal(
+        hasClosed: Bool,
+        isVisible: Bool,
+        isMiniaturized: Bool
+    ) -> Bool {
+        !hasClosed && isReachable(isVisible: isVisible, isMiniaturized: isMiniaturized)
     }
 
     // MARK: The Session File
@@ -309,14 +360,14 @@ final class PhantomSessionStore {
     /// How many terminals the session file holds, and in which shape,
     /// without decoding a single one of them.
     ///
-    /// This exists because `load` is destructive. Two callers only ever
-    /// wanted the count — `hasSavedSession` and the guard in `saveNow` — and
-    /// both were paying a full decode for it. `hasSavedSession` is consulted
-    /// once per window in macOS's *own* saved state, so eight saved
-    /// terminals across three macOS windows meant twenty-four surfaces, and
-    /// twenty-four login shells, created and thrown away on the launch path
-    /// before the real restore had begun. Each of those surfaces also fires
-    /// the agent resume, into a shell nothing will ever show.
+    /// This exists because `load` is destructive. The guard in `saveNow`
+    /// only ever wanted the count, and was paying a full decode for it — as
+    /// was the query that used to be asked once per window in macOS's *own*
+    /// saved state, where eight saved terminals across three macOS windows
+    /// meant twenty-four surfaces, and twenty-four login shells, created and
+    /// thrown away on the launch path before the real restore had begun.
+    /// Each of those surfaces also fires the agent resume, into a shell
+    /// nothing will ever show.
     ///
     /// `JSONSerialization` walks the same bytes and hands back arrays and
     /// dictionaries, so counting costs a parse and nothing more.
@@ -594,23 +645,29 @@ final class PhantomSessionStore {
 
     // MARK: Restoring
 
-    /// True when a non-empty session is on disk. `restoreWindow` consults
-    /// this to stand macOS's own restore down in favor of ours.
-    ///
-    /// Answered by counting the file, never by decoding it: this is asked
-    /// once per window macOS has in its own saved state, and a decode here
-    /// would build — and abandon — the entire session several times over,
-    /// before the launch had finished. See `inspect` and the warning on
-    /// `load`.
-    var hasSavedSession: Bool {
+    /// Whether a non-empty session is on disk — a peek, counted without
+    /// decoding, so the reopen handler can answer AppKit before any window
+    /// work is scheduled. See `inspect` for why counting must not decode.
+    var hasRestorableSession: Bool {
         if case .readable(let count, _) = savedSession() { return count > 0 }
         return false
     }
 
-    /// Restores the saved session. No-op when windows are already open (the
-    /// store is empty on the first launch after this feature lands, and
-    /// macOS's own restore will have produced them) or when the saved
-    /// session is empty.
+    /// Whether "Restore Windows on Launch" allows a restore at all.
+    ///
+    /// Off means nothing comes back, from either mechanism — this store here,
+    /// and AppKit through `NSQuitAlwaysKeepsWindows` in `AppDelegate`. Now
+    /// that this store is the only restorer of terminals
+    /// (`ownsTerminalRestoration`), this is the only place left where the
+    /// switch can be honoured, so it is spelled over the value rather than
+    /// read inline: the setting used to be written as `default`, which every
+    /// reader ignored, and only `never` may ever mean no.
+    static func mayRestore(windowSaveState: String) -> Bool {
+        windowSaveState != "never"
+    }
+
+    /// Restores the saved session. No-op when windows are already open or
+    /// when the saved session is empty.
     ///
     /// Called at launch before the app would otherwise open a default
     /// window, and again wherever a window is asked for while none exist —
@@ -626,9 +683,9 @@ final class PhantomSessionStore {
 
         // Respect the explicit "never restore" choice, matching the check
         // macOS restoration performs.
-        guard (NSApplication.shared.delegate as? AppDelegate)?.ghostty.config.windowSaveState != "never" else {
-            return false
-        }
+        let saveState = (NSApplication.shared.delegate as? AppDelegate)?
+            .ghostty.config.windowSaveState ?? ""
+        guard Self.mayRestore(windowSaveState: saveState) else { return false }
 
         // If windows are already up there is nothing for us to do, and
         // creating more would duplicate them. This is also what keeps a
@@ -649,7 +706,26 @@ final class PhantomSessionStore {
             scheduleSave()
         }
 
-        let (groups, standalones) = Self.partition(states)
+        var (groups, standalones) = Self.partition(states)
+
+        /// With the sidebar on, one group is the shape of the app: every
+        /// terminal is a row of the same list, and a second window is not
+        /// something any supported gesture produces — the ways one used to
+        /// appear (⌘N routed to a loose window, a tab request degrading
+        /// when its parent was a husk) were all bugs, and the store then
+        /// preserved their output: a session saved as two groups restored
+        /// as two groups on every launch after, which is how one accident
+        /// became a permanent ghost. Merging here is what heals those
+        /// files. Without the sidebar the split is upstream's normal
+        /// multi-window world and is restored as written.
+        if appDelegate.ghostty.config.sidebar {
+            if groups.count + standalones.count > 1 {
+                WindowBreadcrumbs.note(
+                    "restore: merging \(groups.count) groups and "
+                    + "\(standalones.count) standalones into one")
+            }
+            (groups, standalones) = Self.unified(groups: groups, standalones: standalones)
+        }
 
         var restoredCount = 0
         for group in groups {
@@ -665,6 +741,79 @@ final class PhantomSessionStore {
         /// which produced nothing still told New Window to stand down — so
         /// New Window opened nothing, and went on opening nothing.
         return restoredCount > 0
+    }
+
+    /// One group holding every state, in group-then-standalone order — the
+    /// shape `restoreIfNeeded` uses when the sidebar is on. Pure, because the
+    /// merge policy is the piece of the healing that has to hold without an
+    /// app: a session file carrying an accidental split must come back whole.
+    static func unified<State: PhantomSessionState>(
+        groups: [[State]],
+        standalones: [State]
+    ) -> (groups: [[State]], standalones: [State]) {
+        let merged = groups.flatMap { $0 } + standalones
+        guard !merged.isEmpty else { return ([], []) }
+        return ([merged], [])
+    }
+
+    /// Shows the restored session's front window — a turn later, never
+    /// inline, and key as well as front.
+    ///
+    /// Both halves are regressions this method exists to hold:
+    ///
+    /// A reveal issued synchronously from inside the dispatch the restore
+    /// was called in — `applicationShouldHandleReopen`, the Dock click —
+    /// left every window AppKit-visible but WindowServer-offscreen:
+    /// `isVisible` true, a sane frame, and not one pixel, with
+    /// `CGWindowListCopyWindowInfo` reporting `onscreen=false` for the whole
+    /// group. Partially committed, it produced the tab that selects but
+    /// never draws. The launch path only ever worked because launch is not
+    /// inside that dispatch.
+    ///
+    /// And front without key is an app with a dead menu bar: inside the
+    /// launch path activation used to hand key status over on its own; on
+    /// the deferred turn nothing does, and every first-responder action —
+    /// the whole File menu included — lands on nobody.
+    ///
+    /// `queue` is injectable so a test can prove the deferral without a
+    /// window server; the default is the real one.
+    static func scheduleReveal(
+        of front: NSWindow,
+        on queue: DispatchQueue = .main,
+        then followUp: @escaping () -> Void = {}
+    ) {
+        queue.async {
+            WindowBreadcrumbs.note(
+                "restore reveal: front=\(front.windowNumber) appActive=\(NSApp.isActive)")
+            front.orderFrontRegardless()
+            front.makeKey()
+            followUp()
+        }
+    }
+
+    /// Records, against the WindowServer, whether the revealed window
+    /// actually reached the screen. Development builds only — a tripwire,
+    /// not a repair.
+    ///
+    /// The ghost window this watches for: a restored group whose reveal left
+    /// every window `isVisible`, key, and occlusion-visible while
+    /// `CGWindowListCopyWindowInfo` reported the whole group onscreen=false —
+    /// a blank frame in Mission Control. Repairing after the fact was
+    /// measured and does not work: `orderFrontRegardless`, `makeKey` and
+    /// `display()` all no-op, because AppKit already believes the window is
+    /// up. The cure is in `restoreWindows`, which puts the anchor on screen
+    /// before any tab joins it. Should a new variant of this family appear,
+    /// this line is the witness.
+    static func verifyReveal(of front: NSWindow) {
+        guard DevelopmentBuild.isActive else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200)) { [weak front] in
+            guard let front else { return }
+            WindowBreadcrumbs.note(
+                "reveal verify: window=\(front.windowNumber) "
+                + "onscreen=\(SidebarTabManager.windowServerShowsOnScreen(front)) "
+                + "visible=\(front.isVisible) key=\(front.isKeyWindow) "
+                + "occl=\(front.occlusionState.rawValue)")
+        }
     }
 
     /// Splits saved states into the windows that were tabs of one window and
@@ -802,6 +951,38 @@ final class PhantomSessionStore {
                 if !isStandalone, let frame = Self.restoredFrame(for: state) {
                     window.setFrame(frame, display: false)
                 }
+
+                /// The anchor goes on screen before any tab joins it, because
+                /// a group formed entirely off screen can be lost between
+                /// AppKit and the WindowServer on the reopen path: the reveal
+                /// left every window `isVisible`, key, and occlusion-visible
+                /// while `CGWindowListCopyWindowInfo` reported the whole
+                /// group onscreen=false — the ghost window, a blank frame in
+                /// Mission Control that no re-order, `makeKey` or `display()`
+                /// could repair, since AppKit already believed the window was
+                /// up. Measured with the staged repairs in `verifyReveal`.
+                ///
+                /// Joining off-screen tabs onto an on-screen window is the
+                /// shape `newTab` uses on every ⌘T, and it commits correctly
+                /// in the same reopen context where the off-screen group was
+                /// lost. The saved selection is applied in the same runloop
+                /// turn, below, so the screen's first commit already shows
+                /// the tab the reader was on.
+                ///
+                /// Ordered in at zero alpha, and the reveal restores it.
+                /// Alpha does not change ordering — the WindowServer takes
+                /// the window into its onscreen list either way, which is
+                /// all the ghost fix needs — but it keeps the construction
+                /// invisible: shown opaque, the anchor sat on screen for the
+                /// better part of a second while the other tabs spawned
+                /// their shells, wearing the default "👻 Ghostty" title and
+                /// a one-row sidebar — the startup flash the reader filmed.
+                if !isStandalone {
+                    WindowBreadcrumbs.note(
+                        "restore: anchor on screen before joins window=\(window.windowNumber)")
+                    window.alphaValue = 0
+                    window.orderFrontRegardless()
+                }
             }
 
             if anchor == nil {
@@ -846,10 +1027,13 @@ final class PhantomSessionStore {
         // them once the group is complete is that missing signal.
         //
         // A turn later, because AppKit's tab group bookkeeping is not
-        // consistent until the next runloop cycle.
+        // consistent until the next runloop cycle. Refreshed synchronously
+        // inside that turn — not through `scheduleRefresh`, whose own async
+        // hop would land the rows one turn after the reveal below, letting
+        // the first visible frame carry a one-row sidebar.
         DispatchQueue.main.async {
             for controller in restored {
-                controller.sidebarTabManager?.scheduleRefresh()
+                controller.sidebarTabManager?.refresh()
             }
         }
 
@@ -894,27 +1078,63 @@ final class PhantomSessionStore {
 
         /// The tab the reader was on is the one shown, rather than the anchor
         /// followed by a correction, so the window never appears on the wrong
-        /// tab first. Ordering a background tab front makes it its group's
-        /// selection — measured — which is exactly the request here.
+        /// tab first. The anchor is already ordered front (see above), but
+        /// the WindowServer commits at the end of the runloop turn — moving
+        /// the group's selection here, in the same turn, means the first
+        /// frame on screen is already the saved tab.
+        ///
+        /// The selected tab inherits the anchor's zero alpha: selecting it
+        /// orders its window on, and shown opaque here it would paint
+        /// mid-construction — default title, one-row sidebar — for the
+        /// turns between this and the reveal. Nothing shows until the
+        /// reveal restores both alphas.
         let front = selected?.window ?? anchorWindow
-        front.orderFrontRegardless()
+        front.alphaValue = 0
+        if let group = anchorWindow.tabGroup, group.selectedWindow !== front {
+            group.selectedWindow = front
+        }
 
-        DispatchQueue.main.async {
-            /// Said again a turn later because AppKit's tab group bookkeeping
-            /// is not consistent until the next runloop cycle, and a group
-            /// that had never been on screen may have shown itself without
-            /// moving its selection.
+        /// A turn later, never inline — the reveal must leave the dispatch
+        /// this restore was called from. Restored from inside
+        /// `applicationShouldHandleReopen` (the Dock click), an
+        /// `orderFrontRegardless` issued synchronously left every window
+        /// AppKit-visible but WindowServer-offscreen: `isVisible` true,
+        /// `isOnActiveSpace` true, a sane frame — and not one pixel, with
+        /// `CGWindowListCopyWindowInfo` reporting `onscreen=false` for the
+        /// whole group. An app with its menu bar up and no window at all,
+        /// or — when the commit landed partially — one tab that selects but
+        /// never draws. The launch path only ever worked because launch is
+        /// not inside that dispatch. Same disease, same cure as the quit
+        /// binding: do the work on the next turn, outside the transaction.
+        Self.scheduleReveal(of: front) {
+            /// The anchor and the selected tab were ordered in at zero
+            /// alpha so the group could build unseen; the group is complete
+            /// now, so both become visible — in the same turn as the
+            /// reveal's own ordering, so no commit shows a see-through tab.
+            anchorWindow.alphaValue = 1
+            front.alphaValue = 1
+
+            /// Said because AppKit's tab group bookkeeping is not consistent
+            /// until the next runloop cycle, and a group that had never been
+            /// on screen may have shown itself without moving its selection.
             if let group = front.tabGroup, group.selectedWindow !== front {
                 group.selectedWindow = front
             }
+
+            WindowBreadcrumbs.note(
+                "restore revealed: front=\(front.windowNumber) visible=\(front.isVisible) "
+                + "occl=\(front.occlusionState.rawValue) "
+                + "groupWindows=\(front.tabGroup?.windows.count ?? 0)")
+
+            Self.verifyReveal(of: front)
 
             /// Fullscreen last, and only from here: a group has to exist and
             /// be on screen before it can go fullscreen — a window that has
             /// never been shown has no `screen`, which is where non-native
             /// fullscreen gives up — and the state belongs to the window
             /// rather than to any one tab. Leaving it to AppKit, as the group
-            /// path used to, could not work: `hasSavedSession` has just told
-            /// AppKit's own restoration to stand down.
+            /// path used to, could not work: AppKit's own restoration has no
+            /// part in a terminal window — see `ownsTerminalRestoration`.
             if let mode = PhantomSessionStore.restoredFullscreenMode(for: anchorState) {
                 anchor?.toggleFullscreen(mode: mode)
             }

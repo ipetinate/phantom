@@ -39,7 +39,6 @@ final class SidebarTabManager: ObservableObject {
     private var centerCancellables: Set<AnyCancellable> = []
     private var attentionWindows: Set<ObjectIdentifier> = []
     private var pendingRefresh = false
-    private var didInitialPopulation = false
 
     /// Becomes true the first time a refresh sees the whole tab group at
     /// once, which is the moment a fresh or restored sidebar's list
@@ -64,7 +63,6 @@ final class SidebarTabManager: ObservableObject {
         setupObservers()
         subscribeCenters()
         refresh()
-        didInitialPopulation = true
 
         metadataRefreshTimer = Timer.scheduledTimer(
             withTimeInterval: 5,
@@ -108,19 +106,70 @@ final class SidebarTabManager: ObservableObject {
 
     /// All windows participating in this sidebar: our tab group once
     /// joined, else the seed (parent) group plus ourselves, else just us.
+    ///
+    /// Every answer is filtered to windows that are still open. AppKit keeps
+    /// a closed window alive for as long as something holds its controller —
+    /// which, with an agent running in it, is exactly what happens — and both
+    /// sources here will go on handing those windows back: a closed window
+    /// can still be listed by the tab group it belonged to, and `seedTabGroup`
+    /// holds another window's group outright. A row built from one of those is
+    /// a tab that no longer exists, drawn in a window that never owned it, and
+    /// acting on it re-shows the corpse. See `select`, and
+    /// `PhantomSessionStore.isOpen` for the predicate and what it had to learn.
     private var groupWindows: [NSWindow] {
         guard let window else { return [] }
 
         if let own = window.tabGroup?.windows, own.count > 1 {
             seedTabGroup = nil
-            return own
+            return Self.rowWindows(in: own, own: window)
         }
 
         if let seeded = seedTabGroup?.windows, !seeded.isEmpty {
-            return seeded.contains(window) ? seeded : seeded + [window]
+            let live = Self.rowWindows(in: seeded, own: window)
+            return live.contains(window) ? live : live + [window]
         }
 
-        return window.tabGroup?.windows ?? [window]
+        return Self.rowWindows(in: window.tabGroup?.windows ?? [window], own: window)
+    }
+
+    /// Whether the WindowServer actually has this window on screen.
+    ///
+    /// The one answer in this family that cannot be half-committed: AppKit's
+    /// `isVisible` and `occlusionState` both told different lies at
+    /// different moments, while `kCGWindowIsOnscreen` matched the pixels
+    /// every time it was measured.
+    static func windowServerShowsOnScreen(_ window: NSWindow) -> Bool {
+        guard window.windowNumber > 0 else { return false }
+        let list = CGWindowListCopyWindowInfo(
+            [.optionIncludingWindow], CGWindowID(window.windowNumber)) as? [[String: Any]]
+        guard let info = list?.first else { return false }
+        return info[kCGWindowIsOnscreen as String] as? Bool ?? false
+    }
+
+    /// The windows in a group this sidebar may draw a row for.
+    ///
+    /// The sidebar's own window is always one of them, whatever the predicate
+    /// says: it is the window the list is drawn in, and during initialization
+    /// it is not on screen yet, so asking whether it is open answers no about
+    /// a window that plainly exists — and the sidebar would populate empty.
+    ///
+    /// Every other window has to still be open. See `groupWindows` for why
+    /// closed ones keep turning up here, and `select` for what a row built
+    /// from one of them does when it is clicked.
+    static func rowWindows(in group: [NSWindow], own: NSWindow) -> [NSWindow] {
+        group.filter { $0 === own || isLiveTab($0) }
+    }
+
+    /// Whether a window is a tab a row may stand for and act on.
+    ///
+    /// Two terms, and the second is the one the window cannot answer: a husk
+    /// that has been shown again reports `isVisible` like anything else, so
+    /// only its controller knows it was closed. See
+    /// `BaseTerminalController.hasClosed`.
+    static func isLiveTab(_ window: NSWindow) -> Bool {
+        guard (window.windowController as? BaseTerminalController)?.hasClosed != true
+        else { return false }
+        return PhantomSessionStore.isOpen(window)
     }
 
     private func setupObservers() {
@@ -274,12 +323,18 @@ final class SidebarTabManager: ObservableObject {
             seen.insert(identifier)
 
             let model: SidebarTabModel
-            if let existing = modelsById[identifier] {
+            /// Keyed by `ObjectIdentifier`, which is the window's address, so
+            /// a window freed and a new one allocated in its place answer to
+            /// the same key. The stored model would then be reused for a
+            /// different window while still pointing at the old one, and every
+            /// row action would land on whatever that address is now. Cheap to
+            /// rule out, and impossible to debug once it happens.
+            if let existing = modelsById[identifier], existing.window === tabWindow {
                 model = existing
             } else {
                 model = SidebarTabModel(window: tabWindow)
                 modelsById[identifier] = model
-                if didInitialPopulation {
+                if !PhantomSessionStore.shared.isRestoring {
                     registerNewTab(model, controller: controller)
                 }
             }
@@ -410,8 +465,8 @@ final class SidebarTabManager: ObservableObject {
         surface.$title
             .removeDuplicates()
             .sink { [weak model] _ in
-                guard let model else { return }
-                model.setTitle(model.window.title)
+                guard let model, let window = model.window else { return }
+                model.setTitle(window.title)
             }
             .store(in: &model.surfaceCancellables)
 
@@ -428,8 +483,26 @@ final class SidebarTabManager: ObservableObject {
         groupingVersion &+= 1
     }
 
-    /// New tabs are placed at the top or bottom of the sidebar order,
-    /// per the user's setting.
+    /// Puts a tab this sidebar has just met into the persisted display
+    /// order, at the top or bottom per the user's setting.
+    ///
+    /// Every newly seen tab is registered, including the window's own tab
+    /// during `init`. The `init` pass used to be skipped, and that skip was
+    /// a bug with a delayed fuse: a window's first tab stayed out of
+    /// `SidebarGroupStore.tabOrder`, `sorted` places unordered tabs after
+    /// ordered ones, so that first tab sat pinned to the bottom of the list
+    /// and every tab created afterwards sorted in *front* of it — the "new
+    /// terminal lands second-to-last" report, frozen into the on-disk
+    /// `tabOrder` the day this was diagnosed. The first quit-and-restore
+    /// registered everything and hid the bug, which is why it only ever
+    /// showed on a fresh install.
+    ///
+    /// The one moment a newly seen tab must not be registered is while
+    /// `PhantomSessionStore` is restoring: restored tabs are already in the
+    /// persisted order (registering is a no-op), and tabs from a file that
+    /// predates the order must keep their native relative order, which the
+    /// post-restore refresh preserves by appending them as it walks the
+    /// group. The caller holds that guard.
     private func registerNewTab(
         _ model: SidebarTabModel,
         controller: BaseTerminalController
@@ -472,8 +545,62 @@ final class SidebarTabManager: ObservableObject {
     }
 
     /// Activates the given tab (window) within the group.
+    ///
+    /// Only if that window is still open. `makeKeyAndOrderFront` does not
+    /// refuse a closed window — it *re-shows* it, and what comes back is a
+    /// husk: `windowWillClose` has already cleared the content view and
+    /// dropped the sidebar chrome, so the reader clicking a tab gets a bare
+    /// window arriving from nowhere instead of the tab they asked for. A row
+    /// that has outlived its window is stale rather than actionable, so the
+    /// list is re-formed instead and the row goes away.
     func select(_ model: SidebarTabModel) {
-        model.window.makeKeyAndOrderFront(nil)
+        guard let w = model.window, Self.isLiveTab(w) else {
+            WindowBreadcrumbs.note(
+                "sidebar select: window=\(model.window?.windowNumber ?? -1) not live -> refresh")
+            refresh()
+            return
+        }
+        WindowBreadcrumbs.note(
+            "sidebar select: window=\(w.windowNumber) group=\(w.tabGroup?.windows.count ?? 0) "
+            + "visible=\(w.isVisible) occl=\(w.occlusionState.rawValue)")
+        w.makeKeyAndOrderFront(nil)
+
+        /// Verified rather than trusted, a turn later. This family of bugs
+        /// keeps producing windows that answer every AppKit question
+        /// correctly and still put no pixel on screen — `isVisible` true
+        /// with the WindowServer reporting offscreen, then the inverse, a
+        /// window `isVisible` false whose occlusion claims visibility. Each
+        /// spelling was one launch-ordering race away from the last. The
+        /// select is the one gesture whose outcome the reader is looking
+        /// straight at, so it checks its own work: if the window it just
+        /// ordered front is not actually the visible front a turn later, it
+        /// is ordered out and front again — a fresh WindowServer commit from
+        /// a clean dispatch — and the breadcrumb says so, so the next
+        /// variant of this arrives already witnessed.
+        /// Verified against the WindowServer, not against AppKit. This
+        /// family produced both polarities of the same lie — `isVisible`
+        /// true with the WindowServer reporting offscreen, and the inverse —
+        /// so any check written over NSWindow state alone either misses one
+        /// variant or fires on healthy clicks. `CGWindowListCopyWindowInfo`
+        /// is the ground truth both were measured with, it answers for one
+        /// window cheaply, and it is synchronous. The delay gives a healthy
+        /// commit time to land; occlusion is never consulted (it updates
+        /// asynchronously and rescued every ordinary click), and the re-show
+        /// never orders out (ordering a tabbed window out detaches it from
+        /// its group — the first spelling of this rescue manufactured loose
+        /// windows one click at a time).
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak w] in
+            /// Still the reader's latest choice — another click since moves
+            /// key elsewhere, and rescuing the previous window would steal
+            /// the focus right back.
+            guard let w, w.isKeyWindow else { return }
+            guard !Self.windowServerShowsOnScreen(w) else { return }
+            WindowBreadcrumbs.note(
+                "select rescue: window=\(w.windowNumber) key but offscreen "
+                + "per WindowServer (visible=\(w.isVisible)) — re-showing")
+            w.orderFrontRegardless()
+            w.makeKey()
+        }
     }
 
     /// Resolves the repository root and current branch for a working

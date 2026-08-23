@@ -17,7 +17,7 @@ enum PrettierFailure: Error, Equatable, Sendable {
     case failed(status: Int32, message: String)
 }
 
-extension PrettierFailure {
+extension PrettierFailure: LocalizedError {
     /// A sentence for a banner, not a value anything parses back apart.
     var reason: String {
         switch self {
@@ -28,8 +28,79 @@ extension PrettierFailure {
         case .timedOut(let seconds):
             return "prettier didn't answer within \(Int(seconds))s"
         case .failed(_, let message):
-            return message
+            return Self.banner(from: message)
         }
+    }
+
+    /// The conformance exists for one reason: `localizedDescription`.
+    ///
+    /// A Swift enum that is only an `Error` bridges to an `NSError` whose
+    /// description is *"The operation couldn't be completed.
+    /// (Ghostty.PrettierFailure error 3.)"* — and 3 is not even the third
+    /// case, it is the runtime's tag, which puts the payload cases first.
+    /// Any presenter reaching for `localizedDescription`, which is the
+    /// obvious thing to reach for, therefore replaces Prettier's diagnosis
+    /// with a number that decodes to nothing. Answering it here means no
+    /// call site has to know that, rather than each one remembering to ask
+    /// for `reason` instead.
+    var errorDescription: String? { reason }
+}
+
+private extension PrettierFailure {
+    /// An alert can hold a diagnosis. It cannot hold a terminal.
+    ///
+    /// Measured against Prettier 3.9.6 rather than assumed. Every line it
+    /// writes to stderr carries an `[error] ` marker, and around the sentence
+    /// that says what is actually wrong it prints two kinds of padding: the
+    /// code frame under a parse error, and — when a config asks for a plugin
+    /// that will not load — a Node stack trace, twenty frames of Prettier's
+    /// own bundle. Both are shaped by a monospaced column that an alert does
+    /// not have, and the trace is long enough to push the sentence out of
+    /// sight entirely.
+    ///
+    /// What survives is kept whole rather than cut to the first line, because
+    /// a bad config announces itself across three: `Invalid configuration for
+    /// file "…":` on its own names no fault. The cap is there for the case
+    /// nobody has measured yet — a plugin free to print an essay — and it is
+    /// deliberately loose enough never to reach the four cases above.
+    static var maximumBannerLines: Int { 4 }
+
+    static func banner(from message: String) -> String {
+        let kept = message
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(Self.withoutErrorMarker)
+            .filter { !$0.allSatisfy(\.isWhitespace) && !Self.isFrame($0) }
+            .prefix(maximumBannerLines)
+
+        /// Nothing left means the shape was one this has never seen, and a
+        /// wall of text beats an empty banner.
+        return kept.isEmpty
+            ? message.trimmingCharacters(in: .whitespacesAndNewlines)
+            : kept.joined(separator: "\n")
+    }
+
+    /// Prettier's own `[error] ` prefix, which it puts on continuation and
+    /// blank lines too.
+    static func withoutErrorMarker(_ line: Substring) -> Substring {
+        guard line.hasPrefix("[error]") else { return line }
+        let rest = line.dropFirst("[error]".count)
+        return rest.hasPrefix(" ") ? rest.dropFirst() : rest
+    }
+
+    /// A line that is scaffolding rather than sentence: a code frame's
+    /// gutter (`  1 | const a = 1`, `> 3 | }`, `    | ^`) or a JavaScript
+    /// stack frame.
+    static func isFrame(_ line: Substring) -> Bool {
+        let indented = line.first == " " || line.first == "\t"
+        var rest = line.drop { $0 == " " || $0 == "\t" }
+        if indented, rest.hasPrefix("at ") { return true }
+
+        if rest.hasPrefix(">") { rest = rest.dropFirst().drop { $0 == " " } }
+        if rest.hasPrefix("|") { return true }
+
+        let gutter = rest.prefix(while: \.isNumber)
+        guard !gutter.isEmpty else { return false }
+        return rest.dropFirst(gutter.count).drop { $0 == " " }.hasPrefix("|")
     }
 }
 

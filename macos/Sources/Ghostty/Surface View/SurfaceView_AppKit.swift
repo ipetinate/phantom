@@ -1875,6 +1875,17 @@ extension Ghostty {
 
             self.init(app, baseConfig: config, uuid: uuid)
 
+            /// The saved pwd is the truth about where this shell just
+            /// spawned, so the property starts from it instead of waiting
+            /// for shell integration to say the same thing. The gap is what
+            /// mattered: `encode` writes the *live* property, which is nil
+            /// until the first OSC report arrives — so a session saved in
+            /// the first breath after a restore recorded nil for every
+            /// surface, and the restore after that one spawned every shell
+            /// in the home directory. Each fast close/restore cycle walked
+            /// more of the session home.
+            self.pwd = Self.seededPwd(live: self.pwd, saved: workingDirectory)
+
             // Restore the saved title after initialization
             if let title = savedTitle {
                 self.title = title
@@ -1899,6 +1910,20 @@ extension Ghostty {
                     in: self
                 )
             }
+        }
+
+        /// What a restored surface's `pwd` starts as: the shell's own report
+        /// when one has arrived, else the directory the state says it
+        /// spawned in.
+        ///
+        /// The saved value must win over nothing, because `encode` writes
+        /// the live property — which is nil until the first OSC report,
+        /// roughly a second after spawn. A session saved inside that gap
+        /// recorded nil for every surface, the restore after it spawned
+        /// every shell in the home directory, and each fast close/restore
+        /// cycle walked more of the session home.
+        static func seededPwd(live: String?, saved: String?) -> String? {
+            live ?? saved
         }
 
         func encode(to encoder: Encoder) throws {

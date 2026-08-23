@@ -36,6 +36,13 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
 
     /// Reads a combination out of a key-down event. Returns nil when the
     /// event is a modifier by itself, which is not a shortcut.
+    ///
+    /// And nil for a bare letter. The recorder accepted one, and on the
+    /// explorer's path — which dispatches on unmodified keys — a command
+    /// bound to `f` fired every time somebody typed an `f` into the rename
+    /// field's neighbourhood. A shortcut needs a modifier to be a shortcut;
+    /// the exception is a key that is not a character at all, which cannot
+    /// be typed by accident.
     init?(event: NSEvent) {
         guard let characters = event.charactersIgnoringModifiers?.lowercased(),
               characters.count == 1
@@ -48,7 +55,19 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
         if flags.contains(.option) { modifiers.insert(.option) }
         if flags.contains(.control) { modifiers.insert(.control) }
 
+        /// Shift alone does not count: ⇧F is the letter F.
+        let carriesModifier = !modifiers.isEmpty && modifiers != [.shift]
+        guard carriesModifier || Self.isNonCharacter(characters) else { return nil }
+
         self.init(key: characters, modifiers: modifiers)
+    }
+
+    /// Function keys and the arrows — pressable on their own without being
+    /// mistaken for typing.
+    private static func isNonCharacter(_ key: String) -> Bool {
+        guard let scalar = key.unicodeScalars.first, key.unicodeScalars.count == 1
+        else { return false }
+        return (0xF700...0xF8FF).contains(Int(scalar.value))
     }
 
     /// Modifier glyphs in the order macOS spells a shortcut — control,
@@ -65,9 +84,13 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
     ///
     /// An arrow key reports a character in the private use area, which is a
     /// perfectly good key to store and to match on but draws as a missing
-    /// glyph — an empty box where ↑ belongs. Only the four arrows are named
-    /// because they are the only function keys anything here binds; the rest
-    /// would be guesses.
+    /// glyph — an empty box where ↑ belongs. Return, Delete and Space are
+    /// worse than a box: they report characters that draw as *nothing*, so
+    /// the file explorer's own keys appeared in Settings and in the
+    /// collision warning as a blank where a shortcut belongs.
+    ///
+    /// Named one by one rather than derived, and only the keys something in
+    /// this app actually binds — the rest would be guesses.
     private var keyLabel: String {
         Self.functionKeyNames[key] ?? key.uppercased()
     }
@@ -84,6 +107,9 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
         downArrow: "↓",
         leftArrow: "←",
         rightArrow: "→",
+        "\r": "⏎",
+        "\u{7f}": "⌫",
+        " ": "␣",
     ]
 
     /// The stable form persisted and read back: "shift+command+n".

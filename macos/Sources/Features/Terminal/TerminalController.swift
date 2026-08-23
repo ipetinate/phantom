@@ -360,6 +360,22 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     // by something like an App Intent) then we prefer the most previous main.
     static private(set) weak var lastMain: TerminalController?
 
+    /// The window a new tab should attach to when the caller has none — the
+    /// main terminal window if it is still open, else any open one.
+    ///
+    /// This is `preferredParent` with the one filter that one lacks:
+    /// liveness. `all.last` can be a husk — a closed window whose controller
+    /// an agent session still holds — and a husk answers the type check, so
+    /// attaching to it "succeeds" into a window the reader cannot see. Every
+    /// bug in the ghost-window family started with exactly that kind of
+    /// window being treated as real.
+    static func liveTabParent() -> NSWindow? {
+        let candidates = [preferredParent].compactMap { $0 } + all
+        return candidates.first {
+            !$0.hasClosed && PhantomSessionStore.isOpen($0.window)
+        }?.window
+    }
+
     /// The "new window" action.
     static func newWindow(
         _ ghostty: Ghostty.App,
@@ -525,10 +541,28 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         from parent: NSWindow? = nil,
         withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil
     ) -> TerminalController? {
-        // Making sure that we're dealing with a TerminalController. If not,
-        // then we just create a new window.
-        guard let parent,
+        /// A caller with no usable parent used to fall through to a plain
+        /// new window — silently. That window was born outside the tab
+        /// group, and everything the sidebar believes broke around it: its
+        /// row selected in parallel with the group's, the session store
+        /// recording it as a second group, and every restore rebuilding the
+        /// split forever after. A tab was asked for, so a tab is what gets
+        /// made: when the given parent is missing or is not a terminal, the
+        /// group is reached through any open terminal window instead, and
+        /// only an app with no open terminal at all opens a window.
+        let usableParent: NSWindow?
+        if let parent, parent.windowController is TerminalController {
+            usableParent = parent
+        } else {
+            usableParent = liveTabParent()
+            WindowBreadcrumbs.note(
+                "newTab: parent unusable (window=\(parent?.windowNumber ?? -1), "
+                + "controller=\(String(describing: type(of: parent?.windowController)))) "
+                + "-> resolved \(usableParent?.windowNumber ?? -1)")
+        }
+        guard let parent = usableParent,
               let parentController = parent.windowController as? TerminalController else {
+            WindowBreadcrumbs.note("newTab: no open terminal anywhere -> newWindow")
             return newWindow(ghostty, withBaseConfig: baseConfig, withParent: parent)
         }
 
@@ -567,6 +601,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         // If we don't allow tabs then we create a new window instead.
+        WindowBreadcrumbs.note(
+            "newTab join: window=\(window.windowNumber) tabbingMode=\(window.tabbingMode.rawValue)")
         if window.tabbingMode != .disallowed {
             // Add the window to the tab group and show it.
             switch ghostty.config.windowNewTabPosition {
@@ -1006,6 +1042,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// confirmation. This will setup proper undo state so the action can be undone.
     func closeWindowImmediately() {
         guard let window = window else { return }
+        WindowBreadcrumbs.note(
+            "closeWindowImmediately: window=\(window.windowNumber) group=\(window.tabGroup?.windows.count ?? 0)")
 
         cancelPendingInitialPresentation()
 
@@ -1253,6 +1291,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     override func windowDidLoad() {
         super.windowDidLoad()
+
+        if let window {
+            WindowBreadcrumbs.note(
+                "born: window=\(window.windowNumber) group=\(window.tabGroup?.windows.count ?? 0)")
+        }
         guard let window else { return }
 
         // I copy this because we may change the source in the future but also because
@@ -1261,9 +1304,20 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // use whatever the latest app-level config is.
         let config = ghostty.config
 
+        /// Registering a terminal window here is what makes a second restore
+        /// possible at all — AppKit rebuilding the session on top of the one
+        /// `PhantomSessionStore` has — so the window is never offered to it.
+        /// Read from the store
+        /// rather than written as `false` because that is where the choice of
+        /// owner is made and argued — see
+        /// `PhantomSessionStore.ownsTerminalRestoration`. Upstream's rule
+        /// about windows running a command survives in the second term, for
+        /// whenever the first one stops being true.
+        let macOSMayRestore = !PhantomSessionStore.ownsTerminalRestoration && restorable
+
         // Setting all three of these is required for restoration to work.
-        window.isRestorable = restorable
-        if restorable {
+        window.isRestorable = macOSMayRestore
+        if macOSMayRestore {
             window.restorationClass = TerminalWindowRestoration.self
             window.identifier = .init(String(describing: TerminalWindowRestoration.self))
         }
@@ -2003,10 +2057,28 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     @objc private func sidebarTintDidChangeNotification(_ notification: Notification) {
         syncSidebarBackground()
-        // An immediate, synchronous redraw — not just a dirty flag for
-        // the next display cycle — so divider style/color changes in
-        // Settings reflect right away instead of needing a reopen.
-        sidebarSplitView?.display()
+
+        /// The divider's thickness changes when the mode crosses hidden
+        /// (1pt ↔ 0), and an autolayout `NSSplitView` bakes the thickness
+        /// into internal constraints it never rebuilds on its own — so a
+        /// mode change in Settings left the panes at their old frames with
+        /// a one-point hole where the divider had been, showing the window
+        /// through it as a see-through strip until the window was
+        /// recreated. Measured on the pane frames: `display()` alone,
+        /// `adjustSubviews()`, `needsLayout` + `layoutSubtreeIfNeeded()`,
+        /// and a live window resize all left the second pane at
+        /// `401..1280` behind a zero-width splitter. Re-assigning
+        /// `dividerStyle` is what makes the split view rebuild those
+        /// constraints — same style back, but the setter does the work —
+        /// after which the panes land at `400..1280` and the strip is gone.
+        if let splitView = sidebarSplitView {
+            let style = splitView.dividerStyle
+            splitView.dividerStyle = style == .thin ? .paneSplitter : .thin
+            splitView.dividerStyle = style
+            splitView.setPosition(sharedSidebarWidth, ofDividerAt: 0)
+            splitView.layoutSubtreeIfNeeded()
+            splitView.display()
+        }
     }
 
     /// Settings applies hot-reload the config; the surface state that
@@ -2268,11 +2340,26 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     lazy private(set) var tabGroupCloseCoordinator = TabGroupCloseCoordinator()
 
     override func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if let event = NSApp.currentEvent {
+            WindowBreadcrumbs.note(
+                "shouldClose asked: window=\(sender.windowNumber) event=\(event.type.rawValue) "
+                + "eventWindow=\(event.window?.windowNumber ?? -1) "
+                + "location=\(Int(event.locationInWindow.x)),\(Int(event.locationInWindow.y)) "
+                + "key=\(event.type == .keyDown ? event.charactersIgnoringModifiers ?? "" : "")")
+        } else {
+            WindowBreadcrumbs.note(
+                "shouldClose asked: window=\(sender.windowNumber) no current event (programmatic)")
+        }
         tabGroupCloseCoordinator.windowShouldClose(sender) { [weak self] scope in
             guard let self else { return }
             switch scope {
-            case .tab: closeTab(nil)
+            case .tab:
+                WindowBreadcrumbs.note(
+                    "shouldClose: window=\(sender.windowNumber) scope=tab")
+                closeTab(nil)
             case .window:
+                WindowBreadcrumbs.note(
+                    "shouldClose: window=\(sender.windowNumber) scope=window first=\(self.window?.isFirstWindowInTabGroup ?? false)")
                 guard self.window?.isFirstWindowInTabGroup ?? false else { return }
                 closeWindow(nil)
             }
@@ -2284,6 +2371,16 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     override func windowWillClose(_ notification: Notification) {
         super.windowWillClose(notification)
+
+        /// A window the reader has closed must stop being offered back to
+        /// them. The Dock's tile menu and the Window menu list the app's
+        /// windows, and a closed one that is still retained stays on both —
+        /// so the reader picks a tab they remember, AppKit orders that window
+        /// front, and what arrives is the husk described on
+        /// `BaseTerminalController.hasClosed`: no content view, no sidebar, a
+        /// bare frame standing next to their real windows. Excluding it is the
+        /// only say we have over those two menus, which AppKit builds itself.
+        notification.object.flatMap { $0 as? NSWindow }?.isExcludedFromWindowsMenu = true
 
         // A closed window leaves the session store too.
         PhantomSessionStore.shared.scheduleSave()
@@ -2442,6 +2539,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     @IBAction func closeTab(_ sender: Any?) {
         guard let window = window else { return }
         guard window.tabGroup?.windows.count ?? 0 > 1 else {
+            WindowBreadcrumbs.note(
+                "closeTab: window=\(window.windowNumber) group=\(window.tabGroup?.windows.count ?? 0) -> escalating to closeWindow")
             closeWindow(sender)
             return
         }
@@ -2527,6 +2626,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     @IBAction override func closeWindow(_ sender: Any?) {
         guard let window = window else { return }
+        WindowBreadcrumbs.note(
+            "closeWindow: window=\(window.windowNumber) group=\(window.tabGroup?.windows.count ?? 0)")
 
         // We need to check all the windows in our tab group for confirmation
         // if we're closing the window. If we don't have a tabgroup for any

@@ -148,8 +148,6 @@ struct SidebarView: View {
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
     @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
-    @AppStorage("SidebarShowClaude") private var showClaude = true
-    @AppStorage("SidebarShowCodex") private var showCodex = true
 
     private var enabledPanes: [SidebarPane] {
         SidebarPane.allCases.filter { pane in
@@ -816,8 +814,8 @@ private struct SidebarGroupSection: View {
             WorktreeEntryButton(
                 entry: .groupHeader,
                 isEnabled: showWorktree,
-                repoRoot: representativeTab?.repoRoot,
-                currentPath: representativeTab?.pwd,
+                repoRoot: representativeTab?.repoRoot ?? group.projectRoot,
+                currentPath: representativeTab?.pwd ?? group.projectRoot,
                 isIdle: true,
                 hasLiveAgent: false,
                 editorCenter: editorCenter,
@@ -1324,7 +1322,7 @@ private struct SidebarTabRow: View {
     /// without a word. Which is the exact promise this whole flow makes and
     /// the exact way to break it.
     private var tabEditorCenter: EditorCenter {
-        (tab.window.windowController as? TerminalController)?.editorCenter ?? editorCenter
+        (tab.window?.windowController as? TerminalController)?.editorCenter ?? editorCenter
     }
 
     private var insertAfter: Bool? {
@@ -1494,7 +1492,9 @@ private struct SidebarTabRow: View {
                     .opacity(isHovered ? 0 : 1)
 
                 SidebarIconButton(help: "Close Terminal") {
-                    tab.window.performClose(nil)
+                    WindowBreadcrumbs.note(
+                        "sidebar close button: window=\(tab.window?.windowNumber ?? -1)")
+                    tab.window?.performClose(nil)
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .semibold))
@@ -1664,7 +1664,7 @@ private struct SidebarTabRow: View {
     /// Opens a plan through the same opener a file in the panels uses, so the
     /// Settings choice means the same thing everywhere.
     private func openPlan(_ plan: ClaudePlanIndex.Plan) {
-        guard let controller = tab.window.windowController as? TerminalController else { return }
+        guard let controller = tab.window?.windowController as? TerminalController else { return }
         controller.openClickedPath(URL(fileURLWithPath: plan.path), line: nil as Int?, column: nil)
     }
 
@@ -1833,7 +1833,9 @@ private struct SidebarTabRow: View {
         }
 
         Button("Close Tab", role: .destructive) {
-            tab.window.performClose(nil)
+            WindowBreadcrumbs.note(
+                "sidebar context menu close: window=\(tab.window?.windowNumber ?? -1)")
+            tab.window?.performClose(nil)
         }
     }
 }

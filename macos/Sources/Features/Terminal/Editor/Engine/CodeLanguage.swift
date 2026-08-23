@@ -65,6 +65,14 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
     ]
 
     /// Files whose name carries the language, with no extension to read.
+    ///
+    /// This table and `LSPServerRegistry.languageIDByFileName` have to
+    /// agree, and a test says so: a file painted as JSON while its server
+    /// is told it is something else — or told nothing — is worse than
+    /// either answer alone, because the two halves of the editor then
+    /// disagree in front of the reader. The `rc` files below, and why they
+    /// are JSON when several of them are allowed to be YAML, are argued
+    /// where the server side of the pair is declared.
     private static let byName: [String: CodeLanguage] = [
         "Makefile": .shell,
         "Dockerfile": .shell,
@@ -79,6 +87,12 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
         "go.mod": .go,
         "go.sum": .go,
         "go.work": .go,
+        ".prettierrc": .json,
+        ".babelrc": .json,
+        ".eslintrc": .json,
+        ".jscsrc": .json,
+        ".jshintrc": .json,
+        ".swcrc": .json,
     ]
 
     /// The names in the table above, folded to lower case.

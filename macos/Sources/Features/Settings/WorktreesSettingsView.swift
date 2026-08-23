@@ -83,6 +83,7 @@ struct WorktreesSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .navigationTitle("Worktrees")
         .id(defaultsRevision)
         .onAppear { rootDraft = managedRootRaw }
         .alert(item: $migration) { migration in

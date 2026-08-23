@@ -18,30 +18,28 @@ import SwiftUI
 /// string into `$SHELL -lic` and must never be reachable from a file
 /// somebody dropped in a directory.
 ///
-/// The editor's own completion preferences hang off the same screen rather
-/// than a pane of their own, since "what completes, and when" is the same
-/// question as "what server is running" seen from the other end.
-///
 /// Live per-file server status already lives in the editor's own banner,
 /// scoped to the workspace that's actually open — a language can be
 /// running in one window's root and crashed in another's, so a global
 /// status row here would just be misleading. This view is only the
 /// configuration half.
 struct LanguageServersSettingsView: View {
-    @State private var selection: LanguageServersSelection?
+    /// The selected row, held **by id and not by value**, so that a
+    /// catalog reload — an extension edited while this screen is open —
+    /// leaves the selection pointing at the new value rather than at a
+    /// stale copy of the old one.
+    @State private var selection: String?
     @State private var searchText = ""
     @ObservedObject private var lsp = LSPCenter.shared
     @ObservedObject private var languages = LanguageResolver.shared
 
     /// Bumped whenever the detail pane writes something the sidebar shows.
     ///
-    /// Two stores behind this screen write to `UserDefaults` and publish
-    /// nothing: `LanguageTrustStore`, correctly, since a security record has
-    /// no business driving a view's lifecycle, and the per-language
-    /// completion table, because `@AppStorage` has no dictionary. So the
-    /// detail pane tells the parent and both halves re-read. Without it the
-    /// sidebar keeps saying "Refused", or "2 languages off", until the
-    /// window is reopened — which is the same class of bug as a setting read
+    /// `LanguageTrustStore` writes to `UserDefaults` and publishes nothing,
+    /// correctly — a security record has no business driving a view's
+    /// lifecycle. So the detail pane tells the parent and both halves
+    /// re-read. Without it the sidebar keeps saying "Refused" until the
+    /// window is reopened, which is the same class of bug as a setting read
     /// once when a view was built.
     @State private var defaultsRevision = 0
 
@@ -56,14 +54,6 @@ struct LanguageServersSettingsView: View {
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        if showsEditorSection {
-                            Section {
-                                completionRow
-                            } header: {
-                                sectionHeader(title: "Editor", systemImage: "text.cursor", count: 1)
-                            }
-                        }
-
                         ForEach(sections) { section in
                             Section {
                                 ForEach(section.rows) { row in
@@ -78,7 +68,7 @@ struct LanguageServersSettingsView: View {
                             }
                         }
 
-                        if sections.isEmpty, !showsEditorSection {
+                        if sections.isEmpty {
                             /// `verbatim` because the query is whatever the
                             /// reader typed, and the interpolating
                             /// initializer would run it through
@@ -99,32 +89,19 @@ struct LanguageServersSettingsView: View {
             Divider()
 
             Group {
-                switch selection {
-                case .completion:
-                    CompletionSettingsForm(
-                        languages: languages.catalog,
-                        onChange: { defaultsRevision += 1 }
-                    )
-
-                case .row(let id):
-                    if let row = allRows.first(where: { $0.id == id }) {
-                        detail(for: row)
-                            .id(id)
-                    } else {
-                        /// The catalog reloaded and took the selected row with
-                        /// it — an extension removed from the directory while
-                        /// this screen was open.
-                        placeholder
-                    }
-
-                case nil:
+                if let selection, let row = allRows.first(where: { $0.id == selection }) {
+                    detail(for: row)
+                        .id(selection)
+                } else {
+                    /// Nothing picked yet — or the catalog reloaded and took
+                    /// the selected row with it, an extension removed from the
+                    /// directory while this screen was open.
                     placeholder
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .navigationTitle("Language Servers")
-        .frame(minWidth: 720, minHeight: 420)
+        .navigationTitle("Languages")
         // Opening this screen is the moment the answer matters, and it is
         // also the moment after which the user most often installs something
         // in the terminal next to it.
@@ -179,73 +156,40 @@ struct LanguageServersSettingsView: View {
         return allRows.filter { $0.haystack.lowercased().contains(needle) }
     }
 
-    /// The rows, grouped by category, with sections in the category's
-    /// declared order and empty sections dropped.
+    /// The rows, grouped by category, both levels sorted by name and empty
+    /// sections dropped.
+    ///
+    /// Alphabetical rather than curated, because the list is long enough to
+    /// scroll and any other order is one only its author knows. The two
+    /// TypeScript servers landing apart — one near the top, one seven rows
+    /// below it — is what a declared order produces once a table outgrows
+    /// the reasoning that arranged it.
+    ///
+    /// `localizedStandardCompare` rather than `<`: it folds case and reads
+    /// digits as numbers, so "TypeScript 7 (Go)" sorts next to
+    /// "TypeScript (npm)" instead of by the ASCII value of a bracket.
     private var sections: [LanguageServerSection] {
         var byCategory: [LSPServerCategory: [LanguageRow]] = [:]
         for row in filteredRows {
             byCategory[row.category, default: []].append(row)
         }
-        return LSPServerCategory.allCases.compactMap { category in
-            guard let rows = byCategory[category], !rows.isEmpty else { return nil }
-            return LanguageServerSection(category: category, rows: rows)
-        }
-    }
-
-    /// The Editor section survives a search only when the search is about
-    /// it. It is one row and it is pinned to the top, so leaving it there
-    /// under every query would make it read as a result for all of them.
-    private var showsEditorSection: Bool {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return true }
-        return "completion editor suggestions autocomplete".contains(query)
-    }
-
-    private var completionRow: some View {
-        Button {
-            selection = .completion
-        } label: {
-            HStack(alignment: .center, spacing: 8) {
-                Image(systemName: "list.bullet.rectangle")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 18, height: 18)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Completion")
-                        .lineLimit(1)
-                    Text(completionSummary)
-                        .font(.caption)
-                        .foregroundStyle(selection == .completion ? .white.opacity(0.8) : .secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 4)
+        return LSPServerCategory.allCases
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            .compactMap { category in
+                guard let rows = byCategory[category], !rows.isEmpty else { return nil }
+                return LanguageServerSection(
+                    category: category,
+                    rows: rows.sorted {
+                        $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+                    })
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .contentShape(Rectangle())
-            .background(selection == .completion ? Color.accentColor : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-    }
-
-    /// The subtitle under the Completion row, which has to be readable at a
-    /// glance — the count of switched-off languages matters more than which
-    /// they are, and "Off" has to be unmissable.
-    private var completionSummary: String {
-        guard CompletionSettingsStore.isEnabled else { return "Off" }
-        let disabled = CompletionSettingsStore.byLanguage.values.filter { !$0 }.count
-        guard disabled > 0 else { return "On" }
-        return disabled == 1 ? "On · 1 language off" : "On · \(disabled) languages off"
     }
 
     private func languageRow(_ row: LanguageRow) -> some View {
-        let isSelected = selection == .row(row.id)
+        let isSelected = selection == row.id
 
         return Button {
-            selection = .row(row.id)
+            selection = row.id
         } label: {
             HStack(alignment: .center, spacing: 8) {
                 LanguageIconView(name: row.languageIconName)
@@ -338,19 +282,6 @@ struct LanguageServersSettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .windowBackgroundColor))
     }
-}
-
-/// What the sidebar has selected.
-///
-/// A case per kind rather than an `LSPServerDefinition?`, because the list
-/// now holds three things that are not each other: a preferences screen, a
-/// compiled-in server, and a language some file on disk contributed. The
-/// contributed one is held **by id and not by value** so that a catalog
-/// reload — an extension edited while this screen is open — leaves the
-/// selection pointing at the new value rather than at a stale copy.
-enum LanguageServersSelection: Hashable {
-    case completion
-    case row(String)
 }
 
 /// One selectable language, from either table.

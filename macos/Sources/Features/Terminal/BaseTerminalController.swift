@@ -1294,8 +1294,33 @@ class BaseTerminalController: NSWindowController,
         return false
     }
 
+    /// Whether this controller's window has been closed.
+    ///
+    /// A closed window does not necessarily go away: AppKit releases it only
+    /// when the last reference does, and with an agent running in a tab
+    /// something holds the controller for a good while longer. What is left is
+    /// a husk — `windowWillClose` has already taken its content view, and
+    /// `TerminalController` its sidebar chrome — that still answers `isVisible`
+    /// the moment anything orders it front, and so still passes for a live
+    /// terminal to every predicate written over `NSWindow` alone.
+    ///
+    /// Nothing about the window says this, which is why the controller has to.
+    private(set) var hasClosed = false
+
     func windowWillClose(_ notification: Notification) {
         guard let window else { return }
+
+        hasClosed = true
+
+        if let event = NSApp.currentEvent {
+            WindowBreadcrumbs.note(
+                "willClose cause: window=\(window.windowNumber) event=\(event.type.rawValue) "
+                + "eventWindow=\(event.window?.windowNumber ?? -1) "
+                + "key=\(event.type == .keyDown ? event.charactersIgnoringModifiers ?? "" : "")")
+        } else {
+            WindowBreadcrumbs.note(
+                "willClose cause: window=\(window.windowNumber) no current event (programmatic)")
+        }
 
         // Emit a final bell-state transition so any observers can clear state
         // without separately tracking NSWindow lifecycle events.

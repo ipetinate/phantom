@@ -209,6 +209,16 @@ private struct CommandPaletteQuery: View {
                     .buttonStyle(PlainButtonStyle())
                     .keyboardShortcut(.downArrow, modifiers: [])
 
+                /// ⌃P and ⌃N shadow readline's own previous- and next-line
+                /// while they exist, and that is the whole point: they are the
+                /// keys somebody who lives in a shell reaches for to move
+                /// through a list. The span is the palette's own — the only
+                /// thing that builds this view is `TerminalCommandPaletteView`
+                /// and it does so inside `if isPresented`, so the buttons are
+                /// not in the window's view tree at all until the palette is
+                /// up, and while it is up the query field holds focus and the
+                /// shell is not being typed into. Outside that span the
+                /// terminal keeps both keys untouched.
                 Button { onEvent?(.move(.up)) } label: { Color.clear }
                     .buttonStyle(PlainButtonStyle())
                     .keyboardShortcut(.init("p"), modifiers: [.control])

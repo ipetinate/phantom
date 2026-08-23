@@ -61,6 +61,36 @@ struct SidebarTabPlacementTests {
         #expect(store.resolveGroup(surfaceId: spawned, pwd: nil) == nil)
     }
 
+    /// The mechanism behind the fresh-install "new terminal lands
+    /// second-to-last" bug, pinned so the cure stays understood: a tab that
+    /// never entered `tabOrder` sorts after every ordered one, so it sits at
+    /// the bottom and each newly registered tab lands in front of it. The
+    /// cure is in `SidebarTabManager.refresh`, which registers every tab on
+    /// first sight — the window's own first tab included — so this shape can
+    /// only arise from a file that predates the order.
+    @Test func aTabLeftOutOfTheOrderSinksBelowEveryRegisteredOne() {
+        let store = makeStore()
+        let unregistered = UUID(), second = UUID(), third = UUID()
+        store.registerNewTab(surfaceId: second, atStart: false)
+        store.registerNewTab(surfaceId: third, atStart: false)
+
+        let sorted = store.sorted([unregistered, second, third], id: { $0 })
+        #expect(sorted == [second, third, unregistered])
+    }
+
+    /// The healthy order after the cure: with every tab registered on first
+    /// sight, a new tab registered at the end is the end of the list.
+    @Test func registeringEveryTabOnSightKeepsNewTabsAtTheEnd() {
+        let store = makeStore()
+        let first = UUID(), second = UUID(), third = UUID()
+        store.registerNewTab(surfaceId: first, atStart: false)
+        store.registerNewTab(surfaceId: second, atStart: false)
+        store.registerNewTab(surfaceId: third, atStart: false)
+
+        let sorted = store.sorted([third, first, second], id: { $0 })
+        #expect(sorted == [first, second, third])
+    }
+
     /// Guards the self-insert case: a spawn whose anchor resolution went
     /// wrong must not corrupt the order by trying to place a tab next to
     /// itself.
