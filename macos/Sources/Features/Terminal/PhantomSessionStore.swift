@@ -645,6 +645,14 @@ final class PhantomSessionStore {
 
     // MARK: Restoring
 
+    /// Whether a non-empty session is on disk — a peek, counted without
+    /// decoding, so the reopen handler can answer AppKit before any window
+    /// work is scheduled. See `inspect` for why counting must not decode.
+    var hasRestorableSession: Bool {
+        if case .readable(let count, _) = savedSession() { return count > 0 }
+        return false
+    }
+
     /// Whether "Restore Windows on Launch" allows a restore at all.
     ///
     /// Off means nothing comes back, from either mechanism — this store here,

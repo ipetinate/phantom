@@ -549,27 +549,47 @@ class AppDelegate: NSObject,
         guard applicationHasBecomeActive else { return true }
 
         /// No visible windows. The session, if there is one, is what the
-        /// reader is reopening the app to get back — see `newWindow`. This is
-        /// asked before the window check below because a restore is the
-        /// better answer whenever there is a session to restore.
-        if PhantomSessionStore.shared.restoreIfNeeded() { return false }
-
-        /// Nothing was restored: either there is no session, or the reader
-        /// asked for none to be kept. Open a window, unless one is already on
-        /// its way up — with `flag` false that can still happen, in the race
-        /// where a window is initializing and not yet visible when the dock
-        /// icon is clicked.
+        /// reader is reopening the app to get back — see `newWindow`.
         ///
-        /// Not `TerminalController.all.isEmpty`, which was the check here and
-        /// is never empty after the first window closes: it counts windows
-        /// AppKit has not released yet. So with `window-save-state = never`
-        /// — or on a first ever launch — clicking the dock icon did nothing
-        /// at all, and went on doing nothing. See
-        /// `PhantomSessionStore.isOpen`.
-        guard !PhantomSessionStore.hasReachableTerminalWindows else { return true }
+        /// **Everything below runs a turn later, and that is the fix, not a
+        /// nicety.** Window work performed inside this delegate call is
+        /// inside AppKit's reopen transaction, and windows built there kept
+        /// reaching the screen half-made: first the reveal alone was
+        /// deferred and the *front* window started committing — but the tab
+        /// joins still ran in here, and a reopen-restored group kept one or
+        /// two members AppKit-visible and WindowServer-offscreen. Clicking
+        /// those rows closed the visible window and showed nothing, which
+        /// read as the app dying; the same group also answered "last
+        /// window" queries in join order rather than launch order, which is
+        /// what made a new terminal land second-to-last. A launch restore
+        /// never showed any of it — launch is not inside this dispatch. So
+        /// the whole restore leaves it too, and the return value is decided
+        /// from a peek at the session file, which counts without decoding.
+        return !Self.scheduleReopenWork(for: self)
+    }
 
-        _ = TerminalController.newWindow(ghostty)
-        return false
+    /// The reopen's window work, scheduled off the reopen transaction.
+    ///
+    /// Answers whether there is work at all — the caller's return value —
+    /// from state alone: a readable non-empty session that is allowed to
+    /// restore, or no reachable terminal window (which means a blank one
+    /// must open). Split from the delegate method and static so the
+    /// decision can be pinned by tests without an application.
+    static func scheduleReopenWork(for delegate: AppDelegate) -> Bool {
+        let store = PhantomSessionStore.shared
+        let mayRestore = PhantomSessionStore.mayRestore(
+            windowSaveState: delegate.ghostty.config.windowSaveState)
+        let hasSession = mayRestore && store.hasRestorableSession
+        let needsWindow = !PhantomSessionStore.hasReachableTerminalWindows
+
+        guard hasSession || needsWindow else { return false }
+
+        DispatchQueue.main.async {
+            if store.restoreIfNeeded() { return }
+            guard !PhantomSessionStore.hasReachableTerminalWindows else { return }
+            _ = TerminalController.newWindow(delegate.ghostty)
+        }
+        return true
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {

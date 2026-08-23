@@ -134,6 +134,20 @@ final class SidebarTabManager: ObservableObject {
         return Self.rowWindows(in: window.tabGroup?.windows ?? [window], own: window)
     }
 
+    /// Whether the WindowServer actually has this window on screen.
+    ///
+    /// The one answer in this family that cannot be half-committed: AppKit's
+    /// `isVisible` and `occlusionState` both told different lies at
+    /// different moments, while `kCGWindowIsOnscreen` matched the pixels
+    /// every time it was measured.
+    static func windowServerShowsOnScreen(_ window: NSWindow) -> Bool {
+        guard window.windowNumber > 0 else { return false }
+        let list = CGWindowListCopyWindowInfo(
+            [.optionIncludingWindow], CGWindowID(window.windowNumber)) as? [[String: Any]]
+        guard let info = list?.first else { return false }
+        return info[kCGWindowIsOnscreen as String] as? Bool ?? false
+    }
+
     /// The windows in a group this sidebar may draw a row for.
     ///
     /// The sidebar's own window is always one of them, whatever the predicate
@@ -548,27 +562,27 @@ final class SidebarTabManager: ObservableObject {
         /// is ordered out and front again — a fresh WindowServer commit from
         /// a clean dispatch — and the breadcrumb says so, so the next
         /// variant of this arrives already witnessed.
-        DispatchQueue.main.async { [weak w] in
-            /// Still the reader's latest choice — a second click within the
-            /// turn moves key elsewhere, and rescuing the previous window
-            /// would steal the focus right back.
+        /// Verified against the WindowServer, not against AppKit. This
+        /// family produced both polarities of the same lie — `isVisible`
+        /// true with the WindowServer reporting offscreen, and the inverse —
+        /// so any check written over NSWindow state alone either misses one
+        /// variant or fires on healthy clicks. `CGWindowListCopyWindowInfo`
+        /// is the ground truth both were measured with, it answers for one
+        /// window cheaply, and it is synchronous. The delay gives a healthy
+        /// commit time to land; occlusion is never consulted (it updates
+        /// asynchronously and rescued every ordinary click), and the re-show
+        /// never orders out (ordering a tabbed window out detaches it from
+        /// its group — the first spelling of this rescue manufactured loose
+        /// windows one click at a time).
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak w] in
+            /// Still the reader's latest choice — another click since moves
+            /// key elsewhere, and rescuing the previous window would steal
+            /// the focus right back.
             guard let w, w.isKeyWindow else { return }
-
-            /// `isVisible` false on the window the reader just selected is
-            /// the one state that is wrong beyond doubt — the variant caught
-            /// on 2026-08-23, a key window that never joined the screen.
-            /// Occlusion is deliberately NOT consulted: it updates
-            /// asynchronously from the WindowServer, so one turn after an
-            /// orderFront a healthy window still reads as occluded — and a
-            /// rescue keyed on it fired on every ordinary click. Worse, the
-            /// first spelling of this rescue re-showed with `orderOut`
-            /// first, and ordering a tabbed window out DETACHES it from its
-            /// group: the fix itself manufactured loose windows, one click
-            /// at a time, measured as the group count dropping in the very
-            /// breadcrumbs it wrote.
-            guard !w.isVisible else { return }
+            guard !Self.windowServerShowsOnScreen(w) else { return }
             WindowBreadcrumbs.note(
-                "select rescue: window=\(w.windowNumber) key but not visible — re-showing")
+                "select rescue: window=\(w.windowNumber) key but offscreen "
+                + "per WindowServer (visible=\(w.isVisible)) — re-showing")
             w.orderFrontRegardless()
             w.makeKey()
         }
