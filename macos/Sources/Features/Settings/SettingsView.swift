@@ -11,6 +11,7 @@ struct SettingsRootView: View {
     enum SettingsSection: String, CaseIterable, Identifiable {
         case general
         case appearance
+        case icon
         case sidebar
         case files
         case keyboardShortcuts
@@ -24,6 +25,7 @@ struct SettingsRootView: View {
             switch self {
             case .general: return "General"
             case .appearance: return "Appearance"
+            case .icon: return "Icon"
             case .sidebar: return "Sidebar"
             case .files: return "Editor"
             case .keyboardShortcuts: return "Keyboard Shortcuts"
@@ -41,6 +43,7 @@ struct SettingsRootView: View {
             case .worktrees: return nil
             case .general: return "gearshape"
             case .appearance: return "paintpalette"
+            case .icon: return "app.badge"
             case .sidebar: return "sidebar.left"
             case .files: return "doc.text"
             case .keyboardShortcuts: return "keyboard"
@@ -79,6 +82,8 @@ struct SettingsRootView: View {
                 GeneralSettingsView(ghostty: ghostty, store: store)
             case .appearance:
                 AppearanceSettingsView(ghostty: ghostty, store: store)
+            case .icon:
+                AppIconPickerView()
             case .sidebar:
                 SidebarSettingsView(ghostty: ghostty, store: store)
             case .files:

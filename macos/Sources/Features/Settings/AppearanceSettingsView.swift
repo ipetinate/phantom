@@ -86,21 +86,35 @@ struct AppearanceSettingsView: View {
                 ProgressView("Loading themes…")
                 Spacer()
             } else {
-                /// One grouped `Form`, like the other seven panes.
+                /// Themes loose on the page, the controls under them in a
+                /// grouped `Form`, both in one scroll.
                 ///
-                /// The themes and the style controls used to be a hand-drawn
-                /// `ScrollView` — its own spacing, its own group boxes, its own
-                /// idea of a section title, and not a single footer under
-                /// twelve controls. As sections they inherit the window's
-                /// metrics and can say what a control does underneath it.
-                /// The search field stays above the form, pinned, because it
-                /// filters the list that scrolls beneath it.
-                Form {
-                    themeSections
+                /// Making each theme group a `Section` of that form gave every
+                /// row of cards a card of its own — four stacked backgrounds
+                /// for what is one thing to browse, and a grid is not a list of
+                /// settings. The cards go back to sitting on the window itself;
+                /// the controls keep the grouped rows, footers and metrics the
+                /// other panes have.
+                ///
+                /// The form is asked for its intrinsic height with its own
+                /// scrolling off, so it lays out as a block of this page rather
+                /// than as a second scroller inside the first — and a wheel over
+                /// it, having nothing there to scroll, reaches the page.
+                /// The search field stays above all of it, pinned, because it
+                /// filters the grid that scrolls beneath it.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        themeGrids
+                            .padding(14)
 
-                    AppearanceStylePanel(ghostty: ghostty, store: store)
+                        Form {
+                            AppearanceStylePanel(ghostty: ghostty, store: store)
+                        }
+                        .formStyle(.grouped)
+                        .scrollDisabled(true)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .formStyle(.grouped)
             }
         }
         .navigationTitle("Appearance")
@@ -137,58 +151,62 @@ struct AppearanceSettingsView: View {
         .padding(10)
     }
 
-    /// The theme in use gets its own section, so what is active is visible
-    /// without hunting for the checkmark in a grid. The user's own themes
-    /// follow it, then the curated dark and light sets.
-    @ViewBuilder
-    private var themeSections: some View {
+    /// Everything there is to browse: the theme in use and the user's own on
+    /// the first row, then the curated dark and light sets.
+    private var themeGrids: some View {
         let groups = groups
 
-        if let current = catalog.themes.first(where: { $0.name == currentTheme }) {
-            Section("Current Theme") {
-                ThemeCard(theme: current, isSelected: true) {}
-                    .frame(width: 150)
-            }
-        }
+        return VStack(alignment: .leading, spacing: 18) {
+            currentAndCustomThemes
 
-        if !groups.user.isEmpty {
-            themeSection("Custom Themes", groups.user)
-        }
-        if !groups.dark.isEmpty {
-            themeSection("Dark", groups.dark)
-        }
-        if !groups.light.isEmpty {
-            themeSection("Light", groups.light)
+            if !groups.dark.isEmpty {
+                themeSection("Dark", groups.dark)
+            }
+            if !groups.light.isEmpty {
+                themeSection("Light", groups.light)
+            }
         }
     }
 
-    /// Sections collapse to their first row; searching expands results. The
-    /// expander sits in the section's own header rather than in a title drawn
-    /// by hand above the grid.
+    /// The theme in use gets its own card, so what is active is visible
+    /// without hunting for the checkmark in a grid. The user's own themes
+    /// sit beside it and take the rest of the row.
+    @ViewBuilder
+    private var currentAndCustomThemes: some View {
+        let groups = groups
+
+        HStack(alignment: .top, spacing: 18) {
+            if let current = catalog.themes.first(where: { $0.name == currentTheme }) {
+                VStack(alignment: .leading, spacing: 8) {
+                    sectionTitle("Current Theme")
+                    ThemeCard(theme: current, isSelected: true) {}
+                        .frame(width: 150)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+
+            if !groups.user.isEmpty {
+                themeSection("Custom Themes", groups.user)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+    }
+
+    /// Sections collapse to their first row; searching expands results.
     private func themeSection(_ title: String, _ themes: [TerminalTheme]) -> some View {
         let isExpanded = expandedSections.contains(title) || !search.isEmpty
         let visible = isExpanded ? themes : Array(themes.prefix(3))
 
-        return Section {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 150), spacing: 10)],
-                spacing: 10
-            ) {
-                ForEach(visible) { theme in
-                    ThemeCard(theme: theme, isSelected: theme.name == currentTheme) {
-                        store.setTheme(theme)
-                        store.apply(ghostty: ghostty)
-                    }
-                    .contextMenu {
-                        if theme.source == .user {
-                            Button("Delete", role: .destructive) { deleteTheme(theme) }
-                        }
-                    }
-                }
-            }
-        } header: {
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(title)
+                sectionTitle(title)
 
                 Spacer()
 
@@ -209,6 +227,23 @@ struct AppearanceSettingsView: View {
                         .font(.caption)
                     }
                     .buttonStyle(.link)
+                }
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 150), spacing: 10)],
+                spacing: 10
+            ) {
+                ForEach(visible) { theme in
+                    ThemeCard(theme: theme, isSelected: theme.name == currentTheme) {
+                        store.setTheme(theme)
+                        store.apply(ghostty: ghostty)
+                    }
+                    .contextMenu {
+                        if theme.source == .user {
+                            Button("Delete", role: .destructive) { deleteTheme(theme) }
+                        }
+                    }
                 }
             }
         }
@@ -271,9 +306,6 @@ private struct AppearanceStylePanel: View {
     /// can appear and disappear with it.
     @State private var draggedSidebarWidth: Double?
 
-    @State private var appIcon: PhantomAppIcon = PhantomAppIconStore.current
-    @State private var isChoosingIcon = false
-
     @AppStorage("SidebarTabDensity") private var tabDensity = "default"
 
     private static let cursorStyles: [(value: String, label: String)] = [
@@ -326,7 +358,6 @@ private struct AppearanceStylePanel: View {
             appSection
             terminalSection
             sidebarSection
-            appIconSection
         }
     }
 
@@ -347,9 +378,9 @@ private struct AppearanceStylePanel: View {
                     }
                 }
             }
-            /// Hung off a row rather than the panel, because the panel is four
+            /// Hung off a row rather than the panel, because the panel is three
             /// sections and a modifier written across it is attached to each
-            /// of them — four `populate()` calls on a single appearance.
+            /// of them — three `populate()` calls on a single appearance.
             .onAppear { populate() }
         } header: {
             Text("App")
@@ -551,42 +582,6 @@ private struct AppearanceStylePanel: View {
         }
     }
 
-    /// The app's icon, which was a pane of its own — a nine-item list carrying
-    /// one grid, with the app's own artwork sitting a pane away from every
-    /// other thing that decides how Phantom looks. The grid still gets a whole
-    /// sheet to itself; it just isn't a destination in the list any more.
-    private var appIconSection: some View {
-        Section {
-            LabeledContent("Icon") {
-                Button {
-                    isChoosingIcon = true
-                } label: {
-                    HStack(spacing: 6) {
-                        if let artwork = appIcon.image() {
-                            Image(nsImage: artwork)
-                                .resizable()
-                                .interpolation(.high)
-                                .frame(width: 18, height: 18)
-                        }
-                        Text(appIcon.title)
-                    }
-                }
-                .sheet(isPresented: $isChoosingIcon) {
-                    AppIconPickerView()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: PhantomAppIconStore.didChangeNotification)) { _ in
-                    appIcon = PhantomAppIconStore.current
-                }
-            }
-        } header: {
-            Text("App Icon")
-        } footer: {
-            Text("Written to the app on disk, so the Dock and the app switcher follow immediately.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private func populate() {
         fontFamily = store.string("font-family") ?? ""
         fontSize = store.double("font-size", default: 13)
@@ -595,7 +590,6 @@ private struct AppearanceStylePanel: View {
         cursorStyle = store.string("cursor-style") ?? ""
         sidebarWidth = store.double("sidebar-width", default: 240)
         draggedSidebarWidth = SidebarWidthOverride.width()
-        appIcon = PhantomAppIconStore.current
 
         switch store.string("background-blur") ?? "false" {
         case "false":
@@ -846,13 +840,18 @@ private struct ThemeCreatorView: View {
     @ObservedObject var catalog: ThemeCatalog
     let seed: TerminalTheme?
 
+    /// Called once the theme is written and applied. The editor is a window,
+    /// so finishing has to mean the window goes away — it used to stay open
+    /// under a line of text saying what had just happened, which is a receipt
+    /// for something the screen behind it already shows.
+    let onSaved: () -> Void
+
     @State private var name = ""
     @State private var background = Color(nsColor: NSColor(hex: "#282a36")!)
     @State private var foreground = Color(nsColor: NSColor(hex: "#f8f8f2")!)
     @State private var cursor = Color(nsColor: NSColor(hex: "#f8f8f2")!)
     @State private var selectionBackground = Color(nsColor: NSColor(hex: "#44475a")!)
     @State private var palette: [Color] = Self.draculaPalette.map { Color(nsColor: $0) }
-    @State private var savedName: String?
     @State private var isPickingSeed = false
     @State private var startedFrom: String?
 
@@ -940,12 +939,6 @@ private struct ThemeCreatorView: View {
             }
 
             HStack {
-                if let savedName {
-                    Label("Saved and applied: \(savedName)", systemImage: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 Spacer()
 
                 Button("Save & Apply") { save() }
@@ -1070,7 +1063,7 @@ private struct ThemeCreatorView: View {
         store.set("theme", url.path)
         store.apply(ghostty: ghostty)
         catalog.reload()
-        savedName = trimmedName
+        onSaved()
     }
 
     private func hex(_ color: Color) -> String {
@@ -1150,6 +1143,12 @@ final class ThemeCreatorWindowController: NSWindowController {
         )
         window.title = "Create Theme"
         window.isReleasedWhenClosed = false
+
+        /// The floor lives here rather than in a SwiftUI frame, because the
+        /// height above it is now measured from the content — a minimum
+        /// written into the view would be a second answer, and the taller of
+        /// the two would win whether or not it was the true one.
+        window.contentMinSize = NSSize(width: 640, height: 360)
         window.center()
         window.setFrameAutosaveName("PhantomThemeCreator")
         super.init(window: window)
@@ -1160,22 +1159,57 @@ final class ThemeCreatorWindowController: NSWindowController {
     }
 
     func show(ghostty: Ghostty.App, store: GuiConfigStore) {
-        window?.contentView = NSHostingView(
-            rootView: ThemeCreatorWindowView(ghostty: ghostty, store: store).themedChrome()
+        let host = NSHostingView(
+            rootView: ThemeCreatorWindowView(ghostty: ghostty, store: store) { [weak self] in
+                self?.close()
+            }
+            .themedChrome()
         )
+        window?.contentView = host
+        fitToContent(host)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Takes the window's height from the editor instead of from the number it
+    /// was created with, which left a band of empty window under the last row.
+    ///
+    /// A hosting view's fitting height is its content's own even with a scroll
+    /// view in between, so the scroll can stay for the case this doesn't fit:
+    /// a display shorter than the editor, which the visible frame is the
+    /// measure of.
+    ///
+    /// The floor is applied here too. `contentMinSize` governs what a drag can
+    /// do to the window and not what this assigns it, so a measurement that
+    /// came back small would otherwise open a window smaller than the one the
+    /// user is allowed to make.
+    private func fitToContent(_ host: NSView) {
+        guard let window else { return }
+
+        host.layoutSubtreeIfNeeded()
+        let wanted = host.fittingSize.height
+        guard wanted > 0 else { return }
+
+        let screen = window.screen ?? NSScreen.main
+        let chrome = window.frame.height - window.contentRect(forFrameRect: window.frame).height
+        let ceiling = (screen?.visibleFrame.height ?? wanted + chrome) - chrome
+
+        var size = window.contentRect(forFrameRect: window.frame).size
+        size.height = min(max(wanted, window.contentMinSize.height), ceiling)
+        window.setContentSize(size)
     }
 }
 
 private struct ThemeCreatorWindowView: View {
     let ghostty: Ghostty.App
     @ObservedObject var store: GuiConfigStore
+    let onSaved: () -> Void
 
     @StateObject private var catalog: ThemeCatalog
 
-    init(ghostty: Ghostty.App, store: GuiConfigStore) {
+    init(ghostty: Ghostty.App, store: GuiConfigStore, onSaved: @escaping () -> Void) {
         self.ghostty = ghostty
         self.store = store
+        self.onSaved = onSaved
         _catalog = StateObject(wrappedValue: ThemeCatalog(userThemesDir: store.themesDirURL))
     }
 
@@ -1185,11 +1219,12 @@ private struct ThemeCreatorWindowView: View {
                 ghostty: ghostty,
                 store: store,
                 catalog: catalog,
-                seed: catalog.themes.first { $0.name == store.currentThemeName }
+                seed: catalog.themes.first { $0.name == store.currentThemeName },
+                onSaved: onSaved
             )
             .padding(16)
         }
-        .frame(minWidth: 640, minHeight: 520)
+        .frame(minWidth: 640)
         .onAppear { catalog.loadIfNeeded() }
     }
 }
