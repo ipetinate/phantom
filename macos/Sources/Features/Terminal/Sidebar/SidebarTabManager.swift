@@ -39,7 +39,6 @@ final class SidebarTabManager: ObservableObject {
     private var centerCancellables: Set<AnyCancellable> = []
     private var attentionWindows: Set<ObjectIdentifier> = []
     private var pendingRefresh = false
-    private var didInitialPopulation = false
 
     /// Becomes true the first time a refresh sees the whole tab group at
     /// once, which is the moment a fresh or restored sidebar's list
@@ -64,7 +63,6 @@ final class SidebarTabManager: ObservableObject {
         setupObservers()
         subscribeCenters()
         refresh()
-        didInitialPopulation = true
 
         metadataRefreshTimer = Timer.scheduledTimer(
             withTimeInterval: 5,
@@ -336,7 +334,7 @@ final class SidebarTabManager: ObservableObject {
             } else {
                 model = SidebarTabModel(window: tabWindow)
                 modelsById[identifier] = model
-                if didInitialPopulation {
+                if !PhantomSessionStore.shared.isRestoring {
                     registerNewTab(model, controller: controller)
                 }
             }
@@ -485,8 +483,26 @@ final class SidebarTabManager: ObservableObject {
         groupingVersion &+= 1
     }
 
-    /// New tabs are placed at the top or bottom of the sidebar order,
-    /// per the user's setting.
+    /// Puts a tab this sidebar has just met into the persisted display
+    /// order, at the top or bottom per the user's setting.
+    ///
+    /// Every newly seen tab is registered, including the window's own tab
+    /// during `init`. The `init` pass used to be skipped, and that skip was
+    /// a bug with a delayed fuse: a window's first tab stayed out of
+    /// `SidebarGroupStore.tabOrder`, `sorted` places unordered tabs after
+    /// ordered ones, so that first tab sat pinned to the bottom of the list
+    /// and every tab created afterwards sorted in *front* of it — the "new
+    /// terminal lands second-to-last" report, frozen into the on-disk
+    /// `tabOrder` the day this was diagnosed. The first quit-and-restore
+    /// registered everything and hid the bug, which is why it only ever
+    /// showed on a fresh install.
+    ///
+    /// The one moment a newly seen tab must not be registered is while
+    /// `PhantomSessionStore` is restoring: restored tabs are already in the
+    /// persisted order (registering is a no-op), and tabs from a file that
+    /// predates the order must keep their native relative order, which the
+    /// post-restore refresh preserves by appending them as it walks the
+    /// group. The caller holds that guard.
     private func registerNewTab(
         _ model: SidebarTabModel,
         controller: BaseTerminalController
