@@ -553,12 +553,22 @@ final class SidebarTabManager: ObservableObject {
             /// turn moves key elsewhere, and rescuing the previous window
             /// would steal the focus right back.
             guard let w, w.isKeyWindow else { return }
-            let committed = w.isVisible && w.occlusionState.contains(.visible)
-            guard !committed else { return }
+
+            /// `isVisible` false on the window the reader just selected is
+            /// the one state that is wrong beyond doubt — the variant caught
+            /// on 2026-08-23, a key window that never joined the screen.
+            /// Occlusion is deliberately NOT consulted: it updates
+            /// asynchronously from the WindowServer, so one turn after an
+            /// orderFront a healthy window still reads as occluded — and a
+            /// rescue keyed on it fired on every ordinary click. Worse, the
+            /// first spelling of this rescue re-showed with `orderOut`
+            /// first, and ordering a tabbed window out DETACHES it from its
+            /// group: the fix itself manufactured loose windows, one click
+            /// at a time, measured as the group count dropping in the very
+            /// breadcrumbs it wrote.
+            guard !w.isVisible else { return }
             WindowBreadcrumbs.note(
-                "select rescue: window=\(w.windowNumber) visible=\(w.isVisible) "
-                + "occl=\(w.occlusionState.rawValue) — reordering")
-            w.orderOut(nil)
+                "select rescue: window=\(w.windowNumber) key but not visible — re-showing")
             w.orderFrontRegardless()
             w.makeKey()
         }
