@@ -460,6 +460,13 @@ struct FileExplorerView: View {
     /// The keys the explorer answers for while it has focus: the arrows and
     /// Space to walk the tree, the configured create shortcuts, Return to
     /// rename the selection, Delete to trash it.
+    ///
+    /// Delete was advertised in Settings — `ShortcutCollisionChecker` lists it
+    /// under **Fixed** as "Move to Trash in the file explorer" — and did
+    /// nothing. The key reached this method every time; the comparison was
+    /// what failed, against the wrong character. See
+    /// `FileExplorerKeyCommand.moveToTrashCharacter`, which is where both
+    /// spellings now meet.
     private func handleKeyPress(
         _ press: BackportKeyPress,
         using proxy: ScrollViewProxy
@@ -489,17 +496,24 @@ struct FileExplorerView: View {
             return navigate(key, using: proxy)
         }
 
-        if press.key == KeyEquivalent.return.character {
-            guard let selection = model.selection else { return .ignored }
-            model.beginRename(path: selection)
-            return .handled
+        /// `treeFocused` is redundant with the press having arrived at all —
+        /// SwiftUI only delivers to the focused view — and is passed anyway,
+        /// because "the explorer has focus" is the condition a test of a
+        /// destructive command needs to be able to state and to falsify.
+        guard let command = FileExplorerKeyCommand.resolve(
+            character: press.key,
+            hasFocus: treeFocused,
+            isEditing: model.editing != nil,
+            selection: model.selection
+        ) else { return .ignored }
+
+        switch command {
+        case .rename(let path):
+            model.beginRename(path: path)
+        case .moveToTrash(let path):
+            requestDelete(path)
         }
-        if press.key == KeyEquivalent.delete.character {
-            guard let selection = model.selection else { return .ignored }
-            requestDelete(selection)
-            return .handled
-        }
-        return .ignored
+        return .handled
     }
 
     /// Walks the tree: `FileTreeNavigation` decides, this spends the answer.
@@ -653,6 +667,11 @@ private struct FileExplorerRow: View {
     @ObservedObject private var icons: FileIconProvider = .shared
     @State private var isHovered = false
 
+    /// When this row was last clicked, or nil when the next click starts a
+    /// fresh count. Read by `handleClick` to tell a double click from two
+    /// singles.
+    @State private var lastClickAt: TimeInterval?
+
     /// What the rename/create field holds while it is open.
     @State private var draftName = ""
     @State private var draftSelection: Range<String.Index>?
@@ -711,7 +730,7 @@ private struct FileExplorerRow: View {
     }
 
     private var label: some View {
-        Button(action: onTap) {
+        Button(action: handleClick) {
             HStack(spacing: 4) {
                 disclosure
                 FileIconView(icon: icon)
@@ -825,23 +844,102 @@ private struct FileExplorerRow: View {
         }
     }
 
+    /// What this row's menu holds, separators included — one list, walked by
+    /// both the right-click menu below and the double-click menu in
+    /// `showMenu`.
+    private var menuEntries: [FileExplorerRowMenuEntry] {
+        FileExplorerRowCommand.menu(isDirectory: row.node.isDirectory)
+    }
+
+    /// Keyed by position rather than by entry: a menu with two separators in
+    /// it has two entries that compare equal, and `ForEach` needs them apart.
     @ViewBuilder
     private var menu: some View {
-        if row.node.isDirectory {
-            Button("New File") { onCreateFile() }
-            Button("New Folder") { onCreateFolder() }
-            Divider()
+        ForEach(Array(menuEntries.enumerated()), id: \.offset) { entry in
+            switch entry.element {
+            case .separator:
+                Divider()
+            case .command(let command):
+                if command.isDestructive {
+                    Button(command.title) { perform(command) }
+                        .foregroundStyle(.red)
+                } else {
+                    Button(command.title) { perform(command) }
+                }
+            }
         }
-        Button("Rename") { onBeginRename() }
-        Button("Delete") { onDelete() }
-            .foregroundStyle(.red)
-        Divider()
-        Button("Reveal in Finder") {
+    }
+
+    /// Opens this row's menu at the pointer, which is what a double click on a
+    /// row asks for.
+    ///
+    /// An `NSMenu` rather than the `.contextMenu` above, because SwiftUI gives
+    /// no way to open one of those without a right-click — and built from
+    /// `menuEntries` rather than written out a second time, so the two ways in
+    /// cannot come to offer different things. It is the same machinery
+    /// `.contextMenu` uses underneath, so it draws as a menu and not as a
+    /// popover pretending to be one.
+    ///
+    /// Popped a runloop turn later, at a location read before the hop: `popUp`
+    /// runs its own modal event loop, and starting one from inside a SwiftUI
+    /// button action means re-entering the framework in the middle of its own
+    /// update. The pointer has not moved by then — it takes a mouse-up to get
+    /// here.
+    private func showMenu() {
+        let location = NSEvent.mouseLocation
+        let menu = NSMenu()
+        for entry in menuEntries {
+            switch entry {
+            case .separator:
+                menu.addItem(.separator())
+            case .command(let command):
+                menu.addItem(RowMenuItem(title: command.title) { perform(command) })
+            }
+        }
+
+        DispatchQueue.main.async {
+            menu.popUp(positioning: nil, at: location, in: nil)
+        }
+    }
+
+    private func perform(_ command: FileExplorerRowCommand) {
+        switch command {
+        case .newFile:
+            onCreateFile()
+        case .newFolder:
+            onCreateFolder()
+        case .rename:
+            onBeginRename()
+        case .delete:
+            onDelete()
+        case .revealInFinder:
             NSWorkspace.shared.activateFileViewerSelecting([row.node.url])
-        }
-        Button("Copy Path") {
+        case .copyPath:
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(row.node.path, forType: .string)
+        }
+    }
+
+    /// One click opens the row, two ask for its menu.
+    ///
+    /// The first click of a double click has already opened it — see
+    /// `FileExplorerRowClick` for why that is the trade and not an oversight —
+    /// and the second one deliberately does not open it again.
+    private func handleClick() {
+        let now = Date.timeIntervalSinceReferenceDate
+        switch FileExplorerRowClick.resolve(
+            at: now,
+            previous: lastClickAt,
+            interval: NSEvent.doubleClickInterval
+        ) {
+        case .open:
+            lastClickAt = now
+            onTap()
+        case .menu:
+            /// Forgotten rather than kept, so a third click opens the row
+            /// again instead of reading as the second half of another pair.
+            lastClickAt = nil
+            showMenu()
         }
     }
 
@@ -906,5 +1004,28 @@ private struct FileExplorerRow: View {
         let length = isFolder ? (name as NSString).length : (name as NSString).deletingPathExtension.count
         let nsRange = NSRange(location: 0, length: length)
         return Range(nsRange, in: name)
+    }
+}
+
+/// A menu item that runs a closure, so the double-click menu can be built
+/// from `FileExplorerRowCommand` without a target-action detour through the
+/// view — which a SwiftUI `View` cannot offer, being a struct with no
+/// `@objc` surface of its own.
+private final class RowMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+    }
+
+    /// Never called: nothing archives this menu.
+    required init(coder: NSCoder) {
+        fatalError("RowMenuItem is built in code, never unarchived")
+    }
+
+    @objc private func fire() {
+        handler()
     }
 }

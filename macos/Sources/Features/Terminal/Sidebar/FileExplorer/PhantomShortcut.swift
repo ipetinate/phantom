@@ -102,13 +102,20 @@ struct PhantomShortcut: Equatable, Hashable, Codable, Sendable {
     static let leftArrow = String(UnicodeScalar(NSLeftArrowFunctionKey)!)
     static let rightArrow = String(UnicodeScalar(NSRightArrowFunctionKey)!)
 
+    /// The same for the Delete key, and named for the same reason the arrows
+    /// are: it was spelled out as a literal in three places and one of them —
+    /// the comparison in the file explorer — reached for SwiftUI's
+    /// `KeyEquivalent.delete` instead, which is a different character. See
+    /// `FileExplorerKeyCommand.moveToTrashCharacter`.
+    static let deleteKey = String(UnicodeScalar(NSDeleteCharacter)!)
+
     private static let functionKeyNames: [String: String] = [
         upArrow: "↑",
         downArrow: "↓",
         leftArrow: "←",
         rightArrow: "→",
         "\r": "⏎",
-        "\u{7f}": "⌫",
+        deleteKey: "⌫",
         " ": "␣",
     ]
 
