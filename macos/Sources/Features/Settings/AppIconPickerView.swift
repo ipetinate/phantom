@@ -21,11 +21,6 @@ struct AppIconPickerView: View {
         PhantomAppIconVariant(rawValue: variantName) ?? .default
     }
 
-    /// Set when `NSWorkspace` refuses to write the icon, which it does when the
-    /// bundle is somewhere unwritable. Silence there would read as the picker
-    /// being broken.
-    @State private var failure: String?
-
     private let columns = [GridItem(.adaptive(minimum: 96), spacing: 16)]
 
     var body: some View {
@@ -58,10 +53,10 @@ struct AppIconPickerView: View {
 
                 Text(
                     """
-                    The icon is applied to the app on disk, so the Dock and the \
-                    app switcher follow immediately. A rebuild from source \
-                    resets it, and Phantom puts your choice back on the next \
-                    launch.
+                    The Dock and the app switcher follow immediately, and a \
+                    Phantom pinned in the Dock keeps the choice while it isn't \
+                    running. Finder and Launchpad always show the built-in \
+                    icon — changing it there would break the app's signature.
                     """
                 )
                 .font(.callout)
@@ -69,12 +64,6 @@ struct AppIconPickerView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
             .padding(20)
-        }
-        .alert(
-            failure ?? "",
-            isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })
-        ) {
-            Button("OK") { failure = nil }
         }
     }
 
@@ -124,16 +113,11 @@ struct AppIconPickerView: View {
 
     private func choose(_ icon: PhantomAppIcon) {
         selection = icon
-        report(PhantomAppIconStore.apply(icon))
+        PhantomAppIconStore.apply(icon)
     }
 
     private func choose(_ variant: PhantomAppIconVariant) {
-        report(PhantomAppIconStore.apply(variant))
-    }
-
-    private func report(_ applied: Bool) {
-        guard !applied else { return }
-        failure = "The icon couldn't be applied. Phantom needs to be able to write to its own bundle."
+        PhantomAppIconStore.apply(variant)
     }
 }
 
