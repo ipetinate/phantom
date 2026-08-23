@@ -791,6 +791,31 @@ final class PhantomSessionStore {
         }
     }
 
+    /// Records, against the WindowServer, whether the revealed window
+    /// actually reached the screen. Development builds only — a tripwire,
+    /// not a repair.
+    ///
+    /// The ghost window this watches for: a restored group whose reveal left
+    /// every window `isVisible`, key, and occlusion-visible while
+    /// `CGWindowListCopyWindowInfo` reported the whole group onscreen=false —
+    /// a blank frame in Mission Control. Repairing after the fact was
+    /// measured and does not work: `orderFrontRegardless`, `makeKey` and
+    /// `display()` all no-op, because AppKit already believes the window is
+    /// up. The cure is in `restoreWindows`, which puts the anchor on screen
+    /// before any tab joins it. Should a new variant of this family appear,
+    /// this line is the witness.
+    static func verifyReveal(of front: NSWindow) {
+        guard DevelopmentBuild.isActive else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200)) { [weak front] in
+            guard let front else { return }
+            WindowBreadcrumbs.note(
+                "reveal verify: window=\(front.windowNumber) "
+                + "onscreen=\(SidebarTabManager.windowServerShowsOnScreen(front)) "
+                + "visible=\(front.isVisible) key=\(front.isKeyWindow) "
+                + "occl=\(front.occlusionState.rawValue)")
+        }
+    }
+
     /// Splits saved states into the windows that were tabs of one window and
     /// the windows that stood alone.
     ///
@@ -926,6 +951,38 @@ final class PhantomSessionStore {
                 if !isStandalone, let frame = Self.restoredFrame(for: state) {
                     window.setFrame(frame, display: false)
                 }
+
+                /// The anchor goes on screen before any tab joins it, because
+                /// a group formed entirely off screen can be lost between
+                /// AppKit and the WindowServer on the reopen path: the reveal
+                /// left every window `isVisible`, key, and occlusion-visible
+                /// while `CGWindowListCopyWindowInfo` reported the whole
+                /// group onscreen=false — the ghost window, a blank frame in
+                /// Mission Control that no re-order, `makeKey` or `display()`
+                /// could repair, since AppKit already believed the window was
+                /// up. Measured with the staged repairs in `verifyReveal`.
+                ///
+                /// Joining off-screen tabs onto an on-screen window is the
+                /// shape `newTab` uses on every ⌘T, and it commits correctly
+                /// in the same reopen context where the off-screen group was
+                /// lost. The saved selection is applied in the same runloop
+                /// turn, below, so the screen's first commit already shows
+                /// the tab the reader was on.
+                ///
+                /// Ordered in at zero alpha, and the reveal restores it.
+                /// Alpha does not change ordering — the WindowServer takes
+                /// the window into its onscreen list either way, which is
+                /// all the ghost fix needs — but it keeps the construction
+                /// invisible: shown opaque, the anchor sat on screen for the
+                /// better part of a second while the other tabs spawned
+                /// their shells, wearing the default "👻 Ghostty" title and
+                /// a one-row sidebar — the startup flash the reader filmed.
+                if !isStandalone {
+                    WindowBreadcrumbs.note(
+                        "restore: anchor on screen before joins window=\(window.windowNumber)")
+                    window.alphaValue = 0
+                    window.orderFrontRegardless()
+                }
             }
 
             if anchor == nil {
@@ -970,10 +1027,13 @@ final class PhantomSessionStore {
         // them once the group is complete is that missing signal.
         //
         // A turn later, because AppKit's tab group bookkeeping is not
-        // consistent until the next runloop cycle.
+        // consistent until the next runloop cycle. Refreshed synchronously
+        // inside that turn — not through `scheduleRefresh`, whose own async
+        // hop would land the rows one turn after the reveal below, letting
+        // the first visible frame carry a one-row sidebar.
         DispatchQueue.main.async {
             for controller in restored {
-                controller.sidebarTabManager?.scheduleRefresh()
+                controller.sidebarTabManager?.refresh()
             }
         }
 
@@ -1018,9 +1078,21 @@ final class PhantomSessionStore {
 
         /// The tab the reader was on is the one shown, rather than the anchor
         /// followed by a correction, so the window never appears on the wrong
-        /// tab first. Ordering a background tab front makes it its group's
-        /// selection — measured — which is exactly the request here.
+        /// tab first. The anchor is already ordered front (see above), but
+        /// the WindowServer commits at the end of the runloop turn — moving
+        /// the group's selection here, in the same turn, means the first
+        /// frame on screen is already the saved tab.
+        ///
+        /// The selected tab inherits the anchor's zero alpha: selecting it
+        /// orders its window on, and shown opaque here it would paint
+        /// mid-construction — default title, one-row sidebar — for the
+        /// turns between this and the reveal. Nothing shows until the
+        /// reveal restores both alphas.
         let front = selected?.window ?? anchorWindow
+        front.alphaValue = 0
+        if let group = anchorWindow.tabGroup, group.selectedWindow !== front {
+            group.selectedWindow = front
+        }
 
         /// A turn later, never inline — the reveal must leave the dispatch
         /// this restore was called from. Restored from inside
@@ -1035,6 +1107,13 @@ final class PhantomSessionStore {
         /// not inside that dispatch. Same disease, same cure as the quit
         /// binding: do the work on the next turn, outside the transaction.
         Self.scheduleReveal(of: front) {
+            /// The anchor and the selected tab were ordered in at zero
+            /// alpha so the group could build unseen; the group is complete
+            /// now, so both become visible — in the same turn as the
+            /// reveal's own ordering, so no commit shows a see-through tab.
+            anchorWindow.alphaValue = 1
+            front.alphaValue = 1
+
             /// Said because AppKit's tab group bookkeeping is not consistent
             /// until the next runloop cycle, and a group that had never been
             /// on screen may have shown itself without moving its selection.
@@ -1046,6 +1125,8 @@ final class PhantomSessionStore {
                 "restore revealed: front=\(front.windowNumber) visible=\(front.isVisible) "
                 + "occl=\(front.occlusionState.rawValue) "
                 + "groupWindows=\(front.tabGroup?.windows.count ?? 0)")
+
+            Self.verifyReveal(of: front)
 
             /// Fullscreen last, and only from here: a group has to exist and
             /// be on screen before it can go fullscreen — a window that has
