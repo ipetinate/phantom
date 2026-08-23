@@ -2491,7 +2491,37 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         editorHostingView = nil
     }
 
+    /// Measures where the right-hand pane thinks the titlebar ends.
+    ///
+    /// The editor grid has to start below the titlebar, and today two
+    /// constraints get that answer from `terminalContainer.safeAreaLayoutGuide`
+    /// — which the grid cannot use, because the terminal is about to become a
+    /// cell inside it and a constraint between views with no common ancestor
+    /// raises. This records whether the pane itself carries a safe area, and
+    /// what the window's own content rect says, so the grid is anchored to a
+    /// measured fact rather than a guess. Development builds only, once per
+    /// process.
+    private func probePaneInsets() {
+        guard DevelopmentBuild.isActive, !Self.didProbePaneInsets else { return }
+        Self.didProbePaneInsets = true
+
+        guard let window, let pane = sidebarSplitView?.arrangedSubviews.last else { return }
+        let terminal = terminalPaneView
+        WindowBreadcrumbs.note(
+            "pane probe: paneBounds=\(Int(pane.bounds.height)) "
+            + "paneSafeTop=\(pane.safeAreaInsets.top) "
+            + "terminalSafeTop=\(terminal?.safeAreaInsets.top ?? -1) "
+            + "terminalBounds=\(Int(terminal?.bounds.height ?? -1)) "
+            + "windowContentHeight=\(Int(window.contentLayoutRect.height)) "
+            + "windowFrameHeight=\(Int(window.frame.height)) "
+            + "titlebarStrip=\(Int(window.frame.height - window.contentLayoutRect.height)) "
+            + "fullscreen=\(window.styleMask.contains(.fullScreen))")
+    }
+
+    private static var didProbePaneInsets = false
+
     override func windowDidBecomeKey(_ notification: Notification) {
+        probePaneInsets()
         super.windowDidBecomeKey(notification)
         self.relabelTabs()
         self.fixTabBar()
