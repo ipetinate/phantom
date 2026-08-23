@@ -54,6 +54,7 @@ struct EditorTabBar: View {
                         isSelected: selection == .terminal,
                         onSelect: onSelectTerminal
                     )
+                    .onDrag { EditorTabDrag.provider(for: .terminal) }
                 }
 
                 ForEach(tabs) { tab in
@@ -65,6 +66,7 @@ struct EditorTabBar: View {
                         onSelect: { onSelect(tab.id) },
                         onClose: { onClose(tab.id) }
                     )
+                    .onDrag { EditorTabDrag.provider(for: .file(tab.path)) }
                 }
 
                 // Overlay, not legacy. With "show scroll bars: always" in
@@ -115,28 +117,33 @@ private struct TerminalTabItem: View {
 
     private var accent: Color { palette.accent ?? .accentColor }
 
+    /// Not a `Button`, deliberately — a tap gesture on the row instead.
+    ///
+    /// A button's own gesture wins over `.onDrag`, so as a button this tab
+    /// could be clicked and never dragged: the terminal was the one tab in
+    /// the bar that could not be moved to another cell, which is the whole
+    /// reason it has a tab. `EditorTabItem` beside it was already written
+    /// this way, and now the two match.
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 5) {
-                Image(systemName: "apple.terminal")
-                    .font(.system(size: 11))
+        HStack(spacing: 5) {
+            Image(systemName: "apple.terminal")
+                .font(.system(size: 11))
 
-                Text(title)
-                    .font(palette.font(size: 11, weight: isSelected ? .semibold : .regular))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background(isSelected ? accent.opacity(0.18) : (isHovered ? Color.secondary.opacity(0.10) : .clear))
-            .overlay(alignment: .bottom) {
-                if isSelected {
-                    Rectangle().fill(accent).frame(height: 2)
-                }
-            }
-            .contentShape(Rectangle())
+            Text(title)
+                .font(palette.font(size: 11, weight: isSelected ? .semibold : .regular))
+                .lineLimit(1)
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(isSelected ? accent.opacity(0.18) : (isHovered ? Color.secondary.opacity(0.10) : .clear))
+        .overlay(alignment: .bottom) {
+            if isSelected {
+                Rectangle().fill(accent).frame(height: 2)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
         .onHover { hovering in
             isHovered = hovering
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }

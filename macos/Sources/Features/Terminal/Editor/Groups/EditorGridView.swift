@@ -98,14 +98,58 @@ private struct EditorGridCell: View {
     @ObservedObject var search: WorkspaceSearchCenter
     let terminal: NSView
 
+    @ObservedObject private var palette: ThemePalette = .shared
+
+    /// Where a drag hovering over this cell would put the tab, and nil when
+    /// nothing is over it. Per cell, so two cells can never both be lit.
+    @State private var dropZone: EditorDropZone?
+
     var body: some View {
-        VStack(spacing: 0) {
-            EditorPaneTabBar(
-                center: center,
-                groupID: group.id,
-                terminalDirectory: terminalDirectory
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                EditorPaneTabBar(
+                    center: center,
+                    groupID: group.id,
+                    terminalDirectory: terminalDirectory
+                )
+                surface
+            }
+            .overlay(alignment: .topLeading) { highlight(in: geometry.size) }
+            /// Cleared whenever the grid changes shape, which a completed
+            /// drop always does. `dropExited` covers a drag that leaves the
+            /// cell, but a session that dies mid-flight — the pointer never
+            /// lifting inside any cell — would otherwise leave the wash
+            /// painted over a pane nobody is dragging onto.
+            .onChange(of: center.tree) { _ in dropZone = nil }
+            .onDrop(
+                of: [.plainText, .text],
+                delegate: EditorCellDropDelegate(
+                    size: geometry.size,
+                    zone: { dropZone = $0 },
+                    perform: { item, zone in
+                        center.drop(item, on: group.id, zone: zone)
+                    }
+                )
             )
-            surface
+        }
+    }
+
+    /// The shape the arriving tab would take, drawn over the cell.
+    ///
+    /// Hit testing off: the highlight sits above the cell while a drag is in
+    /// flight, and a view that answered the pointer there would take the drop
+    /// away from the delegate underneath it.
+    @ViewBuilder
+    private func highlight(in size: CGSize) -> some View {
+        if let dropZone {
+            let rect = dropZone.highlight(in: size)
+            let accent = palette.accent ?? .accentColor
+            Rectangle()
+                .fill(accent.opacity(0.22))
+                .overlay(Rectangle().strokeBorder(accent.opacity(0.7), lineWidth: 2))
+                .frame(width: rect.width, height: rect.height)
+                .offset(x: rect.minX, y: rect.minY)
+                .allowsHitTesting(false)
         }
     }
 
