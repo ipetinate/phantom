@@ -226,6 +226,7 @@ private struct LanguageCompletionRow: Identifiable {
             "zig": "Zig",
             "json": "JSON",
             "yaml": "YAML",
+            "toml": "TOML",
             "shellscript": "Shell",
             "html": "HTML",
             "css": "CSS",

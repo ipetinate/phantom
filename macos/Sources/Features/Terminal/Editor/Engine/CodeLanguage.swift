@@ -24,6 +24,7 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
     case shell
     case json
     case yaml
+    case toml
     case markdown
     case html
     case css
@@ -54,6 +55,7 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
         "sh": .shell, "bash": .shell, "zsh": .shell, "fish": .shell,
         "json": .json, "jsonc": .json,
         "yml": .yaml, "yaml": .yaml,
+        "toml": .toml,
         "md": .markdown, "markdown": .markdown, "mdx": .markdown,
         "html": .html, "htm": .html, "xml": .html, "svg": .html,
         "css": .css, "scss": .css, "sass": .css, "less": .css,
@@ -119,7 +121,7 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
     var lineComment: String? {
         switch self {
         case .javascript, .swift, .kotlin, .rust, .go, .zig, .c, .css, .php: return "//"
-        case .python, .ruby, .shell, .yaml, .terraform: return "#"
+        case .python, .ruby, .shell, .yaml, .toml, .terraform: return "#"
         case .sql: return "--"
         // An SFC has no single answer — it depends which block you are in —
         // so it declines to give one rather than give the wrong one.
@@ -132,7 +134,7 @@ enum CodeLanguage: String, CaseIterable, Equatable, Sendable {
         case .javascript, .swift, .kotlin, .rust, .go, .c, .css, .php, .terraform: return ("/*", "*/")
         // The top level of an SFC is markup, whatever the blocks contain.
         case .html, .vue: return ("<!--", "-->")
-        case .python, .ruby, .shell, .yaml, .sql, .json, .markdown, .zig, .plain: return nil
+        case .python, .ruby, .shell, .yaml, .toml, .sql, .json, .markdown, .zig, .plain: return nil
         }
     }
 }

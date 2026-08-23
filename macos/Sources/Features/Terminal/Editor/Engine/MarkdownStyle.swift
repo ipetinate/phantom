@@ -100,6 +100,7 @@ extension CodeLanguage {
         "dockerfile": .shell,
         "json": .json, "jsonc": .json, "json5": .json,
         "yaml": .yaml, "yml": .yaml,
+        "toml": .toml,
         "markdown": .markdown, "md": .markdown, "mdx": .markdown,
         "html": .html, "xml": .html, "svg": .html, "vue-html": .html,
         "css": .css, "scss": .css, "sass": .css, "less": .css,

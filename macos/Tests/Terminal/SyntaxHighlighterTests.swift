@@ -100,6 +100,107 @@ struct SyntaxHighlighterTests {
         #expect(kind(at: "1", in: source, .python) == .number)
     }
 
+    // MARK: TOML
+
+    /// The two findings TOML's own patterns exist for, in one document,
+    /// because both are failures that ruin the *rest* of the file rather than
+    /// the line they are on.
+    ///
+    /// A literal string escapes nothing, so `'…\'` closes at that quote. Under
+    /// the shared C-style alternation the `\'` reads as an escaped quote, the
+    /// string never closes, and everything below it is painted as one — which
+    /// is why the assertions below are about the lines *after* the literal.
+    @Test func aLiteralStringEndsAtItsQuoteAndDoesNotSwallowTheFile() {
+        let source = #"""
+        winpath = '\\ServerX\admin$\system32\'
+        after = "an ordinary string"
+        port = 8080
+        """#
+
+        #expect(kind(at: #"\\ServerX"#, in: source, .toml) == .string)
+        #expect(kind(at: "after", in: source, .toml) == .attribute)
+        #expect(kind(at: "an ordinary string", in: source, .toml) == .string)
+        #expect(kind(at: "8080", in: source, .toml) == .number)
+    }
+
+    /// A date-time is one token. Under the shared `number` pattern
+    /// `1979-05-27T07:32:00Z` is six numbers with the separators left plain,
+    /// which reads as arithmetic.
+    ///
+    /// Asserted on the token's *range* rather than on its kind: every spelling
+    /// of this that is wrong still reports `.number` at the position of `1979`.
+    @Test func aDateTimeIsOneToken() throws {
+        let source = "expires = 1979-05-27T07:32:00Z"
+        let ns = source as NSString
+        let start = ns.range(of: "1979").location
+        let token = try #require(
+            tokens(source, .toml).first { NSLocationInRange(start, $0.range) }
+        )
+
+        #expect(token.kind == .number)
+        #expect(ns.substring(with: token.range) == "1979-05-27T07:32:00Z")
+    }
+
+    /// `0o755` is octal in TOML, and the shared number pattern knows `0x` and
+    /// `0b` only — a file mode came out as a `0` beside a plain word.
+    @Test func octalIsANumber() throws {
+        let source = "mode = 0o755"
+        let ns = source as NSString
+        let start = ns.range(of: "0o755").location
+        let token = try #require(
+            tokens(source, .toml).first { NSLocationInRange(start, $0.range) }
+        )
+
+        #expect(token.kind == .number)
+        #expect(ns.substring(with: token.range) == "0o755")
+    }
+
+    /// The line continuations inside `tomlNumber` are `\#`, because the
+    /// literal is raw. A bare `\` stays in the string, ICU reads it as an
+    /// escaped newline the subject has to contain, and the pattern still
+    /// compiles — so nothing but a test on the built pattern catches it early.
+    @Test func theNumberPatternIsOneLine() {
+        #expect(!SyntaxRules.tomlNumber.contains("\n"))
+    }
+
+    /// A table header and a key have to read as different things: the header
+    /// is the file's structure, the key is a name inside it.
+    @Test func tableHeadersAndKeysAreToldApart() {
+        let source = """
+        [servers.alpha]
+        ip = "10.0.0.1"
+        enabled = true
+        """
+        #expect(kind(at: "[servers.alpha]", in: source, .toml) == .type)
+        #expect(kind(at: "ip", in: source, .toml) == .attribute)
+        #expect(kind(at: "true", in: source, .toml) == .keyword)
+    }
+
+    /// An array of tables is one header, brackets and all.
+    @Test func anArrayOfTablesIsOneHeader() throws {
+        let source = "[[products]]\nname = \"Hammer\""
+        let ns = source as NSString
+        let token = try #require(tokens(source, .toml).first)
+
+        #expect(token.kind == .type)
+        #expect(ns.substring(with: token.range) == "[[products]]")
+    }
+
+    /// A bracketed value is not a header. The header rule is anchored to the
+    /// line and needs the closing bracket to end it, so an array — inline or
+    /// broken across lines — keeps its numbers.
+    @Test func anArrayIsNotATableHeader() {
+        let source = """
+        ports = [ 8000, 8001 ]
+        data = [
+          [ "delta", 314 ],
+        ]
+        """
+        #expect(kind(at: "8000", in: source, .toml) == .number)
+        #expect(kind(at: "delta", in: source, .toml) == .string)
+        #expect(kind(at: "314", in: source, .toml) == .number)
+    }
+
     /// SQL keywords are case-insensitive, unlike every other language here.
     @Test func sqlKeywordsIgnoreCase() {
         let source = "SELECT id FROM users where id = 1"
@@ -182,6 +283,19 @@ struct CodeLanguageTests {
     @Test func anythingUnknownIsPlain() {
         #expect(CodeLanguage.resolve(fileName: "notes") == .plain)
         #expect(CodeLanguage.resolve(fileName: "archive.tar.gz") == .plain)
+    }
+
+    /// TOML, and the comment markers a toggle-comment command reads. `#` and
+    /// nothing else: the format has no block comment, so offering `/* */`
+    /// would write a syntax error into the file.
+    @Test func tomlResolvesAndHasOnlyAHashComment() {
+        #expect(CodeLanguage.resolve(fileName: "Cargo.toml") == .toml)
+        #expect(CodeLanguage.resolve(fileName: "pyproject.TOML") == .toml)
+        #expect(CodeLanguage.toml.lineComment == "#")
+        /// Through `LanguageSyntax`, because `CodeLanguage.blockComment` is a
+        /// tuple — an optional tuple has no `==`, so it cannot be compared to
+        /// `nil` at all. `LanguageSyntax.BlockComment` is `Equatable`.
+        #expect(LanguageSyntax.builtIn(.toml).blockComment == nil)
     }
 
     /// A component file must not arrive plain.

@@ -138,7 +138,7 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
             /// listed itself under Script, which is where the comment there
             /// says an unclassified server ends up.
             return .styles
-        case "vscode-json-language-server", "yaml-language-server":
+        case "vscode-json-language-server", "yaml-language-server", "taplo":
             return .data
         case "terraform-ls":
             return .infrastructure
@@ -227,6 +227,7 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
              "vscode-json-language-server":
             return "npm rm -g vscode-langservers-extracted"
         case "yaml-language-server": return "npm rm -g yaml-language-server"
+        case "taplo": return "brew uninstall taplo"
         case LSPServerRegistry.tailwindCommand: return "npm rm -g @tailwindcss/language-server"
         case "bash-language-server": return "npm rm -g bash-language-server"
         case "intelephense": return "npm rm -g intelephense"
@@ -260,6 +261,7 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
         case "zls": address = "https://github.com/zigtools/zls"
         case "vscode-json-language-server": address = "https://github.com/hrsh7th/vscode-langservers-extracted"
         case "yaml-language-server": address = "https://github.com/redhat-developer/yaml-language-server"
+        case "taplo": address = "https://taplo.tamasfe.dev"
         case "bash-language-server": address = "https://github.com/bash-lsp/bash-language-server"
         case "vscode-html-language-server": address = "https://github.com/microsoft/vscode"
         case "vscode-css-language-server": address = "https://github.com/microsoft/vscode"
@@ -383,6 +385,19 @@ enum LSPServerRegistry {
             command: "yaml-language-server",
             arguments: ["--stdio"],
             installHint: "npm i -g yaml-language-server"
+        ),
+        LSPServerDefinition(
+            languageID: "toml",
+            displayName: "Taplo",
+            // `lsp stdio` — a subcommand and its transport, not a flag. Taplo
+            // is a TOML toolkit whose language server is one of several things
+            // the binary does, so `--stdio` alone is a usage error here.
+            command: "taplo",
+            arguments: ["lsp", "stdio"],
+            // Homebrew builds it with `features: "lsp"`, so the bottle can
+            // serve; `cargo install taplo-cli` without `--features lsp` gives
+            // a binary whose `lsp` subcommand does not exist.
+            installHint: "brew install taplo"
         ),
         LSPServerDefinition(
             languageID: "shellscript",
@@ -777,6 +792,7 @@ enum LSPServerRegistry {
         "jsonc": "json",
         "yaml": "yaml",
         "yml": "yaml",
+        "toml": "toml",
         "sh": "shellscript",
         "bash": "shellscript",
         "zsh": "shellscript",

@@ -51,7 +51,7 @@ struct LSPServerRegistryTests {
     @Test func theExpectedLanguagesAreCovered() throws {
         let expected = [
             "typescript", "javascript", "vue", "swift", "kotlin",
-            "python", "rust", "go", "json", "yaml"
+            "python", "rust", "go", "json", "yaml", "toml"
         ]
 
         for languageID in expected {
@@ -106,6 +106,23 @@ struct LSPServerRegistryTests {
         #expect(LSPServerRegistry.languageID(forPath: "Makefile") == nil)
         #expect(LSPServerRegistry.languageID(forPath: "/etc/hosts") == nil)
         #expect(LSPServerRegistry.server(forPath: "notes.txt") == nil)
+    }
+
+    /// Taplo's server is a **subcommand**, not a flag: the binary is a TOML
+    /// toolkit and `lsp` is one of the things it does. `--stdio` on its own is
+    /// a usage error, so the two tokens are pinned here rather than left to
+    /// the generic argument checks above, which only look at their shape.
+    @Test func tomlIsServedByTaploOverStdio() throws {
+        let definition = try #require(LSPServerRegistry.server(forPath: "/p/Cargo.toml"))
+
+        /// The two halves of the pair, spelled the same. A file painted as
+        /// TOML while its server is told something else is worse than either
+        /// answer alone — see `CodeLanguage.byName`.
+        #expect(definition.languageID == CodeLanguage.toml.rawValue)
+        #expect(definition.command == "taplo")
+        #expect(definition.arguments == ["lsp", "stdio"])
+        #expect(definition.invocation == "taplo lsp stdio")
+        #expect(definition.installHint == "brew install taplo")
     }
 
     @Test func aPathResolvesAllTheWayToItsServer() throws {
@@ -163,7 +180,7 @@ struct LSPServerRegistryTests {
                 #expect(definition.category == .markup, "\(definition.command)")
             case "vscode-css-language-server":
                 #expect(definition.category == .styles, "\(definition.command)")
-            case "vscode-json-language-server", "yaml-language-server":
+            case "vscode-json-language-server", "yaml-language-server", "taplo":
                 #expect(definition.category == .data, "\(definition.command)")
             case "terraform-ls":
                 #expect(definition.category == .infrastructure, "\(definition.command)")
