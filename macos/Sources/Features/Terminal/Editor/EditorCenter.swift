@@ -177,6 +177,35 @@ final class EditorCenter: ObservableObject {
         mutateHolder(of: oldPath) { $0.repath(from: oldPath, to: newPath) }
     }
 
+    // MARK: Reading one cell
+
+    /// The open files of a particular cell.
+    ///
+    /// The grid draws a bar and a surface per cell, so each of those asks
+    /// about *its* cell rather than about the one in focus — which is what
+    /// `tabs` answers, and what every reader that predates the grid wants.
+    func tabs(in id: EditorGroup.ID) -> EditorTabSet {
+        tree.group(id)?.tabs ?? EditorTabSet()
+    }
+
+    /// Whether a cell is the one the terminal lives in, and so the one whose
+    /// bar offers the terminal's tab.
+    func hostsTerminal(_ id: EditorGroup.ID) -> Bool {
+        tree.group(id)?.hostsTerminal ?? false
+    }
+
+    /// What a particular cell is showing, if it is showing a file.
+    func selected(in id: EditorGroup.ID) -> OpenPane? {
+        guard let path = tabs(in: id).selectedPath else { return nil }
+        if let document = documents[path] { return .text(document) }
+        if let document = media[path] { return .media(document) }
+        return nil
+    }
+
+    func selectedDocument(in id: EditorGroup.ID) -> EditorDocument? {
+        selected(in: id)?.text
+    }
+
     // MARK: The grid's gestures
 
     /// Moves focus to a cell, which is what working in one does.

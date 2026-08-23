@@ -1619,6 +1619,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         let tabBarHosting = NSHostingView(
             rootView: EditorPaneTabBar(
                 center: editorCenter,
+                // The one cell the grid starts as. When the grid draws
+                // several, each hands its own bar its own id — the pane's
+                // single bar is the degenerate case of that, not a special
+                // one.
+                groupID: editorCenter.activeGroupID,
                 terminalDirectory: editorTerminalDirectory
             ).interfaceFont()
         )
@@ -1657,6 +1662,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         let editorHosting = NSHostingView(
             rootView: EditorPaneView(
                 center: editorCenter,
+                groupID: editorCenter.activeGroupID,
                 terminalDirectory: editorTerminalDirectory,
                 search: workspaceSearch
             ).interfaceFont()

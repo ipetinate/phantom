@@ -12,6 +12,10 @@ import SwiftUI
 struct EditorPaneView: View {
     @ObservedObject var center: EditorCenter
 
+    /// The cell this editor draws. What it shows is that cell's selection,
+    /// not the grid's — several cells can be showing different files at once.
+    let groupID: EditorGroup.ID
+
     /// Where this pane's terminal is, which is what makes an open file's own
     /// worktree worth mentioning. See ``EditorTerminalDirectory``.
     @ObservedObject var terminalDirectory: EditorTerminalDirectory
@@ -147,7 +151,7 @@ struct EditorPaneView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let document = center.selectedDocument {
+        if let document = center.selectedDocument(in: groupID) {
             DocumentView(
                 document: document,
                 theme: theme,
@@ -179,7 +183,7 @@ struct EditorPaneView: View {
                 }
             )
             .id(document.id)
-        } else if let media = center.selected?.media {
+        } else if let media = center.selected(in: groupID)?.media {
             /// A media tab has no `DocumentView`, and that is what keeps a
             /// PDF out of reach of `didOpen`, of the dirty flag and of
             /// `save()` — none of that machinery is built for it in the first
@@ -230,7 +234,7 @@ struct EditorPaneView: View {
         /// The store folds the master switch and the per-language answer
         /// together. Doing it here instead would put that rule in two places.
         let completion = CompletionSettingsStore.settings(
-            forLanguage: center.selectedDocument.flatMap {
+            forLanguage: center.selectedDocument(in: groupID).flatMap {
                 LanguageResolver.shared.languageID(forPath: $0.url.path)
             },
             isEnabled: completionEnabled,

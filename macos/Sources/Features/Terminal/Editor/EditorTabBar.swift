@@ -22,6 +22,14 @@ struct EditorTabBar: View {
     let terminalTitle: String
     let onSelectTerminal: () -> Void
 
+    /// Whether the terminal lives in *this* cell.
+    ///
+    /// With a grid there are several bars and one terminal, so the tab for it
+    /// is drawn by the cell that holds it and by no other — a second copy
+    /// would be a control that moves the shell out from under the reader who
+    /// clicked it.
+    let hostsTerminal: Bool
+
     @ObservedObject private var palette: ThemePalette = .shared
 
     /// How tall a tab is, and how much room is left under it for the
@@ -36,14 +44,17 @@ struct EditorTabBar: View {
     var body: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 0) {
-                // First, always, and not closable: the pane belongs to the
-                // terminal, and the files are guests in it. A close button
-                // here would offer to remove the thing that owns the window.
-                TerminalTabItem(
-                    title: terminalTitle,
-                    isSelected: selection == .terminal,
-                    onSelect: onSelectTerminal
-                )
+                // First in its own cell, and not closable: the pane belongs
+                // to the terminal, and the files are guests in it. A close
+                // button here would offer to remove the thing that owns the
+                // window.
+                if hostsTerminal {
+                    TerminalTabItem(
+                        title: terminalTitle,
+                        isSelected: selection == .terminal,
+                        onSelect: onSelectTerminal
+                    )
+                }
 
                 ForEach(tabs) { tab in
                     EditorTabItem(

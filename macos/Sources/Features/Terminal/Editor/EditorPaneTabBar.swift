@@ -15,6 +15,10 @@ import SwiftUI
 struct EditorPaneTabBar: View {
     @ObservedObject var center: EditorCenter
 
+    /// The cell this bar belongs to. Every question it asks is about that
+    /// cell, not about the one in focus.
+    let groupID: EditorGroup.ID
+
     /// Where the terminal under this bar is, so a tab can be marked when it
     /// is showing a file from a checkout the terminal has left.
     @ObservedObject var terminalDirectory: EditorTerminalDirectory
@@ -35,7 +39,7 @@ struct EditorPaneTabBar: View {
         content
             .onAppear(perform: resolveDivergence)
             .onChange(of: terminalDirectory.path) { _ in resolveDivergence() }
-            .onChange(of: center.tabs) { _ in resolveDivergence() }
+            .onChange(of: center.tabs(in: groupID)) { _ in resolveDivergence() }
             // Always full width, never an opinion about it.
             //
             // With no file open the body below is *empty*, and an
@@ -49,27 +53,37 @@ struct EditorPaneTabBar: View {
 
     @ViewBuilder
     private var content: some View {
-        if center.tabs.showsTabBar {
+        if showsBar {
             VStack(spacing: 0) {
                 EditorTabBar(
-                    tabs: center.tabs.tabs,
-                    selection: center.tabs.selection,
-                    needsDirectory: { center.tabs.needsDirectory(for: $0) },
+                    tabs: cell.tabs,
+                    selection: cell.selection,
+                    needsDirectory: { cell.needsDirectory(for: $0) },
                     isDivergent: { divergent.contains($0.path) },
                     onSelect: { center.select($0) },
                     onClose: { center.requestClose($0) },
                     terminalTitle: center.terminalTitle,
-                    onSelectTerminal: { center.selectTerminal() }
+                    onSelectTerminal: { center.selectTerminal() },
+                    hostsTerminal: center.hostsTerminal(groupID)
                 )
                 Divider()
             }
         }
     }
 
+    private var cell: EditorTabSet { center.tabs(in: groupID) }
+
+    /// A bar appears once there is something to switch to. In a cell of its
+    /// own that means a file, since a lone terminal offers no choice — and
+    /// the cell that has files but not the terminal always has one.
+    private var showsBar: Bool {
+        center.hostsTerminal(groupID) ? cell.showsTabBar : !cell.isEmpty
+    }
+
     private func resolveDivergence() {
         let directory = terminalDirectory.path
         divergent = Set(
-            center.tabs.tabs
+            cell.tabs
                 .map(\.path)
                 .filter {
                     WorktreeDivergence.verdict(
