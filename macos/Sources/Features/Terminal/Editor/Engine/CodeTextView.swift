@@ -1696,7 +1696,6 @@ final class CodeNSTextView: NSTextView {
             info,
             theme: hoverTheme,
             font: font ?? .monospacedSystemFont(ofSize: 12, weight: .regular),
-            language: hoverLanguage,
             anchor: anchor,
             over: self
         )

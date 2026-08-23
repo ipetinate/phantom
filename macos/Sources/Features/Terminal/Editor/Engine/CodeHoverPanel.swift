@@ -172,18 +172,23 @@ final class CodeHoverPanel: NSPanel {
 
     /// Fills the card and puts it beside `anchor`, given in screen
     /// coordinates.
+    ///
+    /// No `language` parameter, and its absence is the point: every block the
+    /// card draws now carries the language its own fence named, so the
+    /// document's language is not the card's business. Told the file's
+    /// language instead, a hover over a Tailwind class coloured CSS with the
+    /// TypeScript rules of the `.tsx` around it.
     func present(
         _ info: CodeHoverInfo,
         theme: CodeTheme,
         font: NSFont,
-        language: CodeLanguage,
         anchor: NSRect,
         over view: NSView
     ) {
         guard !info.isEmpty, let parentWindow = view.window else { return }
         let screen = parentWindow.screen ?? NSScreen.main
 
-        fill(info, theme: theme, font: font, language: language, on: screen)
+        fill(info, theme: theme, font: font, on: screen)
         position(near: anchor, on: screen)
 
         if parent == nil { parentWindow.addChildWindow(self, ordered: .above) }
@@ -209,7 +214,6 @@ final class CodeHoverPanel: NSPanel {
         _ info: CodeHoverInfo,
         theme: CodeTheme,
         font: NSFont,
-        language: CodeLanguage,
         on screen: NSScreen?
     ) {
         container.views.forEach { $0.removeFromSuperview() }
@@ -233,30 +237,13 @@ final class CodeHoverPanel: NSPanel {
         // A rule between what is wrong and what the thing is, because they
         // are different claims: one is the server complaining, the other is
         // the server describing.
-        if !info.problems.isEmpty, info.signature != nil || info.documentation != nil {
+        if !info.problems.isEmpty, info.signature != nil || !info.documentation.isEmpty {
             container.addView(separator(color: theme.foreground.withAlphaComponent(0.15)), in: .top)
         }
 
-        if let signature = info.signature {
+        for block in [info.signature].compactMap({ $0 }) + info.documentation {
             container.addView(
-                Self.label(
-                    Self.signatureText(signature, theme: theme, font: font, language: language),
-                    width: width
-                ),
-                in: .top
-            )
-        }
-
-        if let documentation = info.documentation {
-            container.addView(
-                Self.label(
-                    Self.proseText(
-                        documentation,
-                        font: .systemFont(ofSize: font.pointSize + 1),
-                        color: theme.foreground.withAlphaComponent(0.75)
-                    ),
-                    width: width
-                ),
+                Self.label(Self.text(for: block, theme: theme, font: font), width: width),
                 in: .top
             )
         }
@@ -326,23 +313,57 @@ final class CodeHoverPanel: NSPanel {
         return result
     }
 
-    /// The declaration, coloured by the same highlighter the editor uses.
+    /// One block, drawn the way its own kind asks to be.
+    private static func text(
+        for block: CodeHoverInfo.Block,
+        theme: CodeTheme,
+        font: NSFont
+    ) -> NSAttributedString {
+        switch block {
+        case .code(let source, let language):
+            return codeText(source, language: language, theme: theme, font: font)
+
+        case .prose(let markdown):
+            return proseText(
+                markdown,
+                font: .systemFont(ofSize: font.pointSize + 1),
+                color: theme.foreground.withAlphaComponent(0.75)
+            )
+        }
+    }
+
+    /// Source, in the editor's own font and coloured by the same highlighter.
     ///
     /// Reusing the highlighter rather than showing flat text is what makes
     /// the card look like it belongs to the file underneath it — the types and
-    /// keywords in a signature are the same types and keywords two lines up.
-    private static func signatureText(
-        _ text: String,
+    /// keywords in a signature are the same types and keywords two lines up —
+    /// and it is what a hover over a Tailwind class needs to read as CSS
+    /// rather than as a run-on sentence.
+    ///
+    /// A nil language draws monospaced and uncoloured, which is the honest
+    /// answer for a fence that named nothing: `SyntaxHighlighter` would
+    /// happily apply *some* language's rules to shell output or a diff, and
+    /// wrong colours read as a bug in the file being described.
+    ///
+    /// The bounds check is not paranoia. A highlighter reports ranges over
+    /// the string it was handed, and `addAttribute` traps rather than fails
+    /// on one that runs past the end — the same guard `MarkdownRenderer`
+    /// keeps for the same reason.
+    private static func codeText(
+        _ source: String,
+        language: CodeLanguage?,
         theme: CodeTheme,
-        font: NSFont,
-        language: CodeLanguage
+        font: NSFont
     ) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: text, attributes: [
+        let result = NSMutableAttributedString(string: source, attributes: [
             .font: font,
             .foregroundColor: theme.foreground,
         ])
-        let full = NSRange(location: 0, length: (text as NSString).length)
-        for token in SyntaxHighlighter(language: language).tokens(in: text, range: full) {
+        guard let language else { return result }
+
+        let full = NSRange(location: 0, length: (source as NSString).length)
+        for token in SyntaxHighlighter(language: language).tokens(in: source, range: full) {
+            guard NSMaxRange(token.range) <= result.length else { continue }
             result.addAttribute(
                 .foregroundColor,
                 value: theme.color(for: token.kind),

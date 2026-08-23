@@ -24,27 +24,27 @@ struct CodeHoverMarkdownTests {
         O(n), where n is the length.
         """)
 
-        #expect(documentation == "Returns the elements.\n\n**Complexity**\n\nO(n), where n is the length.")
+        #expect(documentation == [.prose("Returns the elements.\n\n**Complexity**\n\nO(n), where n is the length.")], "\(documentation)")
     }
 
     /// `# Examples` is the same rule at another depth — `rust-analyzer`'s
     /// heading level, and the one that made `# Examples` read as a comment.
     @Test func aTopLevelHeadingIsAHeadingToo() {
         let (_, documentation) = CodeHoverInfo.split(markdown: "# Examples\n\nBasic usage:")
-        #expect(documentation == "**Examples**\n\nBasic usage:")
+        #expect(documentation == [.prose("**Examples**\n\nBasic usage:")], "\(documentation)")
     }
 
     /// The space is what separates a heading from a line of C that opens with
     /// a directive.
     @Test func aHashWithNoSpaceAfterItIsNotAHeading() {
         let (_, documentation) = CodeHoverInfo.split(markdown: "#include <stdio.h>")
-        #expect(documentation == "#include <stdio.h>")
+        #expect(documentation == [.prose("#include <stdio.h>")], "\(documentation)")
     }
 
     /// Closing hashes are decoration and go with the opening ones.
     @Test func aClosedHeadingKeepsOnlyItsText() {
         let (_, documentation) = CodeHoverInfo.split(markdown: "## Parameters ##")
-        #expect(documentation == "**Parameters**")
+        #expect(documentation == [.prose("**Parameters**")], "\(documentation)")
     }
 
     /// A heading somebody already bolded reads correctly on its own, and
@@ -52,7 +52,7 @@ struct CodeHoverMarkdownTests {
     /// back as literal asterisks.
     @Test func anAlreadyEmphasisedHeadingIsLeftAlone() {
         let (_, documentation) = CodeHoverInfo.split(markdown: "### **Note**")
-        #expect(documentation == "**Note**")
+        #expect(documentation == [.prose("**Note**")], "\(documentation)")
     }
 
     /// The one that shredded every Swift doc comment. `sourcekit-lsp` wraps
@@ -66,10 +66,10 @@ struct CodeHoverMarkdownTests {
         - Returns: An array.
         """)
 
-        #expect(documentation == """
+        #expect(documentation == [.prose("""
         - transform: A mapping closure. It accepts an element of this sequence as its parameter.
         - Returns: An array.
-        """)
+        """)], "\(documentation)")
     }
 
     /// A blank line still ends an item, so the paragraph after a list is a
@@ -81,7 +81,7 @@ struct CodeHoverMarkdownTests {
         Everything else is positional.
         """)
 
-        #expect(documentation == "- sep: the separator\n\nEverything else is positional.")
+        #expect(documentation == [.prose("- sep: the separator\n\nEverything else is positional.")], "\(documentation)")
     }
 
     /// Depth is carried by the indentation alone — a bullet is a bullet at any
@@ -93,7 +93,7 @@ struct CodeHoverMarkdownTests {
           - transform: A mapping closure.
         """)
 
-        #expect(documentation == "- Parameters:\n  - transform: A mapping closure.")
+        #expect(documentation == [.prose("- Parameters:\n  - transform: A mapping closure.")], "\(documentation)")
     }
 
     /// A note in a docstring. The marker is structure, and once the line is on
@@ -105,7 +105,7 @@ struct CodeHoverMarkdownTests {
         > Note: flush is keyword-only.
         """)
 
-        #expect(documentation == "Prints the values.\n\nNote: flush is keyword-only.")
+        #expect(documentation == [.prose("Prints the values.\n\nNote: flush is keyword-only.")], "\(documentation)")
     }
 
     /// A quote wrapped over two lines is one note, reflowed like any other
@@ -116,7 +116,7 @@ struct CodeHoverMarkdownTests {
         > the walrus operator instead.
         """)
 
-        #expect(documentation == "Deprecated since 3.9: use the walrus operator instead.")
+        #expect(documentation == [.prose("Deprecated since 3.9: use the walrus operator instead.")], "\(documentation)")
     }
 
     /// `rust-analyzer` answers with the module path in one fenced block and
@@ -138,13 +138,20 @@ struct CodeHoverMarkdownTests {
         Takes a closure.
         """)
 
-        #expect(signature == "core::iter::traits::iterator\n\nfn map<B, F>(self, f: F) -> Map<Self, F>")
-        #expect(documentation == "Takes a closure.")
+        #expect(signature == .code(
+            "core::iter::traits::iterator\n\nfn map<B, F>(self, f: F) -> Map<Self, F>",
+            language: .rust
+        ))
+        #expect(documentation == [.prose("Takes a closure.")], "\(documentation)")
     }
 
     /// The other side of that rule: prose first means the fence is an example,
     /// so nothing is drawn as a declaration. A card with a signature it made
     /// up out of an example is worse than a card with none.
+    ///
+    /// The example is still *code*, though, and keeps the language its fence
+    /// named — it is drawn in the editor's font beside the prose rather than
+    /// folded into it.
     @Test func aFenceAfterProseIsAnExampleAndNotADeclaration() {
         let (signature, documentation) = CodeHoverInfo.split(markdown: """
         The current value.
@@ -155,6 +162,9 @@ struct CodeHoverMarkdownTests {
         """)
 
         #expect(signature == nil)
-        #expect(documentation == "The current value.\n\nlet a = 1")
+        #expect(
+            documentation == [.prose("The current value."), .code("let a = 1", language: .swift)],
+            "\(documentation)"
+        )
     }
 }
