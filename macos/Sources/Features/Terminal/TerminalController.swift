@@ -810,7 +810,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         )
 
         terminalTitlebarFiller?.layer?.backgroundColor = paneColor?.cgColor
-        editorHostingView?.layer?.backgroundColor = paneColor?.cgColor
+
+        /// Handed to the grid rather than painted on its host, so the coat
+        /// lands on the cells that need it and on no others — see the note by
+        /// `gridHosting`, and `EditorGridCell.coat`.
+        editorCenter.paneBackground = paneColor
 
         guard let sidebarBackgroundView else { return }
         sidebarBackgroundView.layer?.backgroundColor = paneColor?.cgColor
@@ -1632,12 +1636,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             ).interfaceFont()
         )
         gridHosting.translatesAutoresizingMaskIntoConstraints = false
-        // Layer-backed and coloured by `syncSidebarBackground`, exactly like
-        // the sidebar pane: the SwiftUI content above it draws nothing of its
-        // own, so the window's opacity and blur reach the editor the same way
-        // they reach everything else. Painting an opaque colour in SwiftUI
-        // instead — which is what this did first — left a solid slab in the
-        // middle of a translucent window.
+        // Layer-backed, and deliberately left clear: the coat goes on the
+        // cells, not on the host. Coloured here it spanned the whole pane —
+        // the terminal's cell included — and the terminal already paints that
+        // same translucent colour itself, so its half of the grid wore two
+        // coats of it and came out measurably darker than the file beside it.
+        // One cell, one coat; `EditorGridCell.coat` decides which cells get
+        // one. What must not come back is an *opaque* colour painted in
+        // SwiftUI, which is what this did first: a solid slab in the middle of
+        // a translucent window.
         gridHosting.wantsLayer = true
         rightPane.addSubview(gridHosting)
         self.editorHostingView = gridHosting

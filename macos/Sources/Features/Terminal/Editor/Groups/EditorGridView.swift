@@ -118,6 +118,7 @@ private struct EditorGridCell: View {
                     groupID: group.id,
                     terminalDirectory: terminalDirectory
                 )
+                .background(coat)
                 surface
             }
             .overlay(alignment: .topLeading) { highlight(in: geometry.size) }
@@ -209,6 +210,24 @@ private struct EditorGridCell: View {
         }
     }
 
+    /// The coat behind this cell's own drawing: the terminal's background
+    /// colour at its configured opacity, which is what the sidebar and the
+    /// titlebar filler paint too.
+    ///
+    /// Translucent on purpose — the window under it is transparent in the
+    /// blur and glass modes, and an opaque fill here is a slab that ignores
+    /// both. `Color.clear` while the surface has not answered yet.
+    private var coat: Color {
+        center.paneBackground.map(Color.init(nsColor:)) ?? .clear
+    }
+
+    /// The cell's content, coated except where the terminal is.
+    ///
+    /// The terminal paints that same translucent colour itself, over the
+    /// window: a coat underneath it composites twice and comes out darker
+    /// than the file cell beside it — measured at `#08080a` against
+    /// `#0d0d10`. The bar above it still takes one, because nothing else
+    /// paints there.
     @ViewBuilder
     private var surface: some View {
         if group.tabs.showsTerminal {
@@ -220,6 +239,7 @@ private struct EditorGridCell: View {
                 terminalDirectory: terminalDirectory,
                 search: search
             )
+            .background(coat)
         }
     }
 }

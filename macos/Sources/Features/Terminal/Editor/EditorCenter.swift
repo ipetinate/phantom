@@ -74,6 +74,20 @@ final class EditorCenter: ObservableObject {
     /// space of its own instead of covering it.
     @Published var paneTabBarInset: CGFloat = 0
 
+    /// The coat the pane paints behind its own content: the terminal's
+    /// background colour at the opacity it is configured with, which
+    /// `AppearanceCoordinator` resolves for the sidebar too. Pushed in by the
+    /// controller on every appearance sync.
+    ///
+    /// Per window rather than on `ThemePalette`, because it follows the
+    /// *focused surface* — two windows on different themes carry different
+    /// coats — and the grid already observes this object.
+    ///
+    /// Nil while no surface has answered yet, which draws nothing: the window
+    /// under it is translucent by design, and a guessed colour there is the
+    /// opaque slab the pane used to show for a frame on open.
+    @Published var paneBackground: NSColor?
+
     /// Raised when a file can't be opened, for the host to explain and
     /// offer the external editor instead.
     @Published var openFailure: OpenFailure?
