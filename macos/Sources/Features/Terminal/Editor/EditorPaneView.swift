@@ -269,10 +269,50 @@ struct EditorPaneView: View {
 ///
 /// The failure travels as a string: it crosses an actor boundary, and what the
 /// reader needs from it is a sentence, not an error to re-inspect.
-private enum PrettierAttempt: Sendable {
+enum PrettierAttempt: Sendable {
     case notOurs
     case answered(PrettierEdit?)
     case failed(String)
+}
+
+/// What set formatting off: the reader's own keystroke, or the save that
+/// offered to tidy on its way past.
+///
+/// The two differ in one thing only — what the reader is owed when formatting
+/// does not happen. ⇧⌘F is a question, and a question answered by nothing at
+/// all reads as a dead key. ⌘S is not a question about formatting: the reader
+/// asked for the file to be on disk and the tidying was the editor's own idea,
+/// so a project with no Prettier in it would otherwise raise the same dialog on
+/// every single write until the reader learned to dismiss alerts unread.
+enum EditorFormatTrigger: Sendable {
+    case command
+    case save
+}
+
+extension PrettierAttempt {
+    /// The sentence this outcome is worth interrupting the reader with, or nil
+    /// to say nothing at all.
+    ///
+    /// The line: **an alert is for a failure somebody is waiting on.** Success
+    /// and no-op are both silent, because both are the outcome that was asked
+    /// for, and neither needs a receipt to be clicked away.
+    ///
+    /// - `.answered(edit)` — the buffer changed in front of the reader. That
+    ///   is the receipt; a modal on top of it is a second one.
+    /// - `.answered(nil)` — already formatted, or covered by an ignore rule.
+    ///   This is the state ⇧⌘F is pressed to *reach*, so announcing it makes
+    ///   the good case the loud one — and it is the common case, since most
+    ///   files in a Prettier project are already formatted.
+    /// - `.notOurs` — nothing has happened yet. The language server still gets
+    ///   its turn below, and reports for itself.
+    /// - `.failed` — the reader asked for something and did not get it, and the
+    ///   reason carries a parse error's line and column, an unreadable config,
+    ///   or a Prettier that is not installed. Worth a modal, but only on
+    ///   `.command`. The write goes ahead regardless.
+    func notice(for trigger: EditorFormatTrigger) -> String? {
+        guard trigger == .command, case .failed(let reason) = self else { return nil }
+        return "Prettier couldn't format this file: \(reason)"
+    }
 }
 
 private struct DocumentView: View {
@@ -1152,21 +1192,23 @@ private struct DocumentView: View {
     /// two would drift, and the day they drift the reader gets one style on
     /// ⌥⌘F and another on ⌘S in the same file.
     ///
-    /// `announcing` is off for the save path. A file whose language server
+    /// The trigger only decides who may speak. A file whose language server
     /// has no formatter is an ordinary state, and a modal saying so on every
-    /// ⌘S would train the reader to dismiss alerts without reading them.
-    private func formatDocument(announcing: Bool) async {
+    /// ⌘S would train the reader to dismiss alerts without reading them — so
+    /// the save path reports nothing at all. What neither path reports is a
+    /// run that went fine: see `PrettierAttempt.notice(for:)`.
+    private func formatDocument(_ trigger: EditorFormatTrigger) async {
         /// Read-only means read-only, and formatting is the one write that
         /// does not begin with a keystroke. A non-editable text view refuses
         /// typing, but ⌘S with format-on-save turned on would still rewrite
         /// the file from underneath the banner saying it cannot be edited.
         guard divergence?.isReadOnly != true else { return }
-        if await formatWithPrettier(announcing: announcing) { return }
-        await formatWithLanguageServer(announcing: announcing)
+        if await formatWithPrettier(trigger) { return }
+        await formatWithLanguageServer(trigger)
     }
 
     private func format() {
-        Task { await formatDocument(announcing: true) }
+        Task { await formatDocument(.command) }
     }
 
     /// Writes the file, tidying it first when the reader asked for that.
@@ -1178,7 +1220,7 @@ private struct DocumentView: View {
     private func saveWithFormatting() {
         guard formatOnSave else { return onSave() }
         Task {
-            await formatDocument(announcing: false)
+            await formatDocument(.save)
             onSave()
         }
     }
@@ -1193,9 +1235,9 @@ private struct DocumentView: View {
     ///
     /// A failure does **not** fall through. Formatting a Prettier-owned file
     /// with the language server instead would rewrite it in a style the
-    /// project rejected, and do it silently; saying so and changing nothing is
-    /// the smaller harm.
-    private func formatWithPrettier(announcing: Bool) async -> Bool {
+    /// project rejected, and do it silently; changing nothing is the smaller
+    /// harm — and on ⇧⌘F it says why.
+    private func formatWithPrettier(_ trigger: EditorFormatTrigger) async -> Bool {
         guard usesPrettier else { return false }
 
         let revision = document.revision
@@ -1217,19 +1259,18 @@ private struct DocumentView: View {
             }
         }.value
 
+        /// One place decides what is worth saying, so the branches below are
+        /// left deciding only what to do with the buffer.
+        if let message = outcome.notice(for: trigger) {
+            notice = message
+            noticeLog = nil
+        }
+
         switch outcome {
         case .notOurs:
             return false
 
-        case .failed(let reason):
-            if announcing {
-                notice = "Prettier couldn't format this file: \(reason)"
-                noticeLog = nil
-            }
-            return true
-
-        case .answered(nil):
-            if announcing { notice = "Prettier had nothing to change here." }
+        case .failed, .answered(nil):
             return true
 
         case .answered(let edit?):
@@ -1246,7 +1287,7 @@ private struct DocumentView: View {
     }
 
     /// What formatting was before Prettier: ask the language server.
-    private func formatWithLanguageServer(announcing: Bool) async {
+    private func formatWithLanguageServer(_ trigger: EditorFormatTrigger) async {
             /// Captured before the request, compared after it.
             ///
             /// A formatting reply is a list of ranges computed against the
@@ -1270,7 +1311,7 @@ private struct DocumentView: View {
                 insertSpaces: configuration.insertsSpacesForTab
             )
             guard !edits.isEmpty else {
-                guard announcing else { return }
+                guard trigger == .command else { return }
                 reportEmpty(
                     whenHealthyAndEmpty: "The language server returned no formatting.",
                     whenUnsupported: "This language server doesn't offer formatting.",
