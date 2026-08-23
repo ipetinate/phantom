@@ -533,11 +533,35 @@ final class SidebarTabManager: ObservableObject {
         let w = model.window
         WindowBreadcrumbs.note(
             "sidebar select: window=\(w.windowNumber) group=\(w.tabGroup?.windows.count ?? 0) "
-            + "visible=\(w.isVisible) occl=\(w.occlusionState.rawValue) "
-            + "frame=\(Int(w.frame.origin.x)),\(Int(w.frame.origin.y)),\(Int(w.frame.width))x\(Int(w.frame.height)) "
-            + "screen=\(w.screen != nil) content=\(w.contentView != nil) "
-            + "loaded=\((w.windowController as? TerminalController)?.isWindowLoaded ?? false)")
+            + "visible=\(w.isVisible) occl=\(w.occlusionState.rawValue)")
         w.makeKeyAndOrderFront(nil)
+
+        /// Verified rather than trusted, a turn later. This family of bugs
+        /// keeps producing windows that answer every AppKit question
+        /// correctly and still put no pixel on screen — `isVisible` true
+        /// with the WindowServer reporting offscreen, then the inverse, a
+        /// window `isVisible` false whose occlusion claims visibility. Each
+        /// spelling was one launch-ordering race away from the last. The
+        /// select is the one gesture whose outcome the reader is looking
+        /// straight at, so it checks its own work: if the window it just
+        /// ordered front is not actually the visible front a turn later, it
+        /// is ordered out and front again — a fresh WindowServer commit from
+        /// a clean dispatch — and the breadcrumb says so, so the next
+        /// variant of this arrives already witnessed.
+        DispatchQueue.main.async { [weak w] in
+            /// Still the reader's latest choice — a second click within the
+            /// turn moves key elsewhere, and rescuing the previous window
+            /// would steal the focus right back.
+            guard let w, w.isKeyWindow else { return }
+            let committed = w.isVisible && w.occlusionState.contains(.visible)
+            guard !committed else { return }
+            WindowBreadcrumbs.note(
+                "select rescue: window=\(w.windowNumber) visible=\(w.isVisible) "
+                + "occl=\(w.occlusionState.rawValue) — reordering")
+            w.orderOut(nil)
+            w.orderFrontRegardless()
+            w.makeKey()
+        }
     }
 
     /// Resolves the repository root and current branch for a working
