@@ -2342,7 +2342,7 @@ sidebar: bool = false,
 /// The width of the sidebar in points.
 ///
 /// Currently only supported on macOS.
-@"sidebar-width": u32 = 240,
+@"sidebar-width": u32 = 400,
 
 /// Background color for the window titlebar. This only takes effect if
 /// window-theme is set to ghostty. Currently only supported in the GTK app

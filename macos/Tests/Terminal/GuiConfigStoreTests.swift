@@ -16,9 +16,12 @@ struct GuiConfigStoreTests {
 
     // MARK: - currentThemeName
 
-    @Test func currentThemeNameIsNilWhenUnset() throws {
+    /// See `aFreshStoreStartsOnTheFactoryTheme` — an empty `theme` key is
+    /// filled by the factory at init, so the name is never nil on a fresh
+    /// store.
+    @Test func aFreshStoreNamesTheFactoryTheme() throws {
         let (store, _) = try makeStore()
-        #expect(store.currentThemeName == nil)
+        #expect(store.currentThemeName == GuiConfigStore.factoryThemeName)
     }
 
     @Test func currentThemeNameReturnsABuiltinNameAsIs() throws {
@@ -41,9 +44,15 @@ struct GuiConfigStoreTests {
 
     // MARK: - currentThemeURL
 
-    @Test func currentThemeURLIsNilWhenUnset() throws {
+    /// "Unset" stopped being a reachable resting state: a store whose
+    /// `theme` key is empty materializes the factory theme at init and
+    /// points at it, so a fresh store starts on "Dracula by Phantom" rather
+    /// than on nothing.
+    @Test func aFreshStoreStartsOnTheFactoryTheme() throws {
         let (store, _) = try makeStore()
-        #expect(store.currentThemeURL == nil)
+        let url = try #require(store.currentThemeURL)
+        #expect(url.lastPathComponent == GuiConfigStore.factoryThemeName)
+        #expect(FileManager.default.fileExists(atPath: url.path))
     }
 
     /// The actual bug: a custom theme's `theme` value is an absolute path.

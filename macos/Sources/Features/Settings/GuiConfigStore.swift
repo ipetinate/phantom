@@ -39,7 +39,9 @@ final class GuiConfigStore: ObservableObject {
     init(configDir: URL? = nil) {
         self.configDir = configDir ?? Self.defaultConfigDir()
         load()
-        if Self.applyForkDefaults(to: &values) { save() }
+        var changed = Self.applyForkDefaults(to: &values)
+        changed = Self.applyFactoryTheme(to: &values, in: self.configDir) || changed
+        if changed { save() }
     }
 
     // MARK: Bootstrap
@@ -74,7 +76,9 @@ final class GuiConfigStore: ObservableObject {
         let mainPath = mainConfigPath(in: dir)
 
         var values = readGuiValues(in: dir)
-        if applyForkDefaults(to: &values) { writeGuiValues(values, in: dir) }
+        var changed = applyForkDefaults(to: &values)
+        changed = applyFactoryTheme(to: &values, in: dir) || changed
+        if changed { writeGuiValues(values, in: dir) }
 
         /// Every launch, not only the one that wrote the file: the include is
         /// a single line in a file the reader owns and may have rewritten, and
@@ -110,7 +114,70 @@ final class GuiConfigStore: ObservableObject {
             values["window-save-state"] = "always"
             needsSave = true
         }
+        /// The factory look: Phantom's own take on Dracula, on glass. Only
+        /// where the reader has never chosen — a `theme` of their own, or a
+        /// blur or opacity they have touched, is theirs and stays.
+        if values["background-blur"] == nil {
+            values["background-blur"] = "80"
+            needsSave = true
+        }
+        if values["background-opacity"] == nil {
+            values["background-opacity"] = "0.80"
+            needsSave = true
+        }
         return needsSave
+    }
+
+    /// The theme Phantom ships applied, written into the user's own themes
+    /// directory so the Appearance pane lists and edits it like any custom
+    /// theme — deleting or renaming it is the reader's right, so it is
+    /// materialized only while the `theme` key is unset (a first launch, or
+    /// a config the reader reset), never re-imposed over a choice.
+    nonisolated static let factoryThemeName = "Dracula by Phantom"
+
+    nonisolated static let factoryTheme = """
+    background = #060608
+    foreground = #F8F8F2
+    cursor-color = #F8F8F2
+    selection-background = #44475A
+    palette = 0=#21222C
+    palette = 1=#FF5555
+    palette = 2=#50FA7B
+    palette = 3=#F1FA8C
+    palette = 4=#BD93F9
+    palette = 5=#FF79C6
+    palette = 6=#8BE9FD
+    palette = 7=#F8F8F2
+    palette = 8=#6272A4
+    palette = 9=#FF6E6E
+    palette = 10=#69FF94
+    palette = 11=#FFFFA5
+    palette = 12=#D6ACFF
+    palette = 13=#FF92DF
+    palette = 14=#A4FFFF
+    palette = 15=#FFFFFF
+
+    """
+
+    /// Materializes the factory theme and points `theme` at it. File work,
+    /// nonisolated, bootstrap-time — same constraints as everything else in
+    /// the bootstrap: it must run before the core loads the config.
+    nonisolated static func applyFactoryTheme(
+        to values: inout [String: String],
+        in dir: URL
+    ) -> Bool {
+        guard values["theme"] == nil else { return false }
+
+        let themes = dir.appendingPathComponent("themes", isDirectory: true)
+        let file = themes.appendingPathComponent(factoryThemeName)
+        if !FileManager.default.fileExists(atPath: file.path) {
+            try? FileManager.default.createDirectory(
+                at: themes, withIntermediateDirectories: true)
+            guard (try? factoryTheme.write(to: file, atomically: true, encoding: .utf8)) != nil
+            else { return false }
+        }
+        values["theme"] = file.path
+        return true
     }
 
     /// The main config file the Ghostty core should load, resolved without

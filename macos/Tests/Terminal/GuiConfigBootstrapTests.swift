@@ -92,10 +92,70 @@ struct GuiConfigBootstrapTests {
     }
 
     @Test func forkDefaultsLeaveTheReadersChoiceAlone() {
-        var values = ["sidebar": "false", "window-save-state": "never"]
+        var values = [
+            "sidebar": "false",
+            "window-save-state": "never",
+            "background-blur": "0",
+            "background-opacity": "1.0",
+        ]
 
         #expect(!GuiConfigStore.applyForkDefaults(to: &values))
         #expect(values["sidebar"] == "false")
         #expect(values["window-save-state"] == "never")
+        #expect(values["background-blur"] == "0")
+        #expect(values["background-opacity"] == "1.0")
+    }
+
+    // MARK: Factory theme
+
+    /// A first launch ships Phantom's own look: the theme file exists on
+    /// disk where the Appearance pane can list and edit it, `theme` points
+    /// at it, and glass is on at the shipped intensity.
+    @Test func aVirginDirectoryGetsTheFactoryLook() throws {
+        let dir = try makeDirectory()
+        _ = GuiConfigStore.bootstrap(in: dir)
+
+        let gui = contents(of: dir.appendingPathComponent(GuiConfigStore.fileName))
+        #expect(gui.contains("background-blur = 80"))
+        #expect(gui.contains("background-opacity = 0.80"))
+        #expect(gui.contains("theme = "))
+        #expect(gui.contains(GuiConfigStore.factoryThemeName))
+
+        let theme = dir.appendingPathComponent("themes")
+            .appendingPathComponent(GuiConfigStore.factoryThemeName)
+        #expect(FileManager.default.fileExists(atPath: theme.path))
+        #expect(contents(of: theme).contains("background = #060608"))
+    }
+
+    /// A reader's own choice is never overwritten — a `theme` already in the
+    /// file means the factory theme is not materialized and not applied.
+    @Test func aChosenThemeIsNeverReplaced() throws {
+        let dir = try makeDirectory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "theme = /somewhere/else\n".write(
+            to: dir.appendingPathComponent(GuiConfigStore.fileName),
+            atomically: true, encoding: .utf8)
+
+        _ = GuiConfigStore.bootstrap(in: dir)
+
+        let gui = contents(of: dir.appendingPathComponent(GuiConfigStore.fileName))
+        #expect(gui.contains("theme = /somewhere/else"))
+        #expect(!gui.contains(GuiConfigStore.factoryThemeName))
+    }
+
+    /// Blur and opacity the reader has touched stay theirs even when the
+    /// theme key is the factory's to set.
+    @Test func touchedGlassValuesSurviveTheFactoryDefaults() throws {
+        let dir = try makeDirectory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "background-blur = 20\nbackground-opacity = 1.0\n".write(
+            to: dir.appendingPathComponent(GuiConfigStore.fileName),
+            atomically: true, encoding: .utf8)
+
+        _ = GuiConfigStore.bootstrap(in: dir)
+
+        let gui = contents(of: dir.appendingPathComponent(GuiConfigStore.fileName))
+        #expect(gui.contains("background-blur = 20"))
+        #expect(gui.contains("background-opacity = 1.0"))
     }
 }
