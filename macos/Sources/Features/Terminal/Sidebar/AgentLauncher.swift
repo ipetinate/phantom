@@ -41,7 +41,7 @@ enum AgentLauncher {
     /// stands for, and a second copy of the split-window rule above would be
     /// a second place to get it wrong.
     static func surface(for tab: SidebarTabModel) -> Ghostty.SurfaceView? {
-        guard let controller = tab.window.windowController as? BaseTerminalController
+        guard let controller = tab.window?.windowController as? BaseTerminalController
         else { return nil }
 
         if let surfaceId = tab.surfaceId,

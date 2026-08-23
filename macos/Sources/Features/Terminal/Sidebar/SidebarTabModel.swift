@@ -10,7 +10,26 @@ import Combine
 @MainActor
 final class SidebarTabModel: ObservableObject, Identifiable {
     nonisolated let id: ObjectIdentifier
-    unowned let window: NSWindow
+
+    /// The tab's window — weak, because the window dies before the model
+    /// does, by design: closing a tab deallocates its window while the row
+    /// standing for it is still in the SwiftUI tree, and stays there until
+    /// the next `SidebarTabManager.refresh` drops the model. This was
+    /// `unowned`, and that was a crash with the app's name on it: the row's
+    /// one render between the close and the refresh read `window`, the
+    /// Swift runtime hit a freed unowned reference, and the whole process
+    /// aborted — "closing a tab quit the app", reproduced under lldb with
+    /// `swift_abortRetainUnowned` in `SidebarTabRow.tabEditorCenter`.
+    ///
+    /// Not strong, deliberately: `NSWindow.windowController` retains the
+    /// controller, the controller owns the `SidebarTabManager`, and the
+    /// manager holds these models — a strong reference here closes that
+    /// loop and no terminal window could ever deallocate again, which is
+    /// the shell-leak family `releaseSidebarChrome` exists to prevent.
+    ///
+    /// A nil window means the row is a corpse the next refresh will
+    /// remove; readers render it inert rather than acting on it.
+    weak private(set) var window: NSWindow?
 
     @Published private(set) var title: String = ""
     @Published private(set) var pwd: String?

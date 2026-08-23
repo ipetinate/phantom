@@ -465,8 +465,8 @@ final class SidebarTabManager: ObservableObject {
         surface.$title
             .removeDuplicates()
             .sink { [weak model] _ in
-                guard let model else { return }
-                model.setTitle(model.window.title)
+                guard let model, let window = model.window else { return }
+                model.setTitle(window.title)
             }
             .store(in: &model.surfaceCancellables)
 
@@ -554,13 +554,12 @@ final class SidebarTabManager: ObservableObject {
     /// that has outlived its window is stale rather than actionable, so the
     /// list is re-formed instead and the row goes away.
     func select(_ model: SidebarTabModel) {
-        guard Self.isLiveTab(model.window) else {
+        guard let w = model.window, Self.isLiveTab(w) else {
             WindowBreadcrumbs.note(
-                "sidebar select: window=\(model.window.windowNumber) not live -> refresh")
+                "sidebar select: window=\(model.window?.windowNumber ?? -1) not live -> refresh")
             refresh()
             return
         }
-        let w = model.window
         WindowBreadcrumbs.note(
             "sidebar select: window=\(w.windowNumber) group=\(w.tabGroup?.windows.count ?? 0) "
             + "visible=\(w.isVisible) occl=\(w.occlusionState.rawValue)")

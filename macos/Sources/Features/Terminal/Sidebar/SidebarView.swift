@@ -1322,7 +1322,7 @@ private struct SidebarTabRow: View {
     /// without a word. Which is the exact promise this whole flow makes and
     /// the exact way to break it.
     private var tabEditorCenter: EditorCenter {
-        (tab.window.windowController as? TerminalController)?.editorCenter ?? editorCenter
+        (tab.window?.windowController as? TerminalController)?.editorCenter ?? editorCenter
     }
 
     private var insertAfter: Bool? {
@@ -1493,8 +1493,8 @@ private struct SidebarTabRow: View {
 
                 SidebarIconButton(help: "Close Terminal") {
                     WindowBreadcrumbs.note(
-                        "sidebar close button: window=\(tab.window.windowNumber)")
-                    tab.window.performClose(nil)
+                        "sidebar close button: window=\(tab.window?.windowNumber ?? -1)")
+                    tab.window?.performClose(nil)
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .semibold))
@@ -1664,7 +1664,7 @@ private struct SidebarTabRow: View {
     /// Opens a plan through the same opener a file in the panels uses, so the
     /// Settings choice means the same thing everywhere.
     private func openPlan(_ plan: ClaudePlanIndex.Plan) {
-        guard let controller = tab.window.windowController as? TerminalController else { return }
+        guard let controller = tab.window?.windowController as? TerminalController else { return }
         controller.openClickedPath(URL(fileURLWithPath: plan.path), line: nil as Int?, column: nil)
     }
 
@@ -1834,8 +1834,8 @@ private struct SidebarTabRow: View {
 
         Button("Close Tab", role: .destructive) {
             WindowBreadcrumbs.note(
-                "sidebar context menu close: window=\(tab.window.windowNumber)")
-            tab.window.performClose(nil)
+                "sidebar context menu close: window=\(tab.window?.windowNumber ?? -1)")
+            tab.window?.performClose(nil)
         }
     }
 }
