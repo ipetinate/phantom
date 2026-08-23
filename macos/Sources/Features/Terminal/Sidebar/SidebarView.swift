@@ -814,8 +814,8 @@ private struct SidebarGroupSection: View {
             WorktreeEntryButton(
                 entry: .groupHeader,
                 isEnabled: showWorktree,
-                repoRoot: representativeTab?.repoRoot,
-                currentPath: representativeTab?.pwd,
+                repoRoot: representativeTab?.repoRoot ?? group.projectRoot,
+                currentPath: representativeTab?.pwd ?? group.projectRoot,
                 isIdle: true,
                 hasLiveAgent: false,
                 editorCenter: editorCenter,

@@ -34,6 +34,19 @@ struct SidebarGroup: Identifiable, Codable, Equatable {
     var collapsed: Bool
     var kind: Kind
 
+    /// The project root for a project group, nil for a manual one.
+    ///
+    /// This is what lets an *empty* project group still offer "New Terminal
+    /// in Worktree": with no tabs there is no representative tab to borrow a
+    /// repo from, and the button used to hide exactly when a group most
+    /// needs it — before its first terminal exists. A manual group names no
+    /// repository, so nil is the honest answer there and the button stays
+    /// hidden.
+    var projectRoot: String? {
+        if case .project(let root) = kind { return root }
+        return nil
+    }
+
     /// The effective accent: custom hex first, then the preset color.
     var accentColor: Color? {
         if let colorHex, let nsColor = NSColor(hex: colorHex) {
