@@ -1452,6 +1452,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         layout.onNewOpenCodeTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningOpenCode: true)
         }
+        layout.onNewAntigravityTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningAntigravity: true)
+        }
         layout.onNewWorktreeTab = { [weak self] directory in
             self?.newSidebarTab(in: nil, workingDirectory: directory)
         }
@@ -1464,6 +1467,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 runningClaude: agent == .claude,
                 runningCodex: agent == .codex,
                 runningOpenCode: agent == .opencode,
+                runningAntigravity: agent == .antigravity,
                 workingDirectory: directory)
         }
         self.sidebarLayout = layout
@@ -1484,6 +1488,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             },
             onNewOpenCodeTabInGroup: { [weak self] group in
                 self?.newSidebarTab(in: group, runningOpenCode: true)
+            },
+            onNewAntigravityTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningAntigravity: true)
             },
             onSpawnTerminalBesideSelection: { [weak self] in
                 self?.newSidebarTabBesideSelection()
@@ -1746,6 +1753,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         runningClaude: Bool = false,
         runningCodex: Bool = false,
         runningOpenCode: Bool = false,
+        runningAntigravity: Bool = false,
         inheritingPane: Bool = false,
         workingDirectory: String? = nil
     ) -> Ghostty.SurfaceView? {
@@ -1782,7 +1790,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         if let surface, let agent = startingAgent(
             claude: runningClaude,
             codex: runningCodex,
-            openCode: runningOpenCode
+            openCode: runningOpenCode,
+            antigravity: runningAntigravity
         ) {
             TabStateCenter.shared.recordAgentStart(surfaceId: surface.id, agent: agent)
             ClaudeSession.run(agent.launchCommand, in: surface)
@@ -1804,18 +1813,20 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     /// Which agent a new-tab request is asking for, if any.
     ///
-    /// Three booleans arrive from three separate sidebar buttons; this is
+    /// Four booleans arrive from four separate sidebar buttons; this is
     /// where they become the one thing the rest of the flow needs, so that
     /// recording the agent and launching it cannot disagree about which it
     /// was.
     private func startingAgent(
         claude: Bool,
         codex: Bool,
-        openCode: Bool
+        openCode: Bool,
+        antigravity: Bool
     ) -> CodingAgent? {
         if claude { return .claude }
         if codex { return .codex }
         if openCode { return .opencode }
+        if antigravity { return .antigravity }
         return nil
     }
 

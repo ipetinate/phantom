@@ -123,6 +123,17 @@ struct AgentSessionStore: Sendable {
         case .claude: return claudeSessionID(for: directories)
         case .codex: return codexSessionID(for: directories)
         case .opencode: return openCodeSessionID(for: directories)
+
+        /// Antigravity keeps a store too — `agy --continue` is documented as
+        /// finding the last conversation for the current workspace "by
+        /// consulting a local cache file" — but neither that file's path nor
+        /// its format is documented anywhere, and guessing at either would
+        /// mean reading an id out of a file whose meaning is assumed. An id
+        /// resumed into the wrong conversation is worse than no id: the
+        /// fallback for nil is `agy --continue`, which asks Antigravity to
+        /// consult that same cache itself, with the workspace scoping this
+        /// method exists to reconstruct already built in.
+        case .antigravity: return nil
         }
     }
 

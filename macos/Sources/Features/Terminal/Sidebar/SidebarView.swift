@@ -74,6 +74,7 @@ struct SidebarView: View {
     /// Same as `onNewTabInGroup`, with a Codex session started in it.
     var onNewCodexTabInGroup: (SidebarGroup?) -> Void = { _ in }
     var onNewOpenCodeTabInGroup: (SidebarGroup?) -> Void = { _ in }
+    var onNewAntigravityTabInGroup: (SidebarGroup?) -> Void = { _ in }
 
     /// Opens a terminal directly beside the selected one — same group, or
     /// ungrouped if that's where the selection lives — and hands back its
@@ -221,6 +222,7 @@ struct SidebarView: View {
             onNewClaudeTab: onNewClaudeTabInGroup,
             onNewCodexTab: onNewCodexTabInGroup,
             onNewOpenCodeTab: onNewOpenCodeTabInGroup,
+            onNewAntigravityTab: onNewAntigravityTabInGroup,
             editorCenter: editorCenter,
             onNewWorktreeTab: layout.onNewWorktreeTab,
             onNewWorktreeTabInGroup: layout.onNewWorktreeTabInGroup
@@ -324,6 +326,7 @@ struct SidebarTitlebarChrome: View {
     @AppStorage("SidebarShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage("SidebarShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
 
     /// Whether the pane actions (new terminal, new Claude session, new
     /// group, refresh) stay visible without a hover — off by default,
@@ -407,6 +410,13 @@ struct SidebarTitlebarChrome: View {
                     layout.onNewOpenCodeTab()
                 } label: {
                     OpenCodeIcon(size: 12)
+                }
+            }
+            if showAntigravity {
+                SidebarIconButton(help: "New Antigravity Session") {
+                    layout.onNewAntigravityTab()
+                } label: {
+                    AntigravityIcon(size: 12)
                 }
             }
             if showWorktreesPane {
@@ -619,6 +629,7 @@ private struct SidebarGroupSection: View {
     var onNewClaudeTab: (SidebarGroup?) -> Void = { _ in }
     var onNewCodexTab: (SidebarGroup?) -> Void = { _ in }
     var onNewOpenCodeTab: (SidebarGroup?) -> Void = { _ in }
+    var onNewAntigravityTab: (SidebarGroup?) -> Void = { _ in }
 
     /// Passed straight through to the rows, which is the only reason this
     /// view knows about either: a group header draws no documents and opens
@@ -638,6 +649,7 @@ private struct SidebarGroupSection: View {
     @AppStorage("SidebarGroupShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage("SidebarGroupShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarGroupShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var showWorktree = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
@@ -808,6 +820,16 @@ private struct SidebarGroupSection: View {
                 .allowsHitTesting(alwaysShowActions || isHeaderHovered)
             }
 
+            if showAntigravity {
+                SidebarIconButton(help: "New Antigravity Session in Group") {
+                    onNewAntigravityTab(group)
+                } label: {
+                    AntigravityIcon(size: 12)
+                }
+                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+            }
+
             /// Always a new terminal from here, never a migration: a header
             /// stands for several terminals, so there is no single tab a
             /// switch could be about. See `WorktreeEntryRule`.
@@ -864,6 +886,7 @@ private struct SidebarGroupSection: View {
         Button("New Claude Session in Group") { onNewClaudeTab(group) }
         Button("New Codex Session in Group") { onNewCodexTab(group) }
         Button("New OpenCode Session in Group") { onNewOpenCodeTab(group) }
+        Button("New Antigravity Session in Group") { onNewAntigravityTab(group) }
 
         Divider()
 
@@ -1306,6 +1329,7 @@ private struct SidebarTabRow: View {
     @AppStorage("SidebarTabShowClaude") private var showClaudeAction = AgentButtonDefaults.isShown(.claude)
     @AppStorage("SidebarTabShowCodex") private var showCodexAction = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarTabShowAntigravity") private var showAntigravityAction = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage("SidebarTabShowWorktree") private var showWorktreeAction = true
     @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
@@ -1337,6 +1361,7 @@ private struct SidebarTabRow: View {
         if showClaudeAction { shown.insert(.claude) }
         if showCodexAction { shown.insert(.codex) }
         if showOpenCodeAction { shown.insert(.opencode) }
+        if showAntigravityAction { shown.insert(.antigravity) }
 
         return TabRowAgentActions.agents(shown: shown, liveAgent: tab.liveAgent)
     }
@@ -1349,6 +1374,7 @@ private struct SidebarTabRow: View {
         case .claude: ClaudeIcon(size: 11)
         case .codex: CodexIcon(size: 11)
         case .opencode: OpenCodeIcon(size: 11)
+        case .antigravity: AntigravityIcon(size: 11)
         }
     }
 

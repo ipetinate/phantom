@@ -172,6 +172,7 @@ struct SidebarGroupIcon: View {
         case .claude: ClaudeIcon(size: size, tint: .original)
         case .codex: CodexIcon(size: size, originalColors: true)
         case .opencode: OpenCodeIcon(size: size, originalColors: true)
+        case .antigravity: AntigravityIcon(size: size, tint: .original)
         }
     }
 }

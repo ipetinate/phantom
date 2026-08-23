@@ -50,6 +50,7 @@ struct WorktreeFamilyView: View {
     @AppStorage("SidebarShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage("SidebarShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
 
     @State private var ownFilter = ""
 
@@ -375,6 +376,7 @@ struct WorktreeFamilyView: View {
             case .claude: return showClaude
             case .codex: return showCodex
             case .opencode: return showOpenCode
+            case .antigravity: return showAntigravity
             }
         }
     }

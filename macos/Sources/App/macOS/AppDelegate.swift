@@ -242,6 +242,7 @@ class AppDelegate: NSObject,
         ClaudeHooksInstaller.repairIfStale()
         CodexHooksInstaller.repairIfStale()
         OpenCodeHooksInstaller.repairIfStale()
+        AntigravityHooksInstaller.repairIfStale()
 
         // Watching for the moments a window can become unreachable, before
         // any window exists to have them. Development builds only; see
