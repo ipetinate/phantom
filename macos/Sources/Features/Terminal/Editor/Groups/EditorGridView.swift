@@ -104,11 +104,15 @@ private struct EditorGridCell: View {
     @ObservedObject var search: WorkspaceSearchCenter
     let terminal: NSView
 
-    @ObservedObject private var palette: ThemePalette = .shared
-
-    /// Where a drag hovering over this cell would put the tab, and nil when
-    /// nothing is over it. Per cell, so two cells can never both be lit.
-    @State private var dropZone: EditorDropZone?
+    /// Where a drag hovering over this cell would put the tab. Per cell, so
+    /// two cells can never both be lit.
+    ///
+    /// `@State` holding an object, not `@StateObject`: `@State` keeps the
+    /// instance alive for the cell's lifetime without subscribing to it, so a
+    /// zone written from a drag callback does **not** re-run this body. That
+    /// matters because this body builds the drop target — see
+    /// `EditorCellDropState` for the enter/leave storm it caused when it did.
+    @State private var drop = EditorCellDropState()
 
     var body: some View {
         GeometryReader { geometry in
@@ -121,61 +125,21 @@ private struct EditorGridCell: View {
                 .background(coat)
                 surface
             }
-            .overlay(alignment: .topLeading) { highlight(in: geometry.size) }
-            .animation(.easeOut(duration: 0.12), value: dropZone)
-            /// Cleared whenever the grid changes shape, which a completed
-            /// drop always does. `dropExited` covers a drag that leaves the
-            /// cell, but a session that dies mid-flight — the pointer never
-            /// lifting inside any cell — would otherwise leave the wash
-            /// painted over a pane nobody is dragging onto.
-            .onChange(of: center.tree) { _ in dropZone = nil }
+            .overlay(alignment: .topLeading) {
+                EditorCellDropHighlight(state: drop, size: geometry.size)
+            }
             .onDrop(
                 of: [EditorTabDrag.type],
                 delegate: EditorCellDropDelegate(
                     size: geometry.size,
                     barHeight: center.showsTabBar(in: group.id) ? EditorTabBar.height : 0,
-                    zone: { dropZone = $0 },
+                    state: drop,
                     perform: { item, zone in
                         center.drop(item, on: group.id, zone: zone)
                     },
-                    label: cellLabel,
-                    currentZone: { dropZone }
+                    label: cellLabel
                 )
             )
-        }
-    }
-
-    /// The shape the arriving tab would take, drawn over the cell: a blurred
-    /// panel, a hairline ring in the theme's accent, and a word for what the
-    /// drop will do.
-    ///
-    /// Blurred rather than tinted. A translucent wash over a terminal full of
-    /// output left the text legible underneath and the panel looking like a
-    /// stain; a material makes the region read as a *destination* — the
-    /// content behind it is still placed, but plainly not the subject.
-    ///
-    /// Edge to edge, with only the corners rounded. Inset by a few points it
-    /// left a frame of bare window showing on all four sides, which read as
-    /// the panel being broken rather than as a margin.
-    ///
-    /// Hit testing off: this sits above the cell while a drag is in flight,
-    /// and a view that answered the pointer here would take the drop away
-    /// from the delegate underneath it.
-    @ViewBuilder
-    private func highlight(in size: CGSize) -> some View {
-        if let dropZone {
-            let rect = dropZone.highlight(in: size)
-            let accent = palette.accent ?? .accentColor
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(accent.opacity(0.85), lineWidth: 1)
-                }
-                .overlay { dropLabel(for: dropZone, accent: accent) }
-                .frame(width: max(rect.width, 0), height: max(rect.height, 0))
-                .offset(x: rect.minX, y: rect.minY)
-                .allowsHitTesting(false)
         }
     }
 
@@ -186,28 +150,6 @@ private struct EditorGridCell: View {
         if center.hostsTerminal(group.id) { return "terminal cell" }
         let name = group.tabs.selectedPath.map { ($0 as NSString).lastPathComponent }
         return "cell(\(name ?? "empty"))"
-    }
-
-    /// What the drop will do, said in the destination it will do it to.
-    ///
-    /// Two answers, because there are two: the centre and the bar take the tab
-    /// into this cell, an edge makes a cell of its own. Naming the outcome
-    /// beats naming the gesture — the reader already knows they are dragging.
-    private func dropLabel(for zone: EditorDropZone, accent: Color) -> some View {
-        let isMove = zone == .center
-        return HStack(spacing: 6) {
-            Image(systemName: isMove ? "arrow.down.right.square" : "rectangle.split.2x1")
-                .font(.system(size: 11, weight: .semibold))
-            Text(isMove ? "Move here" : "Split here")
-                .font(palette.font(size: 11, weight: .semibold))
-        }
-        .foregroundStyle(accent)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.thinMaterial, in: Capsule())
-        .overlay {
-            Capsule().strokeBorder(accent.opacity(0.35), lineWidth: 1)
-        }
     }
 
     /// The coat behind this cell's own drawing: the terminal's background
@@ -240,6 +182,76 @@ private struct EditorGridCell: View {
                 search: search
             )
             .background(coat)
+        }
+    }
+}
+
+/// The shape an arriving tab would take, drawn over one cell: a blurred
+/// panel, a hairline ring in the theme's accent, and a word for what the drop
+/// will do.
+///
+/// Its own view, and the only thing that observes the drag state. The cell
+/// around it builds the drop target, so a highlight that re-ran the cell's
+/// body rebuilt that target on every pointer move — see
+/// `EditorCellDropState`.
+///
+/// Blurred rather than tinted. A translucent wash over a terminal full of
+/// output left the text legible underneath and the panel looking like a
+/// stain; a material makes the region read as a *destination* — the content
+/// behind it is still placed, but plainly not the subject.
+///
+/// Edge to edge, with only the corners rounded. Inset by a few points it left
+/// a frame of bare window showing on all four sides, which read as the panel
+/// being broken rather than as a margin.
+///
+/// Hit testing off: this sits above the cell while a drag is in flight, and a
+/// view that answered the pointer here would take the drop away from the
+/// delegate underneath it.
+private struct EditorCellDropHighlight: View {
+    @ObservedObject var state: EditorCellDropState
+    let size: CGSize
+
+    @ObservedObject private var palette: ThemePalette = .shared
+
+    var body: some View {
+        Group {
+            if let zone = state.zone {
+                let rect = zone.highlight(in: size)
+                let accent = palette.accent ?? .accentColor
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(accent.opacity(0.85), lineWidth: 1)
+                    }
+                    .overlay { label(for: zone, accent: accent) }
+                    .frame(width: max(rect.width, 0), height: max(rect.height, 0))
+                    .offset(x: rect.minX, y: rect.minY)
+            }
+        }
+        .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.12), value: state.zone)
+    }
+
+    /// What the drop will do, said in the destination it will do it to.
+    ///
+    /// Two answers, because there are two: the centre and the bar take the tab
+    /// into this cell, an edge makes a cell of its own. Naming the outcome
+    /// beats naming the gesture — the reader already knows they are dragging.
+    private func label(for zone: EditorDropZone, accent: Color) -> some View {
+        let isMove = zone == .center
+        return HStack(spacing: 6) {
+            Image(systemName: isMove ? "arrow.down.right.square" : "rectangle.split.2x1")
+                .font(.system(size: 11, weight: .semibold))
+            Text(isMove ? "Move here" : "Split here")
+                .font(palette.font(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(accent)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.thinMaterial, in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(accent.opacity(0.35), lineWidth: 1)
         }
     }
 }

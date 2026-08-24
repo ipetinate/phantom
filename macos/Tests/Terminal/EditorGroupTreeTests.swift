@@ -435,3 +435,42 @@ struct EditorDropZoneTests {
         #expect(EditorDropZone.bottom.split?.onFirstSide == false)
     }
 }
+
+/// The highlight's own state, which is a reference type for a measured
+/// reason — see `EditorCellDropState`.
+@MainActor
+struct EditorCellDropStateTests {
+    @Test func showingTheSameZoneTwiceIsOneChange() {
+        let state = EditorCellDropState()
+        state.show(.top)
+        state.show(.top)
+        #expect(state.zone == .top)
+    }
+
+    /// The reader takes a tab and drops it back on the cell it came from.
+    /// That session ends with neither `performDrop` nor `dropExited` reaching
+    /// this cell, and the panel used to stay painted over the pane for good.
+    ///
+    /// No mouse button is down in a test host, which is exactly the condition
+    /// the watchdog reads, so this is the real path rather than a stand-in.
+    @Test func aPanelCannotOutliveTheMouseButton() async throws {
+        let state = EditorCellDropState()
+        state.show(.bottom)
+        #expect(state.zone == .bottom)
+
+        for _ in 0..<20 where state.zone != nil {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(state.zone == nil, "the watchdog left a highlight with no drag behind it")
+    }
+
+    @Test func clearingItLeavesNothingToClear() async throws {
+        let state = EditorCellDropState()
+        state.show(.leading)
+        state.show(nil)
+        #expect(state.zone == nil)
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(state.zone == nil)
+    }
+}

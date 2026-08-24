@@ -57,6 +57,60 @@ enum EditorTabDrag {
     }
 }
 
+/// Where a drag hovering over one cell would land.
+///
+/// A reference type, and that is the whole point. This held SwiftUI `@State`
+/// in the cell, and writing it from a drag callback re-ran the cell's body —
+/// which handed `.onDrop` a freshly built delegate, which SwiftUI registered
+/// as a new drop target, which fired `dropExited` and then `dropEntered`. The
+/// breadcrumbs from a single drag read as dozens of enter/leave pairs, one per
+/// pointer move, because the highlight was rebuilding the thing that draws it.
+///
+/// What the reader saw was that loop: a panel that flickered while they aimed,
+/// nothing at all when the race settled on the exit, and a panel left painted
+/// over a cell when it settled on the entry with the drag already over.
+///
+/// Held by the cell in `@State` — which stores an object without subscribing
+/// to it — so only the small view that draws the highlight observes this, and
+/// the cell that owns the drop target never rebuilds while a drag is in
+/// flight.
+@MainActor
+final class EditorCellDropState: ObservableObject {
+    @Published private(set) var zone: EditorDropZone?
+
+    func show(_ zone: EditorDropZone?) {
+        guard self.zone != zone else { return }
+        self.zone = zone
+        watch()
+    }
+
+    /// A drag whose session ends without a callback to this cell.
+    ///
+    /// `performDrop` and `dropExited` cover the two ordinary endings, and a
+    /// cancelled session — the pointer lifting over the cell it started in,
+    /// which is the reader taking a tab back — reaches neither. The mouse
+    /// button is the ground truth: no button down, no drag, so nothing may
+    /// still be highlighted. `pressedMouseButtons` is non-zero for the whole
+    /// of a real drag, so this cannot clear one that is still live.
+    private var watchdog: Timer?
+
+    private func watch() {
+        watchdog?.invalidate()
+        watchdog = nil
+        guard zone != nil else { return }
+
+        watchdog = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] timer in
+            guard NSEvent.pressedMouseButtons == 0 else { return }
+            timer.invalidate()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.watchdog = nil
+                self.zone = nil
+            }
+        }
+    }
+}
+
 /// Where a drag over one cell would land, and the highlight that says so.
 ///
 /// The zone comes from `EditorDropZone.resolve`, which is tested on its own,
@@ -75,7 +129,10 @@ struct EditorCellDropDelegate: DropDelegate {
 
     /// Written on every move, so the highlight follows the pointer between
     /// the centre and the four edges rather than latching on entry.
-    let zone: (EditorDropZone?) -> Void
+    ///
+    /// The object rather than a closure over view state: see
+    /// `EditorCellDropState` for what writing view state from here cost.
+    let state: EditorCellDropState
 
     let perform: (EditorCenter.DragItem, EditorDropZone) -> Void
 
@@ -90,7 +147,7 @@ struct EditorCellDropDelegate: DropDelegate {
             + "\(Int(info.location.x)),\(Int(info.location.y)) "
             + "size=\(Int(size.width))x\(Int(size.height)) bar=\(Int(barHeight)) "
             + "zone=\(resolve(info))")
-        zone(resolve(info))
+        state.show(resolve(info))
     }
 
     /// No proposal of its own, deliberately.
@@ -103,18 +160,18 @@ struct EditorCellDropDelegate: DropDelegate {
     /// callback, so the tab flew back and nothing happened. Nil takes the
     /// default proposal, which is by construction one the source allows.
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        zone(resolve(info))
+        state.show(resolve(info))
         return nil
     }
 
     func dropExited(info: DropInfo) {
         WindowBreadcrumbs.note("tab drag: left \(label)")
-        zone(nil)
+        state.show(nil)
     }
 
     func performDrop(info: DropInfo) -> Bool {
         let target = resolve(info)
-        zone(nil)
+        state.show(nil)
 
         guard let provider = info.itemProviders(for: [Self.dragType]).first else {
             WindowBreadcrumbs.note("tab drag: dropped with no provider of our type")
@@ -141,18 +198,17 @@ struct EditorCellDropDelegate: DropDelegate {
         return true
     }
 
-    /// The zone last reported for this cell, which is what the hysteresis in
-    /// `EditorDropZone.resolve` holds on to. Read from the view's own state
-    /// rather than kept here: a delegate is rebuilt on every SwiftUI update,
-    /// so anything it remembered itself would be forgotten between moves.
-    let currentZone: () -> EditorDropZone?
-
+    /// The zone last reported for this cell is read from `state`, which is
+    /// what the hysteresis in `EditorDropZone.resolve` holds on to. Kept
+    /// there rather than here because a delegate is a value SwiftUI rebuilds
+    /// on every update, so anything it remembered itself would be forgotten
+    /// between two moves of the pointer.
     private func resolve(_ info: DropInfo) -> EditorDropZone {
         EditorDropZone.resolve(
             point: info.location,
             in: size,
             barHeight: barHeight,
-            current: currentZone())
+            current: state.zone)
     }
 }
 
