@@ -723,6 +723,12 @@ private struct DocumentView: View {
         CodeTextView(
             text: document.currentText,
             textRevision: document.revision,
+            replacementName: document.replacementName,
+            replacementIsUndoable: document.replacementIsUndoable,
+            /// Fetched by path rather than held in `@State`: the state would
+            /// die with this view, which is the whole failure the timeline
+            /// exists to remove. The lookup is a dictionary hit.
+            undoTimeline: EditorUndoCenter.shared.timeline(forPath: document.url.path),
             /// Through the resolver, not `CodeLanguage.resolve` — a
             /// language an extension contributed carries its own
             /// keywords and comment markers, and asking the filename
@@ -1318,7 +1324,7 @@ private struct DocumentView: View {
             guard document.revision == revision else { return true }
 
             let formatted = edit.applied(to: text)
-            document.replaceText(formatted)
+            document.replaceText(formatted, named: "Formatting")
             lsp.didChange(path: path, text: formatted)
             return true
         }
@@ -1359,7 +1365,7 @@ private struct DocumentView: View {
             }
             guard document.revision == revision else { return }
             let formatted = LSPTextEdit.apply(edits, to: document.currentText)
-            document.replaceText(formatted)
+            document.replaceText(formatted, named: "Formatting")
 
             /// Told explicitly, because a programmatic replacement does not
             /// travel the path a keystroke does. `replaceText` sets the
@@ -1409,7 +1415,7 @@ private struct DocumentView: View {
                     /// it re-reads each file immediately before editing it.
                     guard document.revision == revision else { continue }
                     let renamed = LSPTextEdit.apply(edits, to: document.currentText)
-                    document.replaceText(renamed)
+                    document.replaceText(renamed, named: "Rename")
                     lsp.didChange(path: path, text: renamed)
                 } else if let existing = try? String(contentsOfFile: path, encoding: .utf8) {
                     let updated = LSPTextEdit.apply(edits, to: existing)

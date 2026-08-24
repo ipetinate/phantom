@@ -415,6 +415,11 @@ final class EditorCenter: ObservableObject {
 
             documents[path] = document
             document.startWatching()
+            /// Before the tab exists, so the first render already has the
+            /// timeline this file left behind — and so the disk check that
+            /// may throw it away happens once, here, with the text that was
+            /// just read rather than one the view guessed at.
+            EditorUndoCenter.shared.attach(path: path, text: document.currentText)
             // The tab's dirty dot follows the document, and the document is
             // its own observable object — a change inside it doesn't reach
             // this one on its own.
@@ -614,6 +619,13 @@ final class EditorCenter: ObservableObject {
 
     func close(_ path: String) {
         documents[path]?.stopWatching()
+        /// Before the document goes, because what is being recorded is the
+        /// text it holds: from here until the file is opened again, the only
+        /// thing that can change it is the world outside this app, and that
+        /// fingerprint is what notices.
+        if let document = documents[path] {
+            EditorUndoCenter.shared.detach(path: path, text: document.currentText)
+        }
         documents.removeValue(forKey: path)
         documentObservers.removeValue(forKey: path)
         media.removeValue(forKey: path)
@@ -651,6 +663,9 @@ final class EditorCenter: ObservableObject {
 
     func closeAll() {
         documents.values.forEach { $0.stopWatching() }
+        for (path, document) in documents {
+            EditorUndoCenter.shared.detach(path: path, text: document.currentText)
+        }
         documents.removeAll()
         documentObservers.removeAll()
         media.removeAll()
@@ -730,6 +745,12 @@ final class EditorCenter: ObservableObject {
         document.stopWatching()
         documentObservers.removeValue(forKey: oldPath)
         if wasAnnounced { LSPCenter.shared.didClose(path: oldPath) }
+
+        /// The history moves with the buffer. A rename is one file changing
+        /// address, so leaving the timeline at the old path would drop it on
+        /// the floor — and would leave a stale entry keyed to a path nothing
+        /// will ask for again.
+        EditorUndoCenter.shared.repath(from: oldPath, to: newPath)
 
         let moved = document.transferred(to: URL(fileURLWithPath: newPath))
         documents[newPath] = moved
@@ -866,6 +887,13 @@ final class EditorCenter: ObservableObject {
         leaving.stopWatching()
         documentObservers.removeValue(forKey: oldPath)
         if wasAnnounced { LSPCenter.shared.didClose(path: oldPath) }
+
+        /// Not `repath`: a worktree switch means there are two files, and the
+        /// one arriving is the other one. Its history is its own — checked
+        /// against the text just read off that checkout, which is what stops
+        /// a timeline recorded on one branch being offered over another's.
+        EditorUndoCenter.shared.detach(path: oldPath, text: leaving.currentText)
+        EditorUndoCenter.shared.attach(path: newPath, text: arrived.currentText)
 
         /// The one thing that does travel: how the file was being looked at.
         /// A reader who switched an SVG to its source is asking about this

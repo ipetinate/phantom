@@ -33,6 +33,28 @@ struct CodeTextView: NSViewRepresentable {
     /// `text` when this changes and at no other time.
     let textRevision: Int
 
+    /// What the host's last replacement should be called on the undo stack,
+    /// so the Edit menu offers "Undo Formatting" rather than naming whatever
+    /// the reader typed before it.
+    var replacementName: String = "Replace"
+
+    /// Whether the host's last replacement may be taken back.
+    ///
+    /// False for one case and it is the dangerous one: text that came off the
+    /// disk. Undoing a reload would put the pre-checkout file back into the
+    /// buffer, and the next ⌘S would write it over whatever the checkout left
+    /// there. So a reload does not become a step, and it takes the steps
+    /// before it with it — they describe a document that no longer exists.
+    var replacementIsUndoable = true
+
+    /// The undo history for the file being shown.
+    ///
+    /// Handed in rather than owned, because it has to outlive this view: the
+    /// pane is tagged with the document's id, so changing tabs destroys and
+    /// rebuilds it, and a stack stored on the view goes with it. Nil is a
+    /// supported state — a view with no host keeps a timeline of its own.
+    var undoTimeline: CodeUndoTimeline?
+
     /// How this file is lexed, base language included.
     ///
     /// Not a bare `CodeLanguage`: a language an extension contributed has no
@@ -181,7 +203,12 @@ struct CodeTextView: NSViewRepresentable {
         /// Selectable whichever way that went: a read-only file is still one
         /// you copy out of, search in, and ⌘-click through.
         textView.isSelectable = true
-        textView.allowsUndo = true
+        /// Off, and the file's timeline registers every step instead. Left on,
+        /// `NSTextView` registers its own undo operations against **itself**,
+        /// and an operation whose target is a view SwiftUI has already torn
+        /// down cannot put anything back into the view that replaced it — see
+        /// ``CodeUndoTimeline``.
+        textView.allowsUndo = false
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -327,6 +354,9 @@ struct CodeTextView: NSViewRepresentable {
             object: scrollView.contentView
         )
 
+        if let undoTimeline { textView.undoTimeline = undoTimeline }
+        context.coordinator.hostEditName = replacementName
+        context.coordinator.hostEditIsUndoable = replacementIsUndoable
         context.coordinator.applyIfNewRevision(text: text, revision: textRevision)
         context.coordinator.applyAppearance(
             theme: theme,
@@ -389,6 +419,15 @@ struct CodeTextView: NSViewRepresentable {
         // the edits, insertion point back to zero. A revision the host bumps
         // when it means it says the one thing a comparison cannot: who
         // changed it.
+        //
+        // The timeline is reattached first, and on every update rather than
+        // once: a file renamed while it is open keeps its history, and that
+        // history is keyed by the path the file has now.
+        if let undoTimeline, let code = textView as? CodeNSTextView {
+            code.undoTimeline = undoTimeline
+        }
+        context.coordinator.hostEditName = replacementName
+        context.coordinator.hostEditIsUndoable = replacementIsUndoable
         context.coordinator.applyIfNewRevision(text: text, revision: textRevision)
 
         // After the text, so a jump into a file that is being opened in the
@@ -468,12 +507,156 @@ struct CodeTextView: NSViewRepresentable {
         }
 
         /// Replaces the buffer only when the host says it has new content.
+        ///
+        /// The first revision and every one after it are different jobs, and
+        /// running them through the same code is what made formatting throw
+        /// the reader to the top of the file. Loading a document is allowed to
+        /// rebuild the storage and start at line one, because there is nothing
+        /// yet to keep. Every later revision — a formatter, a rename, a
+        /// reload — is a change to a document somebody is *reading*, so it is
+        /// spliced in instead, with the caret and the viewport carried across
+        /// it.
         func applyIfNewRevision(text: String, revision: Int) {
             guard revision != appliedRevision else { return }
+            let isFirstLoad = appliedRevision == Int.min
             appliedRevision = revision
-            apply(text: text)
+            if isFirstLoad {
+                apply(text: text)
+            } else {
+                replace(with: text)
+            }
         }
 
+        /// Splices in what the host produced, leaving the reader where they
+        /// were.
+        ///
+        /// Three things were wrong with replacing the storage instead, and
+        /// only the first was visible: the caret went to offset zero, the view
+        /// scrolled to the top, and — because `setAttributedString` is a
+        /// mutation of the storage rather than an edit of the text view —
+        /// nothing was registered on any undo stack, so ⌘Z after ⇧⌘F had
+        /// nothing to take back. Routing the minimal edit through
+        /// `shouldChangeText`/`didChangeText` fixes the third by construction;
+        /// the selection and the scroll origin are carried across by hand.
+        ///
+        /// The selection is *mapped*, not restored. Formatting moves text, so
+        /// the same offset is a different place afterwards — see
+        /// ``CodeTextEdit/movedCaret(from:)`` for what happens to a caret that
+        /// was sitting inside the rewritten span.
+        ///
+        /// The viewport is restored by its raw origin, clamped. That is exact
+        /// whenever the edit lands at or below the top of the viewport, which
+        /// is the ordinary case for a reformat; when lines are added or
+        /// removed *above* what is on screen the content drifts by their
+        /// height. Doing better means measuring the top line's position before
+        /// and after, and every route to that measurement in TextKit 1 is one
+        /// of the calls that silently drops this view out of TextKit 2.
+        func replace(with text: String) {
+            guard let textView = textView as? CodeNSTextView,
+                  let textStorage = textView.textStorage
+            else {
+                apply(text: text)
+                return
+            }
+
+            guard let edit = CodeTextEdit.minimal(from: textStorage.string, to: text) else { return }
+
+            let selections = textView.selectedRanges
+                .map(\.rangeValue)
+                .map { edit.movedSelection($0) }
+            let origin = textView.enclosingScrollView?.contentView.bounds.origin
+
+            /// Set for the same reason `apply` sets it: `textDidChange` is
+            /// what reports the buffer back out through `onEdit`, and the host
+            /// making this replacement already knows what it wrote — it is the
+            /// one that told the language server. What is *not* suppressed is
+            /// the undo registration, which happens on the view and is the
+            /// point of coming through here at all.
+            isApplyingExternalText = true
+            textView.applyHostEdit(edit, name: hostEditName)
+            isApplyingExternalText = false
+
+            /// After the edit, not before it. Clearing first would leave the
+            /// reload itself sitting on the stack as the one step ⌘Z could
+            /// still reach, which is precisely the step that must not exist.
+            if !hostEditIsUndoable { textView.undoTimeline.clear() }
+
+            /// Clamped as well as mapped. The arithmetic answers where each
+            /// end went; the buffer answers how long it is now, and a
+            /// selection reaching past the end of it is a crash rather than a
+            /// wrong highlight.
+            let length = (textView.string as NSString).length
+            let clamped = selections
+                .map { moved -> NSValue in
+                    let start = min(max(0, moved.location), length)
+                    return NSValue(range: NSRange(
+                        location: start,
+                        length: min(moved.length, length - start)))
+                }
+            if !clamped.isEmpty { textView.selectedRanges = clamped }
+
+            refreshAfterReplacement(in: textStorage)
+            updateCurrentLineBand()
+            if let origin {
+                scroll(to: origin)
+                /// And again once layout has settled, for the reason the load
+                /// path gives: a scroll asked for before AppKit has re-laid
+                /// the document is answered against the old frame.
+                DispatchQueue.main.async { [weak self] in self?.scroll(to: origin) }
+            }
+        }
+
+        /// What the next host replacement is called on the undo stack, so the
+        /// Edit menu can say "Undo Formatting" rather than "Undo Typing".
+        var hostEditName = "Replace"
+
+        /// Whether the next host replacement may be taken back. See
+        /// ``CodeTextView/replacementIsUndoable``.
+        var hostEditIsUndoable = true
+
+        /// The colouring, the gutter and the minimap after a splice.
+        ///
+        /// The same work `apply` does, minus rebuilding the storage —
+        /// `textDidChange` normally does it and is suppressed here, so it has
+        /// to be done explicitly or a formatted file keeps the colours of the
+        /// text it replaced.
+        private func refreshAfterReplacement(in textStorage: NSTextStorage) {
+            highlightsOnDemand = textStorage.length > Self.wholeDocumentBudget
+            if highlightsOnDemand {
+                highlightVisibleRegion()
+            } else {
+                let full = NSRange(location: 0, length: textStorage.length)
+                storage.highlight(textStorage, in: full)
+                colorBrackets(in: full)
+            }
+            gutter?.reload()
+            scheduleMinimapRefresh()
+        }
+
+        /// Puts the viewport back where it was, without letting it past the
+        /// ends of a document that may have got shorter.
+        private func scroll(to origin: NSPoint) {
+            guard let textView, let scrollView = textView.enclosingScrollView else { return }
+            let visible = scrollView.contentView.bounds.size
+            let document = textView.frame.size
+            let target = NSPoint(
+                x: min(max(0, origin.x), max(0, document.width - visible.width)),
+                y: min(max(0, origin.y), max(0, document.height - visible.height))
+            )
+            scrollView.contentView.scroll(to: target)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            gutter?.needsDisplay = true
+        }
+
+        /// Loads a document into an empty view: storage rebuilt, caret at the
+        /// start, viewport at the top.
+        ///
+        /// Only for the first revision — see `applyIfNewRevision`. Nothing
+        /// here is registered on the undo stack, and that is deliberate: a
+        /// ⌘Z whose first step empties the file is not an undo stack, it is a
+        /// trap. It also means a tab being rebuilt after a switch leaves the
+        /// file's timeline exactly as it was, which is what lets ⌘Z keep
+        /// working across the switch.
         func apply(text: String) {
             guard let textView, let textStorage = textView.textStorage else { return }
             isApplyingExternalText = true
@@ -1294,7 +1477,7 @@ final class CurrentLineBandView: NSView {
 /// The text view itself, kept as a named subclass so the tab and save
 /// key handling in the host has something to attach to — and so a test can
 /// assert it came up in TextKit 2.
-final class CodeNSTextView: NSTextView {
+final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// ⌘S, ⇧⌘S and ⌘W, supplied by the host.
     ///
     /// Handled here rather than by a window- or app-level monitor because
@@ -2399,16 +2582,87 @@ final class CodeNSTextView: NSTextView {
     /// field arithmetic needs.
     private var pendingEdit: (range: NSRange, delta: Int)?
 
+    /// The same edit again, in the shape the file's timeline records.
+    ///
+    /// Captured here because this is the only moment the *old* text is still
+    /// in the buffer, and a step that cannot say what it replaced cannot be
+    /// undone once the view that made it is gone. Every write in this class
+    /// comes through here — typing, a completion and its imports, a snippet, a
+    /// deleted bracket pair, a formatter's splice — so one hook covers all of
+    /// them and no writer can be added that quietly misses it.
+    private var pendingUndoStep: CodeUndoStep?
+
     override func shouldChangeText(in range: NSRange, replacementString: String?) -> Bool {
         if snippetSession != nil {
             let inserted = (replacementString as NSString?)?.length ?? 0
             pendingEdit = (range, inserted - range.length)
         }
+
+        pendingUndoStep = undoStep(replacing: range, with: replacementString)
         return super.shouldChangeText(in: range, replacementString: replacementString)
+    }
+
+    /// The step this change would be, or nil when there is nothing worth
+    /// recording.
+    ///
+    /// Nil for an attribute-only change — `replacementString` is nil for
+    /// those, and colouring the syntax is not something anybody wants back —
+    /// for a replacement of a text by itself, and for the buffer being moved
+    /// by the timeline, which would otherwise record its own undo as the next
+    /// thing to undo.
+    private func undoStep(replacing range: NSRange, with replacement: String?) -> CodeUndoStep? {
+        guard let replacement, !undoTimeline.isApplying else { return nil }
+
+        let content = string as NSString
+        guard range.location >= 0, NSMaxRange(range) <= content.length else { return nil }
+
+        let removed = content.substring(with: range)
+        guard removed != replacement else { return nil }
+
+        return CodeUndoStep(
+            range: range,
+            removed: removed,
+            inserted: replacement,
+            selectionBefore: selectedRange(),
+            selectionAfter: NSRange(
+                location: range.location + (replacement as NSString).length,
+                length: 0),
+            name: hostEditName ?? Self.undoName(removed: removed, inserted: replacement))
+    }
+
+    /// What the Edit menu calls a step, from the shape of the edit.
+    private static func undoName(removed: String, inserted: String) -> String {
+        if removed.isEmpty { return "Typing" }
+        if inserted.isEmpty { return "Delete" }
+        return "Replace"
+    }
+
+    /// Hands the captured step to the timeline, with the selection the edit
+    /// actually left behind.
+    ///
+    /// The live selection is preferred over the one worked out on the way in,
+    /// because for typing AppKit has already moved the caret by now and knows
+    /// better than the arithmetic does. It is trusted only when it landed
+    /// inside the text just inserted: several writers in this class call
+    /// `didChangeText` and place the caret *after* it, and reading a caret
+    /// that has not moved yet would record a step that redoes to the wrong
+    /// place.
+    private func recordPendingUndoStep() {
+        guard var step = pendingUndoStep else { return }
+        pendingUndoStep = nil
+
+        let end = step.range.location + (step.inserted as NSString).length
+        let live = selectedRange()
+        if live.length == 0, live.location >= step.range.location, live.location <= end {
+            step.selectionAfter = live
+        }
+
+        undoTimeline.record(step, at: Date().timeIntervalSinceReferenceDate)
     }
 
     override func didChangeText() {
         super.didChangeText()
+        recordPendingUndoStep()
 
         /// The card is pinned to a screen position and the text it describes has
         /// just moved out from under it. `keyDown` covers what the reader types;
@@ -2704,12 +2958,14 @@ final class CodeNSTextView: NSTextView {
             in: string as NSString
         )
 
-        /// Everything lands inside one undo group, so a single ⌘Z takes back
-        /// the completion *and* the import it dragged in. Two steps would
-        /// leave the reader with an import for a symbol they just removed —
-        /// and they would have to notice that to fix it.
-        undoManager?.beginUndoGrouping()
-        defer { undoManager?.endUndoGrouping() }
+        /// On the file's timeline, not on `undoManager` — that one is
+        /// AppKit's plumbing and holds none of these steps. Everything below
+        /// lands inside one group, so a single ⌘Z takes back the completion
+        /// *and* the import it dragged in. Two steps would leave the reader
+        /// with an import for a symbol they just removed — and they would have
+        /// to notice that to fix it.
+        undoTimeline.beginGrouping()
+        defer { undoTimeline.endGrouping() }
 
         /// The additional edits go in **first, back to front**. Every range
         /// the server sent is measured against the document as it was, so
@@ -3292,7 +3548,7 @@ final class CodeNSTextView: NSTextView {
         return view.isDescendant(of: self)
     }
 
-    /// This view's own undo stack.
+    /// This file's undo stack, which is not this view's.
     ///
     /// `NSTextView` asks the responder chain for an undo manager, and in this
     /// app the window's delegate answers with the *application's* one — the
@@ -3300,12 +3556,103 @@ final class CodeNSTextView: NSTextView {
     /// editor performed a window operation instead of undoing a keystroke, and
     /// typing registered nothing anybody could reach.
     ///
-    /// Owning one here keeps the two apart: text undo belongs to the buffer,
-    /// window undo belongs to the window, and neither can consume the other's
-    /// ⌘Z because only one of them has focus at a time.
-    private let textUndoManager = UndoManager()
+    /// Answering with a ``CodeUndoTimeline`` keeps the two apart the way a
+    /// stored `UndoManager` used to, and fixes what a stored one could not:
+    /// the timeline belongs to the file, so it survives this view being torn
+    /// down and rebuilt when the reader changes tabs, and survives the tab
+    /// being closed and opened again. See that type for why the stack could
+    /// not simply be moved onto the document.
+    ///
+    /// One is made on demand so a view with no host — a test, a preview —
+    /// still has somewhere to register. The host replaces it with the one
+    /// belonging to the file being shown.
+    private var ownUndoTimeline: CodeUndoTimeline?
 
-    override var undoManager: UndoManager? { textUndoManager }
+    var undoTimeline: CodeUndoTimeline {
+        get {
+            if let ownUndoTimeline { return ownUndoTimeline }
+            let made = CodeUndoTimeline()
+            made.target = self
+            ownUndoTimeline = made
+            return made
+        }
+        set {
+            /// The gesture in progress belongs to the file being left, and it
+            /// only exists inside the timeline until something ends it.
+            if newValue !== ownUndoTimeline { ownUndoTimeline?.flush() }
+            newValue.target = self
+            ownUndoTimeline = newValue
+        }
+    }
+
+    /// The manager `NSTextView` itself talks to, which is deliberately not
+    /// the one ⌘Z uses.
+    ///
+    /// Nothing real is registered here — `allowsUndo` is off — but AppKit
+    /// still reaches into whatever this returns while a change is being
+    /// prepared, and it throws outright if that manager is not grouping by
+    /// event. Returning the file's timeline instead cost either a crash or a
+    /// ⌘Z that takes back a format together with the sentence typed before
+    /// it; see ``CodeUndoTimeline``. Per view rather than shared, so window
+    /// undo — reopening a closed tab — can never be reached from a focused
+    /// editor.
+    private let appKitUndoManager = UndoManager()
+
+    override var undoManager: UndoManager? { appKitUndoManager }
+
+    /// Puts a step back, or puts it again.
+    ///
+    /// Through `shouldChangeText`/`didChangeText` like every other write in
+    /// this class, so the delegate fires and the language server hears about
+    /// it. The timeline has its own guard against recording what it is in the
+    /// middle of applying, which is what stops an undo from registering itself
+    /// as the next thing to undo.
+    ///
+    /// Both ranges are checked against the buffer rather than trusted. A step
+    /// describes a text; if anything has put a different one in front of it,
+    /// splicing at those offsets writes nonsense into the file — so a step
+    /// that does not fit is dropped instead.
+    func applyUndoStep(_ step: CodeUndoStep, undoing: Bool) {
+        let range = undoing ? step.rangeAfter : step.range
+        let replacement = undoing ? step.removed : step.inserted
+        let selection = undoing ? step.selectionBefore : step.selectionAfter
+
+        let content = string as NSString
+        guard range.location >= 0, NSMaxRange(range) <= content.length else { return }
+        guard content.substring(with: range) == (undoing ? step.inserted : step.removed) else { return }
+        guard shouldChangeText(in: range, replacementString: replacement) else { return }
+        textStorage?.replaceCharacters(in: range, with: replacement)
+        didChangeText()
+
+        let length = (string as NSString).length
+        let caret = NSRange(location: min(max(0, selection.location), length), length: 0)
+        setSelectedRange(caret)
+        scrollRangeToVisible(caret)
+    }
+
+    /// Applies a replacement the host computed — a formatter's, a language
+    /// server's, a file reloaded from disk.
+    ///
+    /// Here rather than on the coordinator because it has to travel the same
+    /// road a keystroke does: a bare `replaceCharacters` on the storage
+    /// registers no undo step, which is exactly how ⌘Z came to do nothing
+    /// after ⇧⌘F.
+    func applyHostEdit(_ edit: CodeTextEdit, name: String) {
+        let content = string as NSString
+        guard edit.range.location >= 0, NSMaxRange(edit.range) <= content.length else { return }
+
+        hostEditName = name
+        defer { hostEditName = nil }
+
+        guard shouldChangeText(in: edit.range, replacementString: edit.newText) else { return }
+        textStorage?.replaceCharacters(in: edit.range, with: edit.newText)
+        didChangeText()
+    }
+
+    /// What the edit in flight should be called on the undo stack, while one
+    /// is in flight. Nil the rest of the time, when the name is read off the
+    /// shape of the edit instead.
+    private var hostEditName: String?
 
     /// ⌘Z, answered by the view that holds the text.
     ///
@@ -3324,13 +3671,11 @@ final class CodeNSTextView: NSTextView {
     /// holds focus, which is precisely when ⌘Z means "take back what I
     /// typed".
     @objc func undo(_ sender: Any?) {
-        guard textUndoManager.canUndo else { return }
-        textUndoManager.undo()
+        undoTimeline.undo()
     }
 
     @objc func redo(_ sender: Any?) {
-        guard textUndoManager.canRedo else { return }
-        textUndoManager.redo()
+        undoTimeline.redo()
     }
 
     /// Validated against the same manager the action uses.
@@ -3345,12 +3690,12 @@ final class CodeNSTextView: NSTextView {
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(undo(_:)):
-            item.title = Self.undoTitle("Undo", actionName: textUndoManager.undoActionName)
-            return textUndoManager.canUndo
+            item.title = Self.undoTitle("Undo", actionName: undoTimeline.undoActionName)
+            return undoTimeline.canUndo
 
         case #selector(redo(_:)):
-            item.title = Self.undoTitle("Redo", actionName: textUndoManager.redoActionName)
-            return textUndoManager.canRedo
+            item.title = Self.undoTitle("Redo", actionName: undoTimeline.redoActionName)
+            return undoTimeline.canRedo
 
         default:
             return super.validateMenuItem(item)

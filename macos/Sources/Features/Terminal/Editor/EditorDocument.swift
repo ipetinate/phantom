@@ -126,9 +126,28 @@ final class EditorDocument: ObservableObject, Identifiable {
         if isDirty != changed { isDirty = changed }
     }
 
+    /// What the last replacement was, for the Edit menu to name.
+    ///
+    /// On the document rather than passed down beside the text because the
+    /// view reads it from here on the pass that applies the revision, and
+    /// those are the same pass.
+    @Published private(set) var replacementName = "Replace"
+
+    /// Whether the last replacement may be taken back. False only for text
+    /// that came off the disk — see ``CodeTextView/replacementIsUndoable``.
+    @Published private(set) var replacementIsUndoable = true
+
     /// Replaces the text from this side — a formatter, a rename, a reload.
     /// Bumping the revision is what tells the view to take it.
-    func replaceText(_ replacement: String) {
+    ///
+    /// - Parameters:
+    ///   - name: what the Edit menu calls the step this becomes.
+    ///   - undoable: false for a reload, which must not be taken back and
+    ///     invalidates everything recorded before it. See
+    ///     ``EditorUndoCenter`` for the rule and why it exists.
+    func replaceText(_ replacement: String, named name: String = "Replace", undoable: Bool = true) {
+        replacementName = name
+        replacementIsUndoable = undoable
         liveText = replacement
         text = replacement
         revision += 1
@@ -178,7 +197,7 @@ final class EditorDocument: ObservableObject, Identifiable {
                 ?? String(data: data, encoding: .isoLatin1)
         else { return }
 
-        replaceText(text)
+        replaceText(text, named: "Reload", undoable: false)
         self.diskText = text
         isDirty = false
         hasConflict = false
@@ -234,7 +253,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         if isDirty {
             hasConflict = true
         } else {
-            replaceText(onDisk)
+            replaceText(onDisk, named: "Reload", undoable: false)
             diskText = onDisk
         }
     }
