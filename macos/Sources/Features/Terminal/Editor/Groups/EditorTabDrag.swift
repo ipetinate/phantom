@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -40,20 +41,31 @@ enum EditorTabDrag {
         return path.isEmpty ? nil : .file(path)
     }
 
-    static func provider(for item: EditorCenter.DragItem) -> NSItemProvider {
-        let provider = NSItemProvider()
-        let payload = Data(text(for: item).utf8)
-        /// Own-process only: this names a tab inside this window, and nothing
-        /// outside the app could act on it.
-        provider.registerDataRepresentation(
-            forTypeIdentifier: type.identifier,
-            visibility: .ownProcess
-        ) { completion in
-            completion(payload, nil)
-            return nil
+}
+
+/// The payload as a `Transferable`, which is how it reaches the pasteboard.
+///
+/// `Transferable` rather than an `NSItemProvider` built by hand, because the
+/// repo already bridges one to AppKit — `pasteboardItem()` — and an AppKit
+/// session is what the drag needs; see `EditorTabDragSource` for why.
+extension EditorCenter.DragItem: Transferable {
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(contentType: EditorTabDrag.type) { item in
+            Data(EditorTabDrag.text(for: item).utf8)
+        } importing: { data in
+            guard let text = String(data: data, encoding: .utf8),
+                  let item = EditorTabDrag.item(from: text)
+            else { throw EditorTabDrag.PayloadError.unreadable }
+            return item
         }
-        WindowBreadcrumbs.note("tab drag: began \(text(for: item))")
-        return provider
+    }
+}
+
+extension EditorTabDrag {
+    enum PayloadError: Error {
+        /// A drop carrying our type whose bytes are not one of our tokens.
+        /// Refused rather than guessed at.
+        case unreadable
     }
 }
 
@@ -78,36 +90,26 @@ enum EditorTabDrag {
 final class EditorCellDropState: ObservableObject {
     @Published private(set) var zone: EditorDropZone?
 
+    /// Cleared the moment the session ends, however it ended.
+    ///
+    /// `performDrop` and `dropExited` cover the two ordinary endings; a
+    /// release over the cell the drag started in reaches neither, and that is
+    /// the reader taking a tab back. The session reports every ending there
+    /// is — the reason the drag is an AppKit session — so no cell has to
+    /// guess from the mouse button whether one is still in flight.
+    private var sessionEnded: AnyCancellable?
+
+    init(session: EditorTabDragSession = .shared) {
+        sessionEnded = session.$item
+            .filter { $0 == nil }
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.zone = nil }
+            }
+    }
+
     func show(_ zone: EditorDropZone?) {
         guard self.zone != zone else { return }
         self.zone = zone
-        watch()
-    }
-
-    /// A drag whose session ends without a callback to this cell.
-    ///
-    /// `performDrop` and `dropExited` cover the two ordinary endings, and a
-    /// cancelled session — the pointer lifting over the cell it started in,
-    /// which is the reader taking a tab back — reaches neither. The mouse
-    /// button is the ground truth: no button down, no drag, so nothing may
-    /// still be highlighted. `pressedMouseButtons` is non-zero for the whole
-    /// of a real drag, so this cannot clear one that is still live.
-    private var watchdog: Timer?
-
-    private func watch() {
-        watchdog?.invalidate()
-        watchdog = nil
-        guard zone != nil else { return }
-
-        watchdog = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] timer in
-            guard NSEvent.pressedMouseButtons == 0 else { return }
-            timer.invalidate()
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.watchdog = nil
-                self.zone = nil
-            }
-        }
     }
 }
 
@@ -141,6 +143,13 @@ struct EditorCellDropDelegate: DropDelegate {
     /// them apart in a log.
     let label: String
 
+    /// Only ours. Asked because the terminal's splits ask it, and for the
+    /// same reason: a drag of anything else must be left alone to reach
+    /// whatever wanted it.
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [Self.dragType])
+    }
+
     func dropEntered(info: DropInfo) {
         WindowBreadcrumbs.note(
             "tab drag: entered \(label) at "
@@ -150,16 +159,21 @@ struct EditorCellDropDelegate: DropDelegate {
         state.show(resolve(info))
     }
 
-    /// No proposal of its own, deliberately.
+    /// A move, which is the truth: the tab leaves the cell it came from.
     ///
-    /// This returned `DropProposal(operation: .move)`, which reads as the
-    /// truth — the tab leaves the cell it came from — and cost the gesture
-    /// its drop: a destination may only propose an operation the *source*
-    /// allows, and the session `.onDrag` opens allows a copy. Proposing a
-    /// move it never offered had AppKit refuse the drop with no error and no
-    /// callback, so the tab flew back and nothing happened. Nil takes the
-    /// default proposal, which is by construction one the source allows.
+    /// This proposed a move once before and cost the gesture its drop — a
+    /// destination may only propose an operation the *source* allows, and
+    /// SwiftUI's `.onDrag` allows a copy, so AppKit refused with no error and
+    /// no callback. The answer was not to stop proposing a move; it was to
+    /// begin the session by hand and answer `.move` from the source, which is
+    /// what the terminal's splits have always done.
+    ///
+    /// Guarded on the state the way the terminal's splits are: `dropUpdated`
+    /// arrives once more *after* `performDrop`, and taking it would paint the
+    /// panel back on over a grid that has already changed.
     func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard state.zone != nil else { return DropProposal(operation: .forbidden) }
+
         let zone = resolve(info)
 
         /// Noted on a change only. Every pointer move calls this, so logging
@@ -173,7 +187,7 @@ struct EditorCellDropDelegate: DropDelegate {
         }
 
         state.show(zone)
-        return nil
+        return DropProposal(operation: .move)
     }
 
     func dropExited(info: DropInfo) {

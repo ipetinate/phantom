@@ -474,7 +474,7 @@ struct EditorDropZoneTests {
 @MainActor
 struct EditorCellDropStateTests {
     @Test func showingTheSameZoneTwiceIsOneChange() {
-        let state = EditorCellDropState()
+        let state = EditorCellDropState(session: EditorTabDragSession())
         state.show(.top)
         state.show(.top)
         #expect(state.zone == .top)
@@ -484,26 +484,40 @@ struct EditorCellDropStateTests {
     /// That session ends with neither `performDrop` nor `dropExited` reaching
     /// this cell, and the panel used to stay painted over the pane for good.
     ///
-    /// No mouse button is down in a test host, which is exactly the condition
-    /// the watchdog reads, so this is the real path rather than a stand-in.
-    @Test func aPanelCannotOutliveTheMouseButton() async throws {
-        let state = EditorCellDropState()
+    /// The session reports the ending, so the state hears it there rather
+    /// than inferring it from the mouse button.
+    @Test func aPanelCannotOutliveItsSession() {
+        let session = EditorTabDragSession()
+        let state = EditorCellDropState(session: session)
+
+        session.begin(.terminal)
         state.show(.bottom)
         #expect(state.zone == .bottom)
 
-        for _ in 0..<20 where state.zone != nil {
-            try await Task.sleep(nanoseconds: 100_000_000)
-        }
-        #expect(state.zone == nil, "the watchdog left a highlight with no drag behind it")
+        session.end()
+        #expect(state.zone == nil, "a highlight outlived the drag behind it")
     }
 
-    @Test func clearingItLeavesNothingToClear() async throws {
-        let state = EditorCellDropState()
+    @Test func clearingItLeavesNothingToClear() {
+        let state = EditorCellDropState(session: EditorTabDragSession())
         state.show(.leading)
         state.show(nil)
         #expect(state.zone == nil)
+    }
 
-        try await Task.sleep(nanoseconds: 300_000_000)
-        #expect(state.zone == nil)
+    /// Two cells watch the same session, and one ending clears both — no cell
+    /// can be left lit because the drag happened to end over its neighbour.
+    @Test func everyCellHearsTheSameEnding() {
+        let session = EditorTabDragSession()
+        let first = EditorCellDropState(session: session)
+        let second = EditorCellDropState(session: session)
+
+        session.begin(.file("/tmp/a.swift"))
+        first.show(.leading)
+        second.show(.trailing)
+
+        session.end()
+        #expect(first.zone == nil)
+        #expect(second.zone == nil)
     }
 }

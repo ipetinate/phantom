@@ -60,7 +60,6 @@ struct EditorTabBar: View {
                         isSelected: selection == .terminal,
                         onSelect: onSelectTerminal
                     )
-                    .onDrag { EditorTabDrag.provider(for: .terminal) }
                 }
 
                 ForEach(tabs) { tab in
@@ -74,7 +73,6 @@ struct EditorTabBar: View {
                         onClose: { onClose(tab.id) },
                         onCommand: { onCommand($0, tab) }
                     )
-                    .onDrag { EditorTabDrag.provider(for: .file(tab.path)) }
                 }
 
                 // Overlay, not legacy. With "show scroll bars: always" in
@@ -125,13 +123,13 @@ private struct TerminalTabItem: View {
 
     private var accent: Color { palette.accent ?? .accentColor }
 
-    /// Not a `Button`, deliberately — a tap gesture on the row instead.
+    /// Neither a `Button` nor a tap gesture: the gestures belong to
+    /// `EditorTabDragSource`, laid over the tab.
     ///
-    /// A button's own gesture wins over `.onDrag`, so as a button this tab
-    /// could be clicked and never dragged: the terminal was the one tab in
-    /// the bar that could not be moved to another cell, which is the whole
-    /// reason it has a tab. `EditorTabItem` beside it was already written
-    /// this way, and now the two match.
+    /// A button's own gesture used to win over `.onDrag`, so as a button this
+    /// tab could be clicked and never dragged — the terminal was the one tab
+    /// in the bar that could not be moved, which is the whole reason it has a
+    /// tab. The AppKit layer settles that and the operation mask both.
     var body: some View {
         HStack(spacing: 5) {
             Image(systemName: "apple.terminal")
@@ -151,7 +149,16 @@ private struct TerminalTabItem: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
+        .overlay {
+            EditorTabDragSource(
+                item: .terminal,
+                onClick: { _ in onSelect() },
+                /// The terminal's tab has no menu: it cannot be closed, it has
+                /// no path to reveal or copy, and every command there is would
+                /// be greyed out.
+                onMenu: {}
+            )
+        }
         .onHover { hovering in
             isHovered = hovering
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
@@ -177,29 +184,40 @@ private struct EditorTabItem: View {
     @ObservedObject private var icons: FileIconProvider = .shared
     @State private var isHovered = false
 
-    /// When this tab was last clicked, so the second click of a double click
-    /// can be recognised rather than waited for — see `FileExplorerRowClick`,
-    /// whose rule this borrows because it is the same gesture.
-    @State private var lastClickAt: TimeInterval?
-
     private var accent: Color { palette.accent ?? .accentColor }
 
     var body: some View {
         HStack(spacing: 5) {
-            FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
+            /// Everything but the close control, grouped so the gesture layer
+            /// can sit over it and leave that control alone. The layer is an
+            /// AppKit view and takes every click under it, so laid over the
+            /// whole tab it would swallow the one button in here.
+            HStack(spacing: 5) {
+                FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
 
-            Text(tab.name)
-                .font(palette.font(size: 11, weight: isSelected ? .semibold : .regular))
-                .lineLimit(1)
-
-            if showsDirectory {
-                Text((tab.directory as NSString).lastPathComponent)
-                    .font(palette.font(size: 9))
-                    .foregroundStyle(.tertiary)
+                Text(tab.name)
+                    .font(palette.font(size: 11, weight: isSelected ? .semibold : .regular))
                     .lineLimit(1)
-            }
 
-            divergenceMark
+                if showsDirectory {
+                    Text((tab.directory as NSString).lastPathComponent)
+                        .font(palette.font(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+
+                divergenceMark
+            }
+            .contentShape(Rectangle())
+            .overlay {
+                EditorTabDragSource(
+                    item: .file(tab.path),
+                    onClick: { clicks in
+                        if clicks >= 2 { showMenu() } else { onSelect() }
+                    },
+                    onMenu: showMenu
+                )
+            }
 
             closeControl
         }
@@ -219,8 +237,6 @@ private struct EditorTabItem: View {
                 .frame(width: 1)
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: handleClick)
-        .contextMenu { menu }
         // The I-beam has to be pushed back explicitly: it belongs to the
         // text view underneath, and AppKit keeps it while the pointer is
         // over a SwiftUI view that never says otherwise — so a tab looked
@@ -232,46 +248,12 @@ private struct EditorTabItem: View {
         .help(tab.path)
     }
 
-    /// A single click selects, a double click opens the menu.
+    /// The menu, popped at the pointer.
     ///
-    /// The first click of a double click has already selected the tab, which
-    /// is harmless here — selecting the tab you are about to act on is what
-    /// the menu would have done anyway — and it is what keeps a single click
-    /// from waiting out the double-click interval before the file appears.
-    private func handleClick() {
-        let now = Date.timeIntervalSinceReferenceDate
-        let gesture = FileExplorerRowClick.resolve(
-            at: now,
-            previous: lastClickAt,
-            interval: NSEvent.doubleClickInterval)
-        lastClickAt = now
-
-        switch gesture {
-        case .open:
-            onSelect()
-        case .menu:
-            lastClickAt = nil
-            showMenu()
-        }
-    }
-
-    /// The right-click menu, drawn as SwiftUI buttons.
-    @ViewBuilder
-    private var menu: some View {
-        ForEach(Array(EditorTabCommand.menu(hasSiblings: hasSiblings).enumerated()), id: \.offset) { entry in
-            switch entry.element {
-            case .separator:
-                Divider()
-            case .command(let command):
-                Button(command.title) { onCommand(command) }
-            }
-        }
-    }
-
-    /// The same menu, popped at the pointer for the double click. SwiftUI
-    /// will not open a `.contextMenu` without a right click, so the second
-    /// opening has to go through `NSMenu` — which is what the file
-    /// explorer's rows do for the same reason.
+    /// One renderer for both openings, unlike the explorer's rows: the
+    /// gestures here are AppKit's, so the right click arrives as
+    /// `rightMouseDown` and the double click as a `clickCount` of two, and
+    /// neither of them is a SwiftUI `.contextMenu`.
     private func showMenu() {
         let popup = NSMenu()
         for entry in EditorTabCommand.menu(hasSiblings: hasSiblings) {

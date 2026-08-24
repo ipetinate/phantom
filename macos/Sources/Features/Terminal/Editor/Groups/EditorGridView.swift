@@ -125,25 +125,22 @@ private struct EditorGridCell: View {
                 .background(coat)
                 surface
             }
-            /// The drop region goes **over** the cell's content, not under it.
+            /// Behind the cell's content, which is where the terminal's own
+            /// splits put theirs — see `TerminalSplitTreeView`.
             ///
-            /// Attached to the stack itself it sat below the surface, and the
-            /// surface is an AppKit view — the editor's text view, or the
-            /// terminal. A real subview wins the pointer over a SwiftUI drop
-            /// region beneath it, so the region kept being exited the moment
-            /// the pointer crossed onto the document. The breadcrumbs from a
-            /// reader's drag showed it exactly: `entered` and `left`, over and
-            /// over, and the only two places a highlight ever appeared were
-            /// the tab bar and the strip of minimap on the right — the two
-            /// parts of the cell the text view does not cover.
-            ///
-            /// A clear layer with a `contentShape`, so it is a shape the drag
-            /// can find. It answers for one private type, so a file dragged in
-            /// from the Finder still reaches whatever wanted it, and it takes
-            /// no mouse events of its own.
-            .overlay {
+            /// It was an overlay for one build, to get the region out from
+            /// under the editor's text view, and that was the wrong fix twice
+            /// over: a clear layer with a shape takes every click under it, so
+            /// it swallowed the tabs' own gestures and the tabs stopped being
+            /// draggable at all. And the region was never the problem — the
+            /// operation mask was. A drag begun by `.onDrag` allows a copy
+            /// only, so a cell proposing a move was refused, and what the
+            /// breadcrumbs recorded as enter-and-leave was that refusal. The
+            /// session is AppKit's now and answers `.move`, which is the
+            /// arrangement the terminal's splits have always used with the
+            /// region in the background.
+            .background {
                 Color.clear
-                    .contentShape(Rectangle())
                     .onDrop(
                         of: [EditorTabDrag.type],
                         delegate: EditorCellDropDelegate(
