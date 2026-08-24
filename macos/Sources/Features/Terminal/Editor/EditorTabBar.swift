@@ -153,6 +153,7 @@ private struct TerminalTabItem: View {
             EditorTabDragSource(
                 item: .terminal,
                 label: title,
+                preview: { dragPreview },
                 onClick: { _ in onSelect() },
                 /// The terminal's tab has no menu: it cannot be closed, it has
                 /// no path to reveal or copy, and every command there is would
@@ -165,6 +166,35 @@ private struct TerminalTabItem: View {
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
         .help(title)
+    }
+
+    /// The terminal's tab, for the drag. Its own glyph and title, in the
+    /// shape `EditorTabItem.dragPreview` uses, so the two tabs travel alike.
+    private var dragPreview: NSImage? {
+        let renderer = ImageRenderer(
+            content: HStack(spacing: 5) {
+                Image(systemName: "apple.terminal")
+                    .font(.system(size: 11))
+
+                Text(title)
+                    .font(palette.font(size: 11, weight: .medium))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: EditorTabBar.tabHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.95))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(accent.opacity(0.7), lineWidth: 1)
+            )
+            .frame(maxWidth: 280)
+        )
+
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        return renderer.nsImage
     }
 }
 
@@ -214,6 +244,7 @@ private struct EditorTabItem: View {
                 EditorTabDragSource(
                     item: .file(tab.path),
                     label: tab.name,
+                    preview: { dragPreview },
                     onClick: { clicks in
                         if clicks >= 2 { showMenu() } else { onSelect() }
                     },
@@ -267,6 +298,46 @@ private struct EditorTabItem: View {
             }
         }
         popup.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    /// The tab itself, for the thing that follows the pointer while it is
+    /// dragged.
+    ///
+    /// Rendered by SwiftUI, because SwiftUI is what draws the tab: an AppKit
+    /// snapshot of a SwiftUI view comes back empty, and a shape drawn by hand
+    /// in AppKit is a second opinion about how a tab looks that would drift
+    /// from this one. The same icon, the same name, the same font.
+    ///
+    /// Rounded and outlined, unlike the tab in the bar. On screen a tab is
+    /// square-cornered because it sits in a row of them; lifted out and
+    /// following the pointer it is a single object, and a floating square with
+    /// no edge reads as a piece of the window that came loose.
+    private var dragPreview: NSImage? {
+        let renderer = ImageRenderer(
+            content: HStack(spacing: 5) {
+                FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
+
+                Text(tab.name)
+                    .font(palette.font(size: 11, weight: .medium))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: EditorTabBar.tabHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.95))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(accent.opacity(0.7), lineWidth: 1)
+            )
+            .frame(maxWidth: 280)
+        )
+
+        /// Rendered for this screen, or the drag carries a blurred copy of
+        /// the tab on a Retina display.
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        return renderer.nsImage
     }
 
     /// The worktree mark, for a tab whose file is from a checkout its

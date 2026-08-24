@@ -54,6 +54,14 @@ struct EditorTabDragSource: NSViewRepresentable {
     /// the bar knows.
     let label: String
 
+    /// The tab as the reader sees it, rendered by the side that draws it.
+    ///
+    /// SwiftUI's own renderer, asked for by the tab itself — see
+    /// `EditorTabItem.dragPreview`. AppKit cannot produce this: the tab is a
+    /// SwiftUI view, and the two ways an `NSView` has of copying what is on
+    /// screen both come back empty for one. Nil falls back to a drawn pill.
+    let preview: () -> NSImage?
+
     /// Called on release without a drag, with AppKit's own click count.
     let onClick: (Int) -> Void
 
@@ -73,6 +81,7 @@ struct EditorTabDragSource: NSViewRepresentable {
     private func apply(to view: DragSourceView) {
         view.item = item
         view.label = label
+        view.preview = preview
         view.onClick = onClick
         view.onMenu = onMenu
     }
@@ -80,6 +89,7 @@ struct EditorTabDragSource: NSViewRepresentable {
     final class DragSourceView: NSView, NSDraggingSource {
         var item: EditorCenter.DragItem?
         var label: String = ""
+        var preview: (() -> NSImage?)?
         var onClick: ((Int) -> Void)?
         var onMenu: (() -> Void)?
 
@@ -110,7 +120,7 @@ struct EditorTabDragSource: NSViewRepresentable {
             guard let pasteboardItem = item.pasteboardItem() else { return }
 
             let dragged = NSDraggingItem(pasteboardWriter: pasteboardItem)
-            let image = Self.image(for: label)
+            let image = preview?() ?? Self.image(for: label)
             let origin = convert(event.locationInWindow, from: nil)
             /// Centred on the pointer, which is where macOS puts a dragged
             /// tab of its own.
@@ -133,17 +143,18 @@ struct EditorTabDragSource: NSViewRepresentable {
             session.animatesToStartingPositionsOnCancelOrFail = false
         }
 
-        /// The thing that follows the pointer: a small pill naming the tab.
+        /// The fallback for a preview that could not be rendered: a small
+        /// pill naming the tab.
         ///
-        /// Drawn rather than captured. Snapshotting the tab was the first
-        /// attempt — `cacheDisplay` on the superview, which is where SwiftUI
-        /// renders it — and it produced an empty image every time, so the drag
-        /// had no visible payload at all. SwiftUI draws through a layer tree
-        /// that `cacheDisplay` does not reach.
+        /// Snapshotting the tab was the first attempt — `cacheDisplay` on the
+        /// superview, which is where SwiftUI renders it — and it produced an
+        /// empty image every time, so the drag had no visible payload at all.
+        /// SwiftUI draws through a layer tree `cacheDisplay` does not reach.
         ///
-        /// A drawn pill is also the only version that cannot come out blank,
-        /// which matters for the one part of this gesture the reader watches
-        /// the whole time.
+        /// This is drawn by hand and so cannot come out blank, which is why it
+        /// is the floor under `ImageRenderer` rather than a second attempt at
+        /// the same job: the one part of this gesture the reader watches the
+        /// whole time must never be invisible.
         static func image(for label: String) -> NSImage {
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 11, weight: .medium),
