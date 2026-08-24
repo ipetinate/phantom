@@ -1420,9 +1420,22 @@ private struct SidebarTabRow: View {
             /// view that is absent adds no `HStack` spacing, while a
             /// zero-width placeholder would still push the icon over by 6.
             if let accent = override?.accentColor {
-                RoundedRectangle(cornerRadius: 1.5)
+                /// As tall as the row, less a short inset at each end, rather
+                /// than as tall as the icon. At the icon's height it read as
+                /// a mark beside the icon; running most of the row it reads
+                /// as the row's own label, which is what it is. The inset is
+                /// what keeps it from touching the row's rounded background.
+                ///
+                /// `maxHeight` rather than a number: the row grows with the
+                /// density setting and with the metadata under the title, and
+                /// a fixed height would come loose from it. The stack's height
+                /// is set by its other children, so this takes it without
+                /// being able to stretch the row.
+                RoundedRectangle(cornerRadius: 2)
                     .fill(accent)
-                    .frame(width: 3, height: iconBoxHeight)
+                    .frame(width: 3)
+                    .frame(maxHeight: .infinity)
+                    .padding(.vertical, 3)
             }
 
             // A tab opened for a file wears that file's icon, from whichever
