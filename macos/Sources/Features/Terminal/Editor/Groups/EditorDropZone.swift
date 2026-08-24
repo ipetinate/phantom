@@ -19,14 +19,23 @@ enum EditorDropZone: Equatable {
 extension EditorDropZone {
     /// How much of the cell, along each axis, an edge band claims.
     ///
-    /// A third of each axis, which leaves the middle third meaning "move it
-    /// here". A quarter was the first try and it was measured too fine in
-    /// use: aiming for the lower half of a tall pane, the reader kept landing
-    /// in the centre and getting a move where they asked for a split.
+    /// Half, which is as much as there is: the four edges then cover the
+    /// whole surface and the boundaries between them are the cell's
+    /// diagonals. The smallest target is a quarter of the cell.
     ///
-    /// Raising it is not free — the centre is a target too — so the middle
-    /// keeps a third of the cell rather than shrinking to a line.
-    static let defaultEdgeFraction: CGFloat = 1.0 / 3.0
+    /// A quarter of each axis was the first try, then a third. Both were
+    /// measured too fine in use, and the reason is that they made the reader
+    /// aim at a *border*: the answer they wanted lived in a strip near an
+    /// edge, and the middle of the cell — the easiest place to reach — did
+    /// something else. An undivided cell has exactly two useful answers, side
+    /// by side or stacked, so the surface may as well spend all of itself
+    /// saying which.
+    ///
+    /// What this costs is the centre: with no band left over, "move the tab
+    /// into this cell" cannot live in the surface. It lives on the tab bar,
+    /// which `resolve` treats as a join — a wide, obvious target, and the
+    /// same convention as the editors this gesture is borrowed from.
+    static let defaultEdgeFraction: CGFloat = 0.5
 
     /// How much further a zone keeps its claim once it already holds it.
     ///
@@ -76,6 +85,12 @@ extension EditorDropZone {
     /// A corner resolves to the nearer edge rather than to a diagonal of its
     /// own: four edges are what a split can express, and a fifth answer
     /// there would be a coin toss wearing a rule.
+    ///
+    /// At the default claim the four edges tile the whole surface, so this
+    /// returns `.center` only for a degenerate size. A point exactly on a
+    /// diagonal is a tie, and ties go to the first of `leading`, `trailing`,
+    /// `top`, `bottom` — an arbitrary order for a set of measure zero, named
+    /// here so it is a decision rather than an accident.
     static func resolve(
         point: CGPoint,
         in size: CGSize,
@@ -94,13 +109,29 @@ extension EditorDropZone {
             (.bottom, 1 - vertical),
         ]
 
-        guard let nearest = distances.min(by: { $0.distance < $1.distance }) else {
+        /// The zone in hand is scored as if it were nearer than it is, so it
+        /// wins against a rival that has only just overtaken it. Applied to
+        /// the *comparison* rather than to the band: at the default claim
+        /// every point is inside some band, so a margin on the band alone
+        /// would decide nothing and the panel would stutter between two
+        /// answers whenever the pointer travelled along a diagonal.
+        let scored = distances.map { candidate in
+            (
+                zone: candidate.zone,
+                distance: candidate.distance,
+                score: candidate.zone == current
+                    ? candidate.distance - hysteresis
+                    : candidate.distance
+            )
+        }
+
+        guard let nearest = scored.min(by: { $0.score < $1.score }) else {
             return .center
         }
 
-        /// The zone in hand keeps its claim a little past its own edge, so a
-        /// pointer travelling along a boundary does not make the panel
-        /// stutter between two answers.
+        /// And it also holds a little past its own edge, which is what keeps
+        /// a narrowed band — `edgeFraction` below the default — from flipping
+        /// to the centre on a tremor.
         let claim = nearest.zone == current ? edgeFraction + hysteresis : edgeFraction
         return nearest.distance <= claim ? nearest.zone : .center
     }

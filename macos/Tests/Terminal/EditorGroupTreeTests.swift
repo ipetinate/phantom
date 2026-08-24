@@ -319,8 +319,27 @@ struct EditorGroupTreeTests {
 struct EditorDropZoneTests {
     private let size = CGSize(width: 400, height: 200)
 
-    @Test func theMiddleMeansMoveItHere() {
-        #expect(EditorDropZone.resolve(point: CGPoint(x: 200, y: 100), in: size) == .center)
+    /// The surface divides everywhere, and that is the point of it.
+    ///
+    /// An undivided cell has two useful answers — side by side or stacked —
+    /// so the whole surface says which, and the four edges meet along the
+    /// cell's diagonals. Aiming near a border is what the reader reported as
+    /// the gesture being hard to hit.
+    @Test func theSurfaceSplitsEverywhere() {
+        for x in stride(from: 5.0, through: 395.0, by: 15.0) {
+            for y in stride(from: 5.0, through: 195.0, by: 15.0) {
+                let zone = EditorDropZone.resolve(point: CGPoint(x: x, y: y), in: size)
+                #expect(zone != .center, "\(Int(x)),\(Int(y)) still means move")
+            }
+        }
+    }
+
+    /// Where the old middle third was, a drop now divides.
+    @Test func theOldMiddleNowDivides() {
+        #expect(EditorDropZone.resolve(point: CGPoint(x: 150, y: 100), in: size) == .leading)
+        #expect(EditorDropZone.resolve(point: CGPoint(x: 250, y: 100), in: size) == .trailing)
+        #expect(EditorDropZone.resolve(point: CGPoint(x: 200, y: 60), in: size) == .top)
+        #expect(EditorDropZone.resolve(point: CGPoint(x: 200, y: 140), in: size) == .bottom)
     }
 
     /// Coordinates are y-down, as SwiftUI reports them: a small y is the top
@@ -340,34 +359,48 @@ struct EditorDropZoneTests {
         #expect(EditorDropZone.resolve(point: CGPoint(x: 40, y: 2), in: size) == .top)
     }
 
-    /// A third of each axis, which leaves the middle third meaning "move it
-    /// here". A quarter was the first try and it was measured too fine in
-    /// use: aiming for the lower half of a tall pane, the reader landed in
-    /// the centre and got a move where they asked for a split.
-    @Test func theBandIsAThirdOfTheAxis() {
-        #expect(EditorDropZone.resolve(point: CGPoint(x: 130, y: 100), in: size) == .leading)
-        #expect(EditorDropZone.resolve(point: CGPoint(x: 140, y: 100), in: size) == .center)
+    /// The band is half of each axis, which is as much as there is: the four
+    /// edges tile the surface and the centre is unreachable through it. It
+    /// lives on the tab bar instead — see `aDropOnTheBarMeansMoveHere`.
+    @Test func theBandIsHalfOfTheAxis() {
+        #expect(EditorDropZone.defaultEdgeFraction == 0.5)
     }
 
-    /// A zone already in hand keeps its claim a little past its own edge.
-    /// Without that the answer flips as the pointer travels along a boundary
-    /// — split, move, split — and the panel flickers under the cursor while
-    /// the reader is aiming at it.
-    @Test func aZoneInHandHoldsPastItsEdge() {
-        let justOutside = CGPoint(x: 140, y: 100)
-
-        #expect(EditorDropZone.resolve(point: justOutside, in: size) == .center)
+    /// A narrower band still works, and the centre with it. The parameter is
+    /// what the whole rule is expressed in, so a change to the default must
+    /// not quietly turn the other values into dead code.
+    @Test func aNarrowerBandBringsTheCentreBack() {
+        let narrow: CGFloat = 0.25
         #expect(
-            EditorDropZone.resolve(point: justOutside, in: size, current: .leading)
-                == .leading)
+            EditorDropZone.resolve(
+                point: CGPoint(x: 200, y: 100), in: size, edgeFraction: narrow) == .center)
+        #expect(
+            EditorDropZone.resolve(
+                point: CGPoint(x: 20, y: 100), in: size, edgeFraction: narrow) == .leading)
+    }
+
+    /// A zone already in hand wins against one that has only just overtaken
+    /// it. Without that the answer flips as the pointer travels along a
+    /// diagonal — split left, split up, split left — and the panel flickers
+    /// under the cursor while the reader is aiming at it.
+    @Test func aZoneInHandHoldsPastTheDiagonal() {
+        /// Just past the diagonal: `leading` is 0.30 of the way in, `top` is
+        /// 0.32, so the nearest edge has changed hands by 0.02.
+        let justPast = CGPoint(x: 120, y: 64)
+
+        #expect(EditorDropZone.resolve(point: justPast, in: size) == .leading)
+        #expect(
+            EditorDropZone.resolve(point: justPast, in: size, current: .top) == .top)
     }
 
     /// Hysteresis holds a boundary, it does not move it arbitrarily far: past
     /// the margin the new answer wins even against a zone in hand.
     @Test func hysteresisRunsOutEventually() {
+        /// `leading` at 0.20 against `top` at 0.40 — a fifth of the cell
+        /// apart, which is far outside the margin.
         #expect(
             EditorDropZone.resolve(
-                point: CGPoint(x: 200, y: 100), in: size, current: .leading) == .center)
+                point: CGPoint(x: 80, y: 80), in: size, current: .top) == .leading)
     }
 
     /// A cell with no size yet cannot be split into halves, so it answers
@@ -411,8 +444,8 @@ struct EditorDropZoneTests {
                 in: size, barHeight: bar) == .top)
         #expect(
             EditorDropZone.resolve(
-                point: CGPoint(x: 200, y: bar + surfaceHeight * 0.5),
-                in: size, barHeight: bar) == .center)
+                point: CGPoint(x: 200, y: bar + surfaceHeight * 0.95),
+                in: size, barHeight: bar) == .bottom)
         #expect(
             EditorDropZone.resolve(
                 point: CGPoint(x: 10, y: bar + surfaceHeight * 0.5),
