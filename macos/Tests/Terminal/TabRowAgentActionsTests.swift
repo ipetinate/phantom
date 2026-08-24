@@ -9,12 +9,12 @@ import Testing
 /// someone clicks Codex on a tab where Claude is waiting, and reads the word
 /// "codex" back as a prompt.
 struct TabRowAgentActionsTests {
-    private let all: Set<CodingAgent> = [.claude, .codex, .opencode]
+    private let all: Set<CodingAgent> = [.claude, .codex, .opencode, .antigravity]
 
     @Test func aPlainTabOffersEveryAgentTheReaderEnabled() {
         #expect(
             TabRowAgentActions.agents(shown: all, liveAgent: nil)
-                == [.claude, .codex, .opencode]
+                == [.claude, .codex, .opencode, .antigravity]
         )
 
         #expect(
@@ -40,7 +40,7 @@ struct TabRowAgentActionsTests {
     /// Order comes from the enum, not from the set, so rows do not disagree
     /// with each other about where a button sits.
     @Test func theOrderIsFixedRegardlessOfTheSet() {
-        let reversed: Set<CodingAgent> = [.opencode, .codex, .claude]
+        let reversed: Set<CodingAgent> = [.antigravity, .opencode, .codex, .claude]
 
         #expect(
             TabRowAgentActions.agents(shown: reversed, liveAgent: nil)
@@ -65,7 +65,7 @@ struct TabRowAgentActionsTests {
         )
         #expect(
             TabRowAgentActions.agents(shown: all, liveAgent: quit.liveAgent)
-                == [.claude, .codex, .opencode]
+                == [.claude, .codex, .opencode, .antigravity]
         )
     }
 

@@ -7,18 +7,27 @@ import Foundation
 /// than as string literals at the restore site. Adding a fourth agent is then
 /// a case with a command, not another branch threaded through the decoder.
 ///
-/// All three spellings are now verified against running binaries rather than
-/// against documentation: each CLI's own `--help` was read for the resume
+/// Three of the four spellings are verified against running binaries rather
+/// than against documentation: each CLI's own `--help` was read for the resume
 /// syntax (`claude --resume <id>`, `codex resume <SESSION_ID>`,
 /// `opencode --session <id>`), and each was then started and its session id
 /// read back out of the store it keeps — UUIDs from Claude Code and Codex,
 /// a `ses_`-prefixed token from OpenCode. Those are the shapes
 /// `AgentTabRecord.sanitized(sessionID:)` has to pass through untouched, and
 /// the ones `AgentSessionStore` reads back when no hook reported an id.
+///
+/// Antigravity is the exception and is documented rather than measured: no
+/// `agy` binary was installed on the machine this was written on, so its
+/// spellings come from Google's own CLI reference — `agy --conversation <id>`
+/// to open a named conversation, `agy --continue` (`agy -c`) for the last one
+/// in this workspace. Its id is a `conversationId` rather than a session id,
+/// which is a difference in the word and not in the shape: the hook filter
+/// below is the same, and a value it rejects falls back to `--continue`.
 enum CodingAgent: String, Sendable, CaseIterable {
     case claude
     case codex
     case opencode
+    case antigravity
 
     /// What to call this agent in the interface.
     ///
@@ -30,6 +39,7 @@ enum CodingAgent: String, Sendable, CaseIterable {
         case .claude: "Claude Code"
         case .codex: "Codex"
         case .opencode: "OpenCode"
+        case .antigravity: "Antigravity"
         }
     }
 
@@ -38,8 +48,20 @@ enum CodingAgent: String, Sendable, CaseIterable {
     /// Here rather than at the call site so that starting an agent and
     /// resuming it cannot come to disagree about which agent a tab holds:
     /// the sidebar records the case and asks it for both commands.
+    ///
+    /// A switch rather than `rawValue`, which is what it used to be, because
+    /// Antigravity is the first agent whose binary is not named after itself:
+    /// the command is `agy`. The raw value stays the long name regardless,
+    /// since that is what a hook writes into the `agent=` line and what
+    /// `SidebarIconID` stores for a chosen icon — both of which outlive any
+    /// one build and neither of which should have to know a binary name.
     var launchCommand: String {
-        rawValue
+        switch self {
+        case .claude: "claude"
+        case .codex: "codex"
+        case .opencode: "opencode"
+        case .antigravity: "agy"
+        }
     }
 
     /// The command that resumes `sessionID` — or, when no id was ever
@@ -57,6 +79,7 @@ enum CodingAgent: String, Sendable, CaseIterable {
             case .claude: return "claude --continue"
             case .codex: return "codex resume --last"
             case .opencode: return "opencode --continue"
+            case .antigravity: return "agy --continue"
             }
         }
 
@@ -64,6 +87,7 @@ enum CodingAgent: String, Sendable, CaseIterable {
         case .claude: return "claude --resume \(sessionID)"
         case .codex: return "codex resume \(sessionID)"
         case .opencode: return "opencode --session \(sessionID)"
+        case .antigravity: return "agy --conversation \(sessionID)"
         }
     }
 }

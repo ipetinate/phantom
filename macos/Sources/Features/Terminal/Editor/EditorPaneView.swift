@@ -12,6 +12,10 @@ import SwiftUI
 struct EditorPaneView: View {
     @ObservedObject var center: EditorCenter
 
+    /// The cell this editor draws. What it shows is that cell's selection,
+    /// not the grid's — several cells can be showing different files at once.
+    let groupID: EditorGroup.ID
+
     /// Where this pane's terminal is, which is what makes an open file's own
     /// worktree worth mentioning. See ``EditorTerminalDirectory``.
     @ObservedObject var terminalDirectory: EditorTerminalDirectory
@@ -147,7 +151,7 @@ struct EditorPaneView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let document = center.selectedDocument {
+        if let document = center.selectedDocument(in: groupID) {
             DocumentView(
                 document: document,
                 theme: theme,
@@ -179,7 +183,7 @@ struct EditorPaneView: View {
                 }
             )
             .id(document.id)
-        } else if let media = center.selected?.media {
+        } else if let media = center.selected(in: groupID)?.media {
             /// A media tab has no `DocumentView`, and that is what keeps a
             /// PDF out of reach of `didOpen`, of the dirty flag and of
             /// `save()` — none of that machinery is built for it in the first
@@ -230,7 +234,7 @@ struct EditorPaneView: View {
         /// The store folds the master switch and the per-language answer
         /// together. Doing it here instead would put that rule in two places.
         let completion = CompletionSettingsStore.settings(
-            forLanguage: center.selectedDocument.flatMap {
+            forLanguage: center.selectedDocument(in: groupID).flatMap {
                 LanguageResolver.shared.languageID(forPath: $0.url.path)
             },
             isEnabled: completionEnabled,
@@ -356,6 +360,12 @@ private struct DocumentView: View {
     @AppStorage(EditorSettings.usesPrettierKey) private var usesPrettier = true
     @AppStorage(EditorSettings.markdownSnippetsKey) private var markdownSnippets = true
     @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
+
+    /// Read here as well as inside `MarkdownWidthToggle`, which is what keeps
+    /// the two in step: the toggle writes the preference, `@AppStorage`
+    /// republishes this view, and the preview is handed the new column.
+    @AppStorage(EditorSettings.markdownPreviewWidthKey)
+    private var markdownPreviewWidth = EditorSettings.defaultMarkdownPreviewWidth.rawValue
 
     @State private var notice: String?
 
@@ -559,7 +569,15 @@ private struct DocumentView: View {
     private var presentationControl: some View {
         EditorPresentationControl(
             options: presentationOptions,
-            presentation: presentationBinding
+            presentation: presentationBinding,
+            /// The preview already owns this corner, so the column control
+            /// joins the cluster there instead of a Settings row nobody would
+            /// look for while reading a README — and instead of a second
+            /// floating box, which is the mistake the split toggle was moved
+            /// in here to undo.
+            extra: {
+                if showsRenderedMarkdown { MarkdownWidthToggle() }
+            }
         )
     }
 
@@ -569,8 +587,26 @@ private struct DocumentView: View {
         EditorPresentationControl(
             options: presentationOptions,
             presentation: presentationBinding,
-            extra: { SplitDirectionToggle(model: splitModel) }
+            /// An explicit stack rather than two views in the builder: `extra`
+            /// is padded as one element, and a bare pair would be padded as a
+            /// pair rather than laid out as two buttons.
+            extra: {
+                HStack(spacing: 1) {
+                    if showsRenderedMarkdown { MarkdownWidthToggle() }
+                    SplitDirectionToggle(model: splitModel)
+                }
+            }
         )
+    }
+
+    /// Whether prose is on screen for the column control to act on. False for
+    /// the source, for a diff, and for a split whose second pane is a diff.
+    private var showsRenderedMarkdown: Bool {
+        switch presentationOptions.nearest(to: document.presentation) {
+        case .preview: true
+        case .split: presentationOptions.splitPartner == .preview
+        case .source, .image, .table, .diff: false
+        }
     }
 
     private var presentationBinding: Binding<EditorPresentation> {
@@ -628,6 +664,8 @@ private struct DocumentView: View {
             fileURL: document.url,
             theme: theme,
             configuration: configuration,
+            width: MarkdownPreviewWidth(rawValue: markdownPreviewWidth)
+                ?? EditorSettings.defaultMarkdownPreviewWidth,
             scrollSync: splitModel.scrollSync,
             scrollSyncSide: .second,
             anchors: previewAnchors
@@ -685,6 +723,12 @@ private struct DocumentView: View {
         CodeTextView(
             text: document.currentText,
             textRevision: document.revision,
+            replacementName: document.replacementName,
+            replacementIsUndoable: document.replacementIsUndoable,
+            /// Fetched by path rather than held in `@State`: the state would
+            /// die with this view, which is the whole failure the timeline
+            /// exists to remove. The lookup is a dictionary hit.
+            undoTimeline: EditorUndoCenter.shared.timeline(forPath: document.url.path),
             /// Through the resolver, not `CodeLanguage.resolve` — a
             /// language an extension contributed carries its own
             /// keywords and comment markers, and asking the filename
@@ -1280,7 +1324,7 @@ private struct DocumentView: View {
             guard document.revision == revision else { return true }
 
             let formatted = edit.applied(to: text)
-            document.replaceText(formatted)
+            document.replaceText(formatted, named: "Formatting")
             lsp.didChange(path: path, text: formatted)
             return true
         }
@@ -1321,7 +1365,7 @@ private struct DocumentView: View {
             }
             guard document.revision == revision else { return }
             let formatted = LSPTextEdit.apply(edits, to: document.currentText)
-            document.replaceText(formatted)
+            document.replaceText(formatted, named: "Formatting")
 
             /// Told explicitly, because a programmatic replacement does not
             /// travel the path a keystroke does. `replaceText` sets the
@@ -1371,7 +1415,7 @@ private struct DocumentView: View {
                     /// it re-reads each file immediately before editing it.
                     guard document.revision == revision else { continue }
                     let renamed = LSPTextEdit.apply(edits, to: document.currentText)
-                    document.replaceText(renamed)
+                    document.replaceText(renamed, named: "Rename")
                     lsp.didChange(path: path, text: renamed)
                 } else if let existing = try? String(contentsOfFile: path, encoding: .utf8) {
                     let updated = LSPTextEdit.apply(edits, to: existing)

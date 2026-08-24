@@ -68,7 +68,7 @@ struct CodeAutoClosePairs: Equatable, Sendable {
         switch language {
         case .rust: return withoutTheSingleQuote
         case .javascript, .vue, .swift, .kotlin, .go, .python, .ruby, .shell,
-             .json, .yaml, .markdown, .html, .css, .sql, .zig, .c, .php,
+             .json, .yaml, .toml, .markdown, .html, .css, .sql, .zig, .c, .php,
              .terraform, .plain:
             return standard
         }

@@ -33,6 +33,28 @@ struct CodeTextView: NSViewRepresentable {
     /// `text` when this changes and at no other time.
     let textRevision: Int
 
+    /// What the host's last replacement should be called on the undo stack,
+    /// so the Edit menu offers "Undo Formatting" rather than naming whatever
+    /// the reader typed before it.
+    var replacementName: String = "Replace"
+
+    /// Whether the host's last replacement may be taken back.
+    ///
+    /// False for one case and it is the dangerous one: text that came off the
+    /// disk. Undoing a reload would put the pre-checkout file back into the
+    /// buffer, and the next ⌘S would write it over whatever the checkout left
+    /// there. So a reload does not become a step, and it takes the steps
+    /// before it with it — they describe a document that no longer exists.
+    var replacementIsUndoable = true
+
+    /// The undo history for the file being shown.
+    ///
+    /// Handed in rather than owned, because it has to outlive this view: the
+    /// pane is tagged with the document's id, so changing tabs destroys and
+    /// rebuilds it, and a stack stored on the view goes with it. Nil is a
+    /// supported state — a view with no host keeps a timeline of its own.
+    var undoTimeline: CodeUndoTimeline?
+
     /// How this file is lexed, base language included.
     ///
     /// Not a bare `CodeLanguage`: a language an extension contributed has no
@@ -181,7 +203,12 @@ struct CodeTextView: NSViewRepresentable {
         /// Selectable whichever way that went: a read-only file is still one
         /// you copy out of, search in, and ⌘-click through.
         textView.isSelectable = true
-        textView.allowsUndo = true
+        /// Off, and the file's timeline registers every step instead. Left on,
+        /// `NSTextView` registers its own undo operations against **itself**,
+        /// and an operation whose target is a view SwiftUI has already torn
+        /// down cannot put anything back into the view that replaced it — see
+        /// ``CodeUndoTimeline``.
+        textView.allowsUndo = false
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -327,6 +354,9 @@ struct CodeTextView: NSViewRepresentable {
             object: scrollView.contentView
         )
 
+        if let undoTimeline { textView.undoTimeline = undoTimeline }
+        context.coordinator.hostEditName = replacementName
+        context.coordinator.hostEditIsUndoable = replacementIsUndoable
         context.coordinator.applyIfNewRevision(text: text, revision: textRevision)
         context.coordinator.applyAppearance(
             theme: theme,
@@ -389,6 +419,15 @@ struct CodeTextView: NSViewRepresentable {
         // the edits, insertion point back to zero. A revision the host bumps
         // when it means it says the one thing a comparison cannot: who
         // changed it.
+        //
+        // The timeline is reattached first, and on every update rather than
+        // once: a file renamed while it is open keeps its history, and that
+        // history is keyed by the path the file has now.
+        if let undoTimeline, let code = textView as? CodeNSTextView {
+            code.undoTimeline = undoTimeline
+        }
+        context.coordinator.hostEditName = replacementName
+        context.coordinator.hostEditIsUndoable = replacementIsUndoable
         context.coordinator.applyIfNewRevision(text: text, revision: textRevision)
 
         // After the text, so a jump into a file that is being opened in the
@@ -468,12 +507,156 @@ struct CodeTextView: NSViewRepresentable {
         }
 
         /// Replaces the buffer only when the host says it has new content.
+        ///
+        /// The first revision and every one after it are different jobs, and
+        /// running them through the same code is what made formatting throw
+        /// the reader to the top of the file. Loading a document is allowed to
+        /// rebuild the storage and start at line one, because there is nothing
+        /// yet to keep. Every later revision — a formatter, a rename, a
+        /// reload — is a change to a document somebody is *reading*, so it is
+        /// spliced in instead, with the caret and the viewport carried across
+        /// it.
         func applyIfNewRevision(text: String, revision: Int) {
             guard revision != appliedRevision else { return }
+            let isFirstLoad = appliedRevision == Int.min
             appliedRevision = revision
-            apply(text: text)
+            if isFirstLoad {
+                apply(text: text)
+            } else {
+                replace(with: text)
+            }
         }
 
+        /// Splices in what the host produced, leaving the reader where they
+        /// were.
+        ///
+        /// Three things were wrong with replacing the storage instead, and
+        /// only the first was visible: the caret went to offset zero, the view
+        /// scrolled to the top, and — because `setAttributedString` is a
+        /// mutation of the storage rather than an edit of the text view —
+        /// nothing was registered on any undo stack, so ⌘Z after ⇧⌘F had
+        /// nothing to take back. Routing the minimal edit through
+        /// `shouldChangeText`/`didChangeText` fixes the third by construction;
+        /// the selection and the scroll origin are carried across by hand.
+        ///
+        /// The selection is *mapped*, not restored. Formatting moves text, so
+        /// the same offset is a different place afterwards — see
+        /// ``CodeTextEdit/movedCaret(from:)`` for what happens to a caret that
+        /// was sitting inside the rewritten span.
+        ///
+        /// The viewport is restored by its raw origin, clamped. That is exact
+        /// whenever the edit lands at or below the top of the viewport, which
+        /// is the ordinary case for a reformat; when lines are added or
+        /// removed *above* what is on screen the content drifts by their
+        /// height. Doing better means measuring the top line's position before
+        /// and after, and every route to that measurement in TextKit 1 is one
+        /// of the calls that silently drops this view out of TextKit 2.
+        func replace(with text: String) {
+            guard let textView = textView as? CodeNSTextView,
+                  let textStorage = textView.textStorage
+            else {
+                apply(text: text)
+                return
+            }
+
+            guard let edit = CodeTextEdit.minimal(from: textStorage.string, to: text) else { return }
+
+            let selections = textView.selectedRanges
+                .map(\.rangeValue)
+                .map { edit.movedSelection($0) }
+            let origin = textView.enclosingScrollView?.contentView.bounds.origin
+
+            /// Set for the same reason `apply` sets it: `textDidChange` is
+            /// what reports the buffer back out through `onEdit`, and the host
+            /// making this replacement already knows what it wrote — it is the
+            /// one that told the language server. What is *not* suppressed is
+            /// the undo registration, which happens on the view and is the
+            /// point of coming through here at all.
+            isApplyingExternalText = true
+            textView.applyHostEdit(edit, name: hostEditName)
+            isApplyingExternalText = false
+
+            /// After the edit, not before it. Clearing first would leave the
+            /// reload itself sitting on the stack as the one step ⌘Z could
+            /// still reach, which is precisely the step that must not exist.
+            if !hostEditIsUndoable { textView.undoTimeline.clear() }
+
+            /// Clamped as well as mapped. The arithmetic answers where each
+            /// end went; the buffer answers how long it is now, and a
+            /// selection reaching past the end of it is a crash rather than a
+            /// wrong highlight.
+            let length = (textView.string as NSString).length
+            let clamped = selections
+                .map { moved -> NSValue in
+                    let start = min(max(0, moved.location), length)
+                    return NSValue(range: NSRange(
+                        location: start,
+                        length: min(moved.length, length - start)))
+                }
+            if !clamped.isEmpty { textView.selectedRanges = clamped }
+
+            refreshAfterReplacement(in: textStorage)
+            updateCurrentLineBand()
+            if let origin {
+                scroll(to: origin)
+                /// And again once layout has settled, for the reason the load
+                /// path gives: a scroll asked for before AppKit has re-laid
+                /// the document is answered against the old frame.
+                DispatchQueue.main.async { [weak self] in self?.scroll(to: origin) }
+            }
+        }
+
+        /// What the next host replacement is called on the undo stack, so the
+        /// Edit menu can say "Undo Formatting" rather than "Undo Typing".
+        var hostEditName = "Replace"
+
+        /// Whether the next host replacement may be taken back. See
+        /// ``CodeTextView/replacementIsUndoable``.
+        var hostEditIsUndoable = true
+
+        /// The colouring, the gutter and the minimap after a splice.
+        ///
+        /// The same work `apply` does, minus rebuilding the storage —
+        /// `textDidChange` normally does it and is suppressed here, so it has
+        /// to be done explicitly or a formatted file keeps the colours of the
+        /// text it replaced.
+        private func refreshAfterReplacement(in textStorage: NSTextStorage) {
+            highlightsOnDemand = textStorage.length > Self.wholeDocumentBudget
+            if highlightsOnDemand {
+                highlightVisibleRegion()
+            } else {
+                let full = NSRange(location: 0, length: textStorage.length)
+                storage.highlight(textStorage, in: full)
+                colorBrackets(in: full)
+            }
+            gutter?.reload()
+            scheduleMinimapRefresh()
+        }
+
+        /// Puts the viewport back where it was, without letting it past the
+        /// ends of a document that may have got shorter.
+        private func scroll(to origin: NSPoint) {
+            guard let textView, let scrollView = textView.enclosingScrollView else { return }
+            let visible = scrollView.contentView.bounds.size
+            let document = textView.frame.size
+            let target = NSPoint(
+                x: min(max(0, origin.x), max(0, document.width - visible.width)),
+                y: min(max(0, origin.y), max(0, document.height - visible.height))
+            )
+            scrollView.contentView.scroll(to: target)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            gutter?.needsDisplay = true
+        }
+
+        /// Loads a document into an empty view: storage rebuilt, caret at the
+        /// start, viewport at the top.
+        ///
+        /// Only for the first revision — see `applyIfNewRevision`. Nothing
+        /// here is registered on the undo stack, and that is deliberate: a
+        /// ⌘Z whose first step empties the file is not an undo stack, it is a
+        /// trap. It also means a tab being rebuilt after a switch leaves the
+        /// file's timeline exactly as it was, which is what lets ⌘Z keep
+        /// working across the switch.
         func apply(text: String) {
             guard let textView, let textStorage = textView.textStorage else { return }
             isApplyingExternalText = true
@@ -1294,7 +1477,7 @@ final class CurrentLineBandView: NSView {
 /// The text view itself, kept as a named subclass so the tab and save
 /// key handling in the host has something to attach to — and so a test can
 /// assert it came up in TextKit 2.
-final class CodeNSTextView: NSTextView {
+final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// ⌘S, ⇧⌘S and ⌘W, supplied by the host.
     ///
     /// Handled here rather than by a window- or app-level monitor because
@@ -1427,6 +1610,17 @@ final class CodeNSTextView: NSTextView {
     private var hoverOffset: Int?
     private var hoverTask: Task<Void, Never>?
 
+    /// Where on screen the word the card describes is drawn.
+    ///
+    /// Held rather than recomputed because the question every close asks is
+    /// "is the pointer still hovering?", and answering it needs the *word* as
+    /// well as the card: the card sits a gap below the line, so the pointer is
+    /// legitimately on one, on the other, or between the two. Recomputing it
+    /// from `hoverOffset` would not do — a scroll moves the glyphs and leaves
+    /// the card where it was, and the rectangle that matters is the one the
+    /// card was actually placed against.
+    private var hoverSymbol: NSRect?
+
     /// How long the pointer must rest before a look-up is asked for.
     ///
     /// A property rather than a literal so a test can state its own timing
@@ -1451,6 +1645,12 @@ final class CodeNSTextView: NSTextView {
     /// mean "gone". Every card anybody reached for was dismissed on the way.
     /// Each move restarts the clock, so a card survives a pointer heading for
     /// it and closes shortly after the pointer settles somewhere else.
+    ///
+    /// The delay alone was not enough, and this is the part worth remembering:
+    /// a delay only helps a pointer that keeps moving. `hoverHoldsPointer` is
+    /// what decides whether the card is still wanted when the clock runs out,
+    /// and it has to name the word and the gap as well as the card — a reader
+    /// pausing to read, halfway across, is the most ordinary thing there is.
     ///
     /// A `var` for the same reason `hoverFetchDelay` is one: what is worth
     /// testing here is *when* the close happens, and a test that has to sleep
@@ -1637,8 +1837,13 @@ final class CodeNSTextView: NSTextView {
         super.mouseMoved(with: event)
         guard let hoverProvider else { return }
 
-        // While the pointer is on the card, the card is what it is pointing at.
-        guard hoverPanel?.containsPointer != true else { return }
+        /// Still on the card, still on the word it describes, or still crossing
+        /// the gap between them: the reader is pointing at the same thing, so
+        /// there is nothing to look up and nothing to close. Leaving the word
+        /// out of this is what made a pointer moving *along* a symbol kill its
+        /// own card — every character is a different offset, and each one
+        /// scheduled a close that only the card itself could survive.
+        guard !hoverHoldsPointer() else { return }
 
         let point = convert(event.locationInWindow, from: nil)
         let offset = characterIndexForInsertion(at: point)
@@ -1670,27 +1875,46 @@ final class CodeNSTextView: NSTextView {
 
     /// Puts the card beside the hovered word.
     ///
-    /// Anchored to the **word**, not to the pointer: a card that follows the
-    /// mouse to the pixel jitters while you read it, and what is being
-    /// described is the symbol, which does not move.
+    /// Anchored to the **word** — the whole identifier under the pointer, not
+    /// the one character it happens to be over. A per-character anchor moved
+    /// the card sideways by a glyph on every move within the same symbol, and
+    /// re-presenting a card is what pulls it out from under a pointer already
+    /// resting on it.
+    ///
+    /// An answer that arrives while the reader is holding the card is
+    /// **dropped**. It describes the last offset the pointer crossed on its
+    /// way there, which is behind the card by now, and showing it would move
+    /// the card to that offset's line — the exit that followed hid the card,
+    /// half a second after the reader reached it. This is the dismissal the
+    /// report was about.
     private func showHover(_ info: CodeHoverInfo, at offset: Int) {
-        let length = (string as NSString).length
-        guard length > 0 else { return }
-        let range = NSRange(location: min(offset, length - 1), length: 1)
-        let anchor = firstRect(forCharacterRange: range, actualRange: nil)
+        guard !hoverHoldsPointer() else { return }
+
+        let content = string as NSString
+        guard content.length > 0 else { return }
+        let anchor = firstRect(
+            forCharacterRange: Self.symbolRange(in: content, containing: offset),
+            actualRange: nil
+        )
         guard anchor.height > 0 else { return }
 
         // A fresh card cancels the close the last one was waiting on, or it
         // would be shut 400ms after opening.
         dismissTask?.cancel()
+        hoverSymbol = anchor
 
         let panel = hoverPanel ?? CodeHoverPanel()
         hoverPanel = panel
         panel.onPointerExit = { [weak self] in
-            // Cleared as well as hidden, so that coming back to the same word
-            // opens the card again instead of the offset guard swallowing it.
-            self?.hoverOffset = nil
-            self?.hideHover()
+            guard let self else { return }
+            /// Cleared as well as closed, so that coming back to the same word
+            /// opens the card again instead of the offset guard swallowing it.
+            self.hoverOffset = nil
+            /// The same grace the text view's own exit gets, for the same
+            /// reason turned around: leaving the card *upwards* lands on the
+            /// word it describes, and that is not a reader who is finished.
+            self.hoverTask?.cancel()
+            self.scheduleHoverDismissal()
         }
         panel.present(
             info,
@@ -1701,7 +1925,8 @@ final class CodeNSTextView: NSTextView {
         )
     }
 
-    /// Closes the card unless the pointer reached it in the meantime.
+    /// Closes the card unless `hoverHoldsPointer` still answers yes when the
+    /// clock runs out — the pointer arrived, never left, or is still crossing.
     ///
     /// Closes the *window* and nothing else — deliberately not `hideHover`,
     /// which also cancels the pending look-up. `hoverDismissDelay` is shorter
@@ -1711,18 +1936,50 @@ final class CodeNSTextView: NSTextView {
         dismissTask?.cancel()
         dismissTask = Task { @MainActor [weak self, hoverDismissDelay] in
             try? await Task.sleep(for: hoverDismissDelay)
-            guard !Task.isCancelled, let self,
-                  self.hoverPanel?.containsPointer != true
-            else { return }
+            guard !Task.isCancelled, let self else { return }
+            guard !self.hoverHoldsPointer() else { return }
+
+            /// A button held down while the card has focus is a selection
+            /// being dragged out of it, and overshooting the card's edge must
+            /// not take the text away mid-drag. Re-armed rather than skipped:
+            /// the button coming up outside the card produces no event this
+            /// view or the card would hear, so nothing else is guaranteed to
+            /// ask again, and a card that fails to close is the worse bug.
+            if self.isDraggingFromCard {
+                self.scheduleHoverDismissal()
+                return
+            }
+
+            self.hoverSymbol = nil
             self.hoverPanel?.dismiss()
             self.onHoverDismiss?()
         }
+    }
+
+    /// Whether the pointer is somewhere that still counts as hovering: on the
+    /// card, on the word it describes, or in the gap between the two.
+    ///
+    /// False with no card up, which is what makes it safe to ask from every
+    /// close: the answer then is "nothing is being held".
+    private func hoverHoldsPointer() -> Bool {
+        guard let hoverPanel, let hoverSymbol else { return false }
+        return hoverPanel.retainsPointer(describing: hoverSymbol)
+    }
+
+    /// Whether a mouse button is down *and* the card is the window holding
+    /// focus, which together mean the drag belongs to the card.
+    ///
+    /// The focus half matters: a drag in the editor is a selection in the
+    /// code, and that already closed the card on its first press.
+    private var isDraggingFromCard: Bool {
+        NSEvent.pressedMouseButtons != 0 && hoverPanel?.isKeyWindow == true
     }
 
     /// Stops everything: no card, and no card on its way.
     private func hideHover() {
         hoverTask?.cancel()
         dismissTask?.cancel()
+        hoverSymbol = nil
         hoverPanel?.dismiss()
         onHoverDismiss?()
     }
@@ -1734,10 +1991,11 @@ final class CodeNSTextView: NSTextView {
     /// it describes, and it takes mouse events so a long description can be
     /// scrolled or a line selected out of it. Reaching for it therefore means
     /// leaving this view, and for the few points of the crossing the pointer
-    /// is on neither: `containsPointer` catches the pointer that has already
-    /// arrived, and closing at once dismissed every card that was still on its
-    /// way to being reached. The delay covers the gap; a pointer that
-    /// genuinely left is rid of the card a moment later either way.
+    /// is on neither window: `hoverHoldsPointer` counts that crossing as
+    /// hovering, and closing at once dismissed every card that was still on
+    /// its way to being reached. The delay is kept on top of the geometry,
+    /// because a reach is a hand movement and not a straight line; a pointer
+    /// that genuinely left is rid of the card a moment later either way.
     ///
     /// The look-up is abandoned immediately even though the window is not.
     /// They are separate on purpose — see `scheduleHoverDismissal` — and the
@@ -1745,7 +2003,7 @@ final class CodeNSTextView: NSTextView {
     /// a word nobody is pointing at.
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        guard hoverPanel?.containsPointer != true else { return }
+        guard !hoverHoldsPointer() else { return }
         hoverOffset = nil
         hoverTask?.cancel()
         scheduleHoverDismissal()
@@ -1754,12 +2012,53 @@ final class CodeNSTextView: NSTextView {
     /// A card is a window, and a window outlives the view that opened it. Left
     /// alone it would stay on screen after its tab was closed, describing a
     /// symbol in a file that is no longer showing.
+    ///
+    /// The same window is what the focus observation is hung on, re-hung here
+    /// because a text view moves between windows — a tab dragged out of one
+    /// carries this view with it, and an observation left on the old window
+    /// would report a resignation that says nothing about this editor.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didResignKeyNotification,
+            object: nil
+        )
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(editorWindowDidResignKey),
+                name: NSWindow.didResignKeyNotification,
+                object: window
+            )
+        }
+
         if window == nil {
             hoverOffset = nil
             hideHover()
         }
+    }
+
+    /// The editor's window losing focus closes the card, because the card is a
+    /// floating window: left up it hangs over whatever the reader moved to,
+    /// describing a symbol in a file they are no longer looking at.
+    ///
+    /// Except when the pointer is on the card, which is the one resignation
+    /// that must not close anything — clicking into the card to select a line
+    /// is what makes the card key and this window resign, in that order, so a
+    /// handler that closed on every resignation would undo the selection it
+    /// was asked for. `hoverHoldsPointer` separates the two: the pointer is
+    /// inside the card in that case and somewhere else entirely in every
+    /// other.
+    ///
+    /// `hoverOffset` is cleared either way. Focus moving is exactly when the
+    /// reader may come back to the *same* word, and the guard against a
+    /// repeated offset would otherwise swallow the hover they asked for.
+    @objc private func editorWindowDidResignKey() {
+        hoverOffset = nil
+        guard !hoverHoldsPointer() else { return }
+        hideHover()
     }
 
     /// Anything that moves the text out from under the card closes it: the
@@ -2283,16 +2582,94 @@ final class CodeNSTextView: NSTextView {
     /// field arithmetic needs.
     private var pendingEdit: (range: NSRange, delta: Int)?
 
+    /// The same edit again, in the shape the file's timeline records.
+    ///
+    /// Captured here because this is the only moment the *old* text is still
+    /// in the buffer, and a step that cannot say what it replaced cannot be
+    /// undone once the view that made it is gone. Every write in this class
+    /// comes through here — typing, a completion and its imports, a snippet, a
+    /// deleted bracket pair, a formatter's splice — so one hook covers all of
+    /// them and no writer can be added that quietly misses it.
+    private var pendingUndoStep: CodeUndoStep?
+
     override func shouldChangeText(in range: NSRange, replacementString: String?) -> Bool {
         if snippetSession != nil {
             let inserted = (replacementString as NSString?)?.length ?? 0
             pendingEdit = (range, inserted - range.length)
         }
+
+        pendingUndoStep = undoStep(replacing: range, with: replacementString)
         return super.shouldChangeText(in: range, replacementString: replacementString)
+    }
+
+    /// The step this change would be, or nil when there is nothing worth
+    /// recording.
+    ///
+    /// Nil for an attribute-only change — `replacementString` is nil for
+    /// those, and colouring the syntax is not something anybody wants back —
+    /// for a replacement of a text by itself, and for the buffer being moved
+    /// by the timeline, which would otherwise record its own undo as the next
+    /// thing to undo.
+    private func undoStep(replacing range: NSRange, with replacement: String?) -> CodeUndoStep? {
+        guard let replacement, !undoTimeline.isApplying else { return nil }
+
+        let content = string as NSString
+        guard range.location >= 0, NSMaxRange(range) <= content.length else { return nil }
+
+        let removed = content.substring(with: range)
+        guard removed != replacement else { return nil }
+
+        return CodeUndoStep(
+            range: range,
+            removed: removed,
+            inserted: replacement,
+            selectionBefore: selectedRange(),
+            selectionAfter: NSRange(
+                location: range.location + (replacement as NSString).length,
+                length: 0),
+            name: hostEditName ?? Self.undoName(removed: removed, inserted: replacement))
+    }
+
+    /// What the Edit menu calls a step, from the shape of the edit.
+    private static func undoName(removed: String, inserted: String) -> String {
+        if removed.isEmpty { return "Typing" }
+        if inserted.isEmpty { return "Delete" }
+        return "Replace"
+    }
+
+    /// Hands the captured step to the timeline, with the selection the edit
+    /// actually left behind.
+    ///
+    /// The live selection is preferred over the one worked out on the way in,
+    /// because for typing AppKit has already moved the caret by now and knows
+    /// better than the arithmetic does. It is trusted only when it landed
+    /// inside the text just inserted: several writers in this class call
+    /// `didChangeText` and place the caret *after* it, and reading a caret
+    /// that has not moved yet would record a step that redoes to the wrong
+    /// place.
+    private func recordPendingUndoStep() {
+        guard var step = pendingUndoStep else { return }
+        pendingUndoStep = nil
+
+        let end = step.range.location + (step.inserted as NSString).length
+        let live = selectedRange()
+        if live.length == 0, live.location >= step.range.location, live.location <= end {
+            step.selectionAfter = live
+        }
+
+        undoTimeline.record(step, at: Date().timeIntervalSinceReferenceDate)
     }
 
     override func didChangeText() {
         super.didChangeText()
+        recordPendingUndoStep()
+
+        /// The card is pinned to a screen position and the text it describes has
+        /// just moved out from under it. `keyDown` covers what the reader types;
+        /// this covers every edit that arrives by another road — a paste, a
+        /// formatting pass, an undo, an edit the language server applied.
+        hoverOffset = nil
+        hideHover()
 
         guard let session = snippetSession, let edit = pendingEdit else { return }
         pendingEdit = nil
@@ -2337,14 +2714,52 @@ final class CodeNSTextView: NSTextView {
 
     static func identifierRange(in content: NSString, endingAt caret: Int) -> NSRange {
         var start = min(max(caret, 0), content.length)
-        while start > 0 {
-            let scalar = UnicodeScalar(content.character(at: start - 1)) ?? " "
-            let character = Character(scalar)
-            guard character.isLetter || character.isNumber || character == "_" || character == "$"
-            else { break }
+        while start > 0, isIdentifier(content.character(at: start - 1)) {
             start -= 1
         }
         return NSRange(location: start, length: min(max(caret, 0), content.length) - start)
+    }
+
+    /// The whole identifier an offset falls inside, or that single character
+    /// when it falls on something that is not one.
+    ///
+    /// What the hover card is anchored to, and it reaches *both* ways where
+    /// `identifierRange` only reaches back from a caret: the pointer lands in
+    /// the middle of a word as often as at its end. Anchoring to the one
+    /// character under the pointer instead moved the card by a glyph on every
+    /// move within the same symbol, and a card that moves is a card the
+    /// pointer is no longer on.
+    ///
+    /// A single character for punctuation and for whitespace, which is the
+    /// honest anchor for a hover over an operator — servers do answer for
+    /// those. Empty only for an empty document, which the caller rejects
+    /// before asking.
+    static func symbolRange(in content: NSString, containing offset: Int) -> NSRange {
+        guard content.length > 0 else { return NSRange(location: 0, length: 0) }
+
+        let clamped = min(max(offset, 0), content.length - 1)
+        guard isIdentifier(content.character(at: clamped)) else {
+            return NSRange(location: clamped, length: 1)
+        }
+
+        var start = clamped
+        while start > 0, isIdentifier(content.character(at: start - 1)) { start -= 1 }
+
+        var end = clamped + 1
+        while end < content.length, isIdentifier(content.character(at: end)) { end += 1 }
+
+        return NSRange(location: start, length: end - start)
+    }
+
+    /// Whether a UTF-16 unit can be part of an identifier.
+    ///
+    /// One rule in one place, because two copies of it drift: `$` counts for
+    /// the reason `identifierRange` gives — it is legal in JavaScript, and
+    /// dropping it completes `$el` as `el` — and it has to count for the hover
+    /// anchor too, or the card opens against half a name.
+    static func isIdentifier(_ unit: unichar) -> Bool {
+        let character = Character(UnicodeScalar(unit) ?? " ")
+        return character.isLetter || character.isNumber || character == "_" || character == "$"
     }
 
     private func makeCompletionPanel() -> CodeCompletionPanel {
@@ -2543,12 +2958,14 @@ final class CodeNSTextView: NSTextView {
             in: string as NSString
         )
 
-        /// Everything lands inside one undo group, so a single ⌘Z takes back
-        /// the completion *and* the import it dragged in. Two steps would
-        /// leave the reader with an import for a symbol they just removed —
-        /// and they would have to notice that to fix it.
-        undoManager?.beginUndoGrouping()
-        defer { undoManager?.endUndoGrouping() }
+        /// On the file's timeline, not on `undoManager` — that one is
+        /// AppKit's plumbing and holds none of these steps. Everything below
+        /// lands inside one group, so a single ⌘Z takes back the completion
+        /// *and* the import it dragged in. Two steps would leave the reader
+        /// with an import for a symbol they just removed — and they would have
+        /// to notice that to fix it.
+        undoTimeline.beginGrouping()
+        defer { undoTimeline.endGrouping() }
 
         /// The additional edits go in **first, back to front**. Every range
         /// the server sent is measured against the document as it was, so
@@ -3131,7 +3548,7 @@ final class CodeNSTextView: NSTextView {
         return view.isDescendant(of: self)
     }
 
-    /// This view's own undo stack.
+    /// This file's undo stack, which is not this view's.
     ///
     /// `NSTextView` asks the responder chain for an undo manager, and in this
     /// app the window's delegate answers with the *application's* one — the
@@ -3139,12 +3556,103 @@ final class CodeNSTextView: NSTextView {
     /// editor performed a window operation instead of undoing a keystroke, and
     /// typing registered nothing anybody could reach.
     ///
-    /// Owning one here keeps the two apart: text undo belongs to the buffer,
-    /// window undo belongs to the window, and neither can consume the other's
-    /// ⌘Z because only one of them has focus at a time.
-    private let textUndoManager = UndoManager()
+    /// Answering with a ``CodeUndoTimeline`` keeps the two apart the way a
+    /// stored `UndoManager` used to, and fixes what a stored one could not:
+    /// the timeline belongs to the file, so it survives this view being torn
+    /// down and rebuilt when the reader changes tabs, and survives the tab
+    /// being closed and opened again. See that type for why the stack could
+    /// not simply be moved onto the document.
+    ///
+    /// One is made on demand so a view with no host — a test, a preview —
+    /// still has somewhere to register. The host replaces it with the one
+    /// belonging to the file being shown.
+    private var ownUndoTimeline: CodeUndoTimeline?
 
-    override var undoManager: UndoManager? { textUndoManager }
+    var undoTimeline: CodeUndoTimeline {
+        get {
+            if let ownUndoTimeline { return ownUndoTimeline }
+            let made = CodeUndoTimeline()
+            made.target = self
+            ownUndoTimeline = made
+            return made
+        }
+        set {
+            /// The gesture in progress belongs to the file being left, and it
+            /// only exists inside the timeline until something ends it.
+            if newValue !== ownUndoTimeline { ownUndoTimeline?.flush() }
+            newValue.target = self
+            ownUndoTimeline = newValue
+        }
+    }
+
+    /// The manager `NSTextView` itself talks to, which is deliberately not
+    /// the one ⌘Z uses.
+    ///
+    /// Nothing real is registered here — `allowsUndo` is off — but AppKit
+    /// still reaches into whatever this returns while a change is being
+    /// prepared, and it throws outright if that manager is not grouping by
+    /// event. Returning the file's timeline instead cost either a crash or a
+    /// ⌘Z that takes back a format together with the sentence typed before
+    /// it; see ``CodeUndoTimeline``. Per view rather than shared, so window
+    /// undo — reopening a closed tab — can never be reached from a focused
+    /// editor.
+    private let appKitUndoManager = UndoManager()
+
+    override var undoManager: UndoManager? { appKitUndoManager }
+
+    /// Puts a step back, or puts it again.
+    ///
+    /// Through `shouldChangeText`/`didChangeText` like every other write in
+    /// this class, so the delegate fires and the language server hears about
+    /// it. The timeline has its own guard against recording what it is in the
+    /// middle of applying, which is what stops an undo from registering itself
+    /// as the next thing to undo.
+    ///
+    /// Both ranges are checked against the buffer rather than trusted. A step
+    /// describes a text; if anything has put a different one in front of it,
+    /// splicing at those offsets writes nonsense into the file — so a step
+    /// that does not fit is dropped instead.
+    func applyUndoStep(_ step: CodeUndoStep, undoing: Bool) {
+        let range = undoing ? step.rangeAfter : step.range
+        let replacement = undoing ? step.removed : step.inserted
+        let selection = undoing ? step.selectionBefore : step.selectionAfter
+
+        let content = string as NSString
+        guard range.location >= 0, NSMaxRange(range) <= content.length else { return }
+        guard content.substring(with: range) == (undoing ? step.inserted : step.removed) else { return }
+        guard shouldChangeText(in: range, replacementString: replacement) else { return }
+        textStorage?.replaceCharacters(in: range, with: replacement)
+        didChangeText()
+
+        let length = (string as NSString).length
+        let caret = NSRange(location: min(max(0, selection.location), length), length: 0)
+        setSelectedRange(caret)
+        scrollRangeToVisible(caret)
+    }
+
+    /// Applies a replacement the host computed — a formatter's, a language
+    /// server's, a file reloaded from disk.
+    ///
+    /// Here rather than on the coordinator because it has to travel the same
+    /// road a keystroke does: a bare `replaceCharacters` on the storage
+    /// registers no undo step, which is exactly how ⌘Z came to do nothing
+    /// after ⇧⌘F.
+    func applyHostEdit(_ edit: CodeTextEdit, name: String) {
+        let content = string as NSString
+        guard edit.range.location >= 0, NSMaxRange(edit.range) <= content.length else { return }
+
+        hostEditName = name
+        defer { hostEditName = nil }
+
+        guard shouldChangeText(in: edit.range, replacementString: edit.newText) else { return }
+        textStorage?.replaceCharacters(in: edit.range, with: edit.newText)
+        didChangeText()
+    }
+
+    /// What the edit in flight should be called on the undo stack, while one
+    /// is in flight. Nil the rest of the time, when the name is read off the
+    /// shape of the edit instead.
+    private var hostEditName: String?
 
     /// ⌘Z, answered by the view that holds the text.
     ///
@@ -3163,13 +3671,11 @@ final class CodeNSTextView: NSTextView {
     /// holds focus, which is precisely when ⌘Z means "take back what I
     /// typed".
     @objc func undo(_ sender: Any?) {
-        guard textUndoManager.canUndo else { return }
-        textUndoManager.undo()
+        undoTimeline.undo()
     }
 
     @objc func redo(_ sender: Any?) {
-        guard textUndoManager.canRedo else { return }
-        textUndoManager.redo()
+        undoTimeline.redo()
     }
 
     /// Validated against the same manager the action uses.
@@ -3184,12 +3690,12 @@ final class CodeNSTextView: NSTextView {
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(undo(_:)):
-            item.title = Self.undoTitle("Undo", actionName: textUndoManager.undoActionName)
-            return textUndoManager.canUndo
+            item.title = Self.undoTitle("Undo", actionName: undoTimeline.undoActionName)
+            return undoTimeline.canUndo
 
         case #selector(redo(_:)):
-            item.title = Self.undoTitle("Redo", actionName: textUndoManager.redoActionName)
-            return textUndoManager.canRedo
+            item.title = Self.undoTitle("Redo", actionName: undoTimeline.redoActionName)
+            return undoTimeline.canRedo
 
         default:
             return super.validateMenuItem(item)

@@ -72,6 +72,76 @@ struct SyntaxRules {
 
     static let hashComment = #"#[^\n]*"#
 
+    /// TOML's four string forms, and the one place its strings differ from
+    /// every other language in this file: a *literal* string escapes nothing.
+    ///
+    /// `path = 'C:\dir\'` is the spec's own example of why literal strings
+    /// exist, and the C-style alternation reads that `\'` as an escaped quote
+    /// — so the string never closes and the rest of the file is painted as
+    /// one. A literal string ends at the next `'`, and cannot span a line.
+    static let tomlString =
+        #""""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\]|\\.)*"|'[^'\n]*'"#
+
+    /// TOML's numbers, which are the shared `number` plus the two spellings a
+    /// configuration format uses and a programming language does not.
+    ///
+    /// A date-time is one token: `expires = 1979-05-27T07:32:00Z` under the
+    /// shared pattern is six numbers with the separators left plain, which
+    /// reads as arithmetic. And `0o755` is octal here — the shared pattern
+    /// knows `0x` and `0b` only, so a file mode came out as a `0` beside a
+    /// word. The date alternative leads because the alternation is
+    /// first-match, not longest-match: `\d[\d_]*` would take `1979` and stop.
+    ///
+    /// The line continuations are `\#` and not `\`, because this is a **raw**
+    /// multi-line literal: inside `#"""…"""#` the escape marker is `\#`, so a
+    /// bare `\` before the newline stays in the string and ICU reads it as an
+    /// escaped newline the subject has to contain. Written that way the whole
+    /// pattern compiles and matches almost nothing — `0o755` was the one
+    /// alternative that survived, because it is the only one with a `|` on
+    /// both sides of it on the same line.
+    static let tomlNumber = #"""
+    \b(?:\#
+    \d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})?)?\#
+    |\d{2}:\d{2}:\d{2}(?:\.\d+)?\#
+    |0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+\#
+    |\d[\d_]*(?:\.[\d_]+)?(?:[eE][+-]?\d+)?\#
+    )\b
+    """#
+
+    /// A TOML table header: `[table]`, or `[[array.of.tables]]`.
+    ///
+    /// The structural spine of the format, and the one thing in a TOML file
+    /// that is neither a key nor a value — so it takes the `type` slot rather
+    /// than sharing a colour with either.
+    ///
+    /// **Anchored to the line, and the closing bracket has to end the line.**
+    /// A bare "bracketed run" is also every array, and the reason for both
+    /// guards is a multi-line array of arrays: the anchor keeps
+    /// `data = [ [1], [2] ]` out, and the lookahead keeps the inner `[ 1 ],`
+    /// of the version broken across lines out. What is left is an inner
+    /// element on its own line with no trailing comma — legal for the last
+    /// one — which is painted as a header. The character class already
+    /// excludes `,`, so that edge needs an array of exactly one element
+    /// written across three lines to reach.
+    static let tomlTableHeader =
+        #"^[ \t]*\[\[?[A-Za-z0-9_. \t"'-]*\]\]?(?=[ \t]*(?:#|$))"#
+
+    /// A TOML bare key, dotted or not: the `a.b` of `a.b = 1`.
+    ///
+    /// The same shape the Terraform rules already call an attribute — a name
+    /// before `=` — widened to the dotted form, which in TOML is a key and
+    /// not two. Digits are in the charset because a bare key may be all
+    /// digits: `1979 = "x"` is a key, and `attribute` outranks `number` in
+    /// the highlighter's precedence, so it reads as one.
+    ///
+    /// **Anchored to the line**, so the keys of an inline table stay plain.
+    /// That is the trade-off `propertyBeforeColon` documents for the
+    /// JavaScript family, and the same one: a key at the start of its line is
+    /// every key in a formatted file. A quoted key is left to the string rule,
+    /// which outranks this one and is already painting it.
+    static let tomlKey =
+        #"^[ \t]*[A-Za-z0-9_-]+(?:[ \t]*\.[ \t]*[A-Za-z0-9_-]+)*(?=[ \t]*=)"#
+
     /// Decimals, hex, binary, floats and exponents, with `_` separators.
     static let number =
         #"\b(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.[\d_]+)?(?:[eE][+-]?\d+)?)\b"#
@@ -157,12 +227,13 @@ struct SyntaxRules {
     /// decision rather than a style one.** The readable spelling puts the
     /// guard first — `(?<![^\s…])<` — and that makes the engine evaluate a
     /// lookbehind at *every position in the file* before failing on a
-    /// character that was never a `<`. Measured over the 401 `.ts` files of
-    /// `front-app-eita`, one line re-highlighted each, best of three: 6.1 ms
-    /// before this rule, **9.4 ms** with the guard first, **6.8 ms** with the
-    /// literal first. Same tokens, 1.8 µs per keystroke per file instead of
-    /// 8.2. So the lookbehind is written after the `<` it guards, spanning
-    /// both characters, which is why it reads as awkwardly as it does.
+    /// character that was never a `<`. Measured over a corpus of 401 `.ts`
+    /// files — the `src` tree of a mid-size web app — one line re-highlighted
+    /// each, best of three: 6.1 ms before this rule, **9.4 ms** with the
+    /// guard first, **6.8 ms** with the literal first. Same tokens, 1.8 µs
+    /// per keystroke per file instead of 8.2. So the lookbehind is written
+    /// after the `<` it guards, spanning both characters, which is why it
+    /// reads as awkwardly as it does.
     static let jsxTag =
         #"</[A-Za-z][A-Za-z0-9._-]*|<(?<=(?:^|[\s(\[{,;=>&|?:!])<)[A-Za-z][A-Za-z0-9._-]*|</?>"#
 
@@ -367,6 +438,20 @@ struct SyntaxRules {
                 number: number,
                 keyword: words(["true", "false", "null", "yes", "no", "on", "off"]),
                 attribute: #"^\s*[-\w.]+(?=\s*:)"#
+            )
+
+        case .toml:
+            return SyntaxRules(
+                comment: hashComment,
+                string: tomlString,
+                number: tomlNumber,
+                // The complete list, not a selection: these four words are
+                // every bare value TOML has. YAML's row above needs `yes`,
+                // `no`, `on` and `off` as well, and painting those here
+                // would colour four ordinary strings as literals.
+                keyword: words(["true", "false", "inf", "nan"]),
+                type: tomlTableHeader,
+                attribute: tomlKey
             )
 
         case .markdown:

@@ -18,9 +18,32 @@ struct EditorTabBar: View {
     let onSelect: (String) -> Void
     let onClose: (String) -> Void
 
+    /// What the tab's own menu asks for. One closure rather than one per
+    /// command: the menu is described by `EditorTabCommand`, and a callback
+    /// per item would mean this row growing a parameter every time that
+    /// description does.
+    let onCommand: (EditorTabCommand, EditorTab) -> Void
+
+    /// What each tab can be asked to do. Asked per tab rather than per bar:
+    /// only the centre knows whether a tab's cell survives it leaving, and
+    /// whether the main pane is somewhere else.
+    let availability: (EditorTab) -> EditorTabCommand.Availability
+
+    /// The same, for the terminal's own tab, and what its menu asks for.
+    let terminalAvailability: EditorTabCommand.Availability
+    let onTerminalCommand: (EditorTabCommand) -> Void
+
     /// The title of the terminal this pane belongs to, for its own tab.
     let terminalTitle: String
     let onSelectTerminal: () -> Void
+
+    /// Whether the terminal lives in *this* cell.
+    ///
+    /// With a grid there are several bars and one terminal, so the tab for it
+    /// is drawn by the cell that holds it and by no other — a second copy
+    /// would be a control that moves the shell out from under the reader who
+    /// clicked it.
+    let hostsTerminal: Bool
 
     @ObservedObject private var palette: ThemePalette = .shared
 
@@ -36,14 +59,19 @@ struct EditorTabBar: View {
     var body: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 0) {
-                // First, always, and not closable: the pane belongs to the
-                // terminal, and the files are guests in it. A close button
-                // here would offer to remove the thing that owns the window.
-                TerminalTabItem(
-                    title: terminalTitle,
-                    isSelected: selection == .terminal,
-                    onSelect: onSelectTerminal
-                )
+                // First in its own cell, and not closable: the pane belongs
+                // to the terminal, and the files are guests in it. A close
+                // button here would offer to remove the thing that owns the
+                // window.
+                if hostsTerminal {
+                    TerminalTabItem(
+                        title: terminalTitle,
+                        isSelected: selection == .terminal,
+                        availability: terminalAvailability,
+                        onSelect: onSelectTerminal,
+                        onCommand: onTerminalCommand
+                    )
+                }
 
                 ForEach(tabs) { tab in
                     EditorTabItem(
@@ -51,8 +79,10 @@ struct EditorTabBar: View {
                         isSelected: selection == .file(tab.id),
                         showsDirectory: needsDirectory(tab),
                         isDivergent: isDivergent(tab),
+                        availability: availability(tab),
                         onSelect: { onSelect(tab.id) },
-                        onClose: { onClose(tab.id) }
+                        onClose: { onClose(tab.id) },
+                        onCommand: { onCommand($0, tab) }
                     )
                 }
 
@@ -97,40 +127,114 @@ struct EditorTabBar: View {
 private struct TerminalTabItem: View {
     let title: String
     let isSelected: Bool
+    let availability: EditorTabCommand.Availability
     let onSelect: () -> Void
+    let onCommand: (EditorTabCommand) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
     @State private var isHovered = false
 
     private var accent: Color { palette.accent ?? .accentColor }
 
+    /// Neither a `Button` nor a tap gesture: the gestures belong to
+    /// `EditorTabDragSource`, laid over the tab.
+    ///
+    /// A button's own gesture used to win over `.onDrag`, so as a button this
+    /// tab could be clicked and never dragged — the terminal was the one tab
+    /// in the bar that could not be moved, which is the whole reason it has a
+    /// tab. The AppKit layer settles that and the operation mask both.
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 5) {
-                Image(systemName: "apple.terminal")
-                    .font(.system(size: 11))
+        HStack(spacing: 5) {
+            Image(systemName: "apple.terminal")
+                .font(.system(size: 11))
 
-                Text(title)
-                    .font(palette.font(size: 11, weight: isSelected ? .semibold : .regular))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background(isSelected ? accent.opacity(0.18) : (isHovered ? Color.secondary.opacity(0.10) : .clear))
-            .overlay(alignment: .bottom) {
-                if isSelected {
-                    Rectangle().fill(accent).frame(height: 2)
-                }
-            }
-            .contentShape(Rectangle())
+            Text(title)
+                .font(palette.font(size: 11, weight: isSelected ? .semibold : .regular))
+                .lineLimit(1)
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(isSelected ? accent.opacity(0.18) : (isHovered ? Color.secondary.opacity(0.10) : .clear))
+        .overlay(alignment: .bottom) {
+            if isSelected {
+                Rectangle().fill(accent).frame(height: 2)
+            }
+        }
+        .contentShape(Rectangle())
+        .overlay {
+            EditorTabDragSource(
+                item: .terminal,
+                label: title,
+                preview: { dragPreview },
+                onClick: { clicks in
+                    if clicks >= 2 { showMenu() } else { onSelect() }
+                },
+                onMenu: showMenu
+            )
+        }
         .onHover { hovering in
             isHovered = hovering
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
         .help(title)
+    }
+
+    /// The terminal's own menu: the four splits and nothing else.
+    ///
+    /// It cannot be closed — the pane belongs to it — and it has no path to
+    /// reveal or to copy. `EditorTabCommand.menu` leaves all of that out on
+    /// its own: the availability it is given says the terminal is already in
+    /// the main pane, and the close commands are filtered here because they
+    /// are the one group this tab must never offer.
+    private func showMenu() {
+        let popup = NSMenu()
+        for entry in EditorTabCommand.menu(availability) {
+            switch entry {
+            case .separator:
+                popup.addItem(.separator())
+            case .command(let command):
+                guard command.zone != nil else { continue }
+                popup.addItem(
+                    ClosureMenuItem(title: command.title, systemImage: command.icon) {
+                        onCommand(command)
+                    })
+            }
+        }
+
+        guard !popup.items.isEmpty else { return }
+        popup.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    /// The terminal's tab, for the drag: its own glyph and title, in the shape
+    /// `EditorTabItem.dragPreview` uses, so the two tabs travel alike. No
+    /// close mark, because this tab has none.
+    private var dragPreview: NSImage? {
+        let renderer = ImageRenderer(
+            content: HStack(spacing: 5) {
+                Image(systemName: "apple.terminal")
+                    .font(.system(size: 11))
+
+                Text(title)
+                    .font(palette.font(size: 11, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: EditorTabBar.tabHeight)
+            .background {
+                ZStack {
+                    Color(nsColor: .controlBackgroundColor)
+                    accent.opacity(0.18)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(accent).frame(height: 2)
+            }
+            .frame(maxWidth: 280)
+        )
+
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        return renderer.nsImage
     }
 }
 
@@ -139,8 +243,13 @@ private struct EditorTabItem: View {
     let isSelected: Bool
     let showsDirectory: Bool
     let isDivergent: Bool
+
+    /// What this tab can be asked to do, which depends on where it is in the
+    /// grid. Resolved by the centre, which is what knows.
+    let availability: EditorTabCommand.Availability
     let onSelect: () -> Void
     let onClose: () -> Void
+    let onCommand: (EditorTabCommand) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
     @ObservedObject private var icons: FileIconProvider = .shared
@@ -150,20 +259,38 @@ private struct EditorTabItem: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
+            /// Everything but the close control, grouped so the gesture layer
+            /// can sit over it and leave that control alone. The layer is an
+            /// AppKit view and takes every click under it, so laid over the
+            /// whole tab it would swallow the one button in here.
+            HStack(spacing: 5) {
+                FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
 
-            Text(tab.name)
-                .font(palette.font(size: 11, weight: isSelected ? .semibold : .regular))
-                .lineLimit(1)
-
-            if showsDirectory {
-                Text((tab.directory as NSString).lastPathComponent)
-                    .font(palette.font(size: 9))
-                    .foregroundStyle(.tertiary)
+                Text(tab.name)
+                    .font(palette.font(size: 11, weight: isSelected ? .semibold : .regular))
                     .lineLimit(1)
-            }
 
-            divergenceMark
+                if showsDirectory {
+                    Text((tab.directory as NSString).lastPathComponent)
+                        .font(palette.font(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+
+                divergenceMark
+            }
+            .contentShape(Rectangle())
+            .overlay {
+                EditorTabDragSource(
+                    item: .file(tab.path),
+                    label: tab.name,
+                    preview: { dragPreview },
+                    onClick: { clicks in
+                        if clicks >= 2 { showMenu() } else { onSelect() }
+                    },
+                    onMenu: showMenu
+                )
+            }
 
             closeControl
         }
@@ -183,7 +310,6 @@ private struct EditorTabItem: View {
                 .frame(width: 1)
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
         // The I-beam has to be pushed back explicitly: it belongs to the
         // text view underneath, and AppKit keeps it while the pointer is
         // over a SwiftUI view that never says otherwise — so a tab looked
@@ -193,6 +319,77 @@ private struct EditorTabItem: View {
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
         .help(tab.path)
+    }
+
+    /// The menu, popped at the pointer.
+    ///
+    /// One renderer for both openings, unlike the explorer's rows: the
+    /// gestures here are AppKit's, so the right click arrives as
+    /// `rightMouseDown` and the double click as a `clickCount` of two, and
+    /// neither of them is a SwiftUI `.contextMenu`.
+    private func showMenu() {
+        let popup = NSMenu()
+        for entry in EditorTabCommand.menu(availability) {
+            switch entry {
+            case .separator:
+                popup.addItem(.separator())
+            case .command(let command):
+                popup.addItem(
+                    ClosureMenuItem(title: command.title, systemImage: command.icon) {
+                        onCommand(command)
+                    })
+            }
+        }
+        popup.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    /// The tab itself, for the thing that follows the pointer while it is
+    /// dragged.
+    ///
+    /// Rendered by SwiftUI, because SwiftUI is what draws the tab: an AppKit
+    /// snapshot of a SwiftUI view comes back empty, and a shape drawn by hand
+    /// in AppKit is a second opinion about how a tab looks that would drift
+    /// from this one. The same icon, the same name, the same font.
+    ///
+    /// The selected tab, square-cornered, close mark and accent rule and all.
+    /// A rounded pill with a border was the first version and it looked like
+    /// a control from another app; what should follow the pointer is the tab.
+    ///
+    /// Opaque underneath, which is the one departure and not a choice: in the
+    /// bar the tab's tint sits over the pane's own coat, and rendered on its
+    /// own that tint is half transparent and lets the desktop through.
+    private var dragPreview: NSImage? {
+        let renderer = ImageRenderer(
+            content: HStack(spacing: 5) {
+                FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
+
+                Text(tab.name)
+                    .font(palette.font(size: 11, weight: .semibold))
+                    .lineLimit(1)
+
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 14)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: EditorTabBar.tabHeight)
+            .background {
+                ZStack {
+                    Color(nsColor: .controlBackgroundColor)
+                    accent.opacity(0.18)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(accent).frame(height: 2)
+            }
+            .frame(maxWidth: 280)
+        )
+
+        /// Rendered for this screen, or the drag carries a blurred copy of
+        /// the tab on a Retina display.
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        return renderer.nsImage
     }
 
     /// The worktree mark, for a tab whose file is from a checkout its

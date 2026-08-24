@@ -30,6 +30,11 @@ struct MarkdownPreviewView: NSViewRepresentable {
     let theme: CodeTheme
     let configuration: CodeEditorConfiguration
 
+    /// How wide the prose is allowed to run. Applied to the document view's
+    /// inset rather than to the render, so changing it re-lays out the same
+    /// attributed string instead of parsing the file again.
+    var width: MarkdownPreviewWidth = EditorSettings.defaultMarkdownPreviewWidth
+
     /// The split's scroll link, when the preview sits beside the source.
     ///
     /// Attached to directly rather than through `.synchronizedScroll(_:as:)`,
@@ -63,6 +68,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         context.coordinator.textView = textView
 
         render(into: context.coordinator)
+        applyWidth(to: context.coordinator)
         join(scrollView, to: context.coordinator)
         publish(to: context.coordinator)
         return scrollView
@@ -70,6 +76,10 @@ struct MarkdownPreviewView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         render(into: context.coordinator)
+        /// Outside `render`, which returns early when the text and the style
+        /// have not changed — and a reader who only pressed the column button
+        /// changed neither.
+        applyWidth(to: context.coordinator)
         /// Free when the view has not changed, which matters because this
         /// runs far more often than anything here does.
         join(scrollView, to: context.coordinator)
@@ -120,7 +130,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
     /// real `NSScrollView`: the sizing below is the whole difference between a
     /// document that scrolls and one clipped to the viewport, and nothing in
     /// the parse or the render can tell those two apart.
-    static func makeTextView() -> NSTextView {
+    static func makeTextView() -> MarkdownDocumentTextView {
         let storage = NSTextStorage()
         let layoutManager = NSLayoutManager()
         let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
@@ -128,14 +138,17 @@ struct MarkdownPreviewView: NSViewRepresentable {
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
 
-        let textView = NSTextView(frame: .zero, textContainer: container)
+        let textView = MarkdownDocumentTextView(frame: .zero, textContainer: container)
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = true
         textView.drawsBackground = true
         textView.isAutomaticLinkDetectionEnabled = false
         textView.displaysLinkToolTips = true
-        textView.textContainerInset = CGSize(width: 20, height: 20)
+        textView.textContainerInset = CGSize(
+            width: MarkdownDocumentTextView.baseInset,
+            height: MarkdownDocumentTextView.baseInset
+        )
         textView.isVerticallyResizable = true
         /// The other half of the resizing recipe, and without it the preview
         /// could not be scrolled past its first screen. `NSTextView(frame:
@@ -172,8 +185,24 @@ struct MarkdownPreviewView: NSViewRepresentable {
         return MarkdownParser.parse(text, flavor: flavor)
     }
 
+    /// What the preview draws with, derived from the editor's own font and the
+    /// terminal's palette. Cheap enough to rebuild per pass, and derived in one
+    /// place so the render and the column cannot disagree about the measure.
+    private var style: MarkdownStyle {
+        .standard(theme: theme, configuration: configuration)
+    }
+
+    /// Gives the document view its column, or takes it away.
+    ///
+    /// The measure comes from the style, so a reader who makes the editor's
+    /// font bigger gets a wider column with the same number of characters on
+    /// the line — which is the whole point of deriving it from font metrics.
+    private func applyWidth(to coordinator: Coordinator) {
+        coordinator.textView?.measure = width == .contained ? style.measure : nil
+    }
+
     private func render(into coordinator: Coordinator) {
-        let style = MarkdownStyle.standard(theme: theme, configuration: configuration)
+        let style = self.style
 
         let fingerprint = Coordinator.Fingerprint(text: text, style: style, fileURL: fileURL)
         guard coordinator.fingerprint != fingerprint else { return }
@@ -227,7 +256,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             let fileURL: URL?
         }
 
-        weak var textView: NSTextView?
+        weak var textView: MarkdownDocumentTextView?
         var output: MarkdownRenderer.Output?
         var fingerprint: Fingerprint?
         var anchors: MarkdownPreviewAnchors?
@@ -286,6 +315,45 @@ struct MarkdownPreviewView: NSViewRepresentable {
                 return MarkdownScrollAnchor(sourceLine: line, renderedY: y)
             }
         }
+    }
+}
+
+/// The preview's document view, which centres its own column.
+///
+/// A subclass for one reason: the inset depends on the pane's width, and a
+/// `NSViewRepresentable` is told when its *value* changes and never when its
+/// view is resized. Dragging the window edge is exactly when the gutters have
+/// to be recomputed, so the view that knows its own width does the arithmetic.
+final class MarkdownDocumentTextView: NSTextView {
+    /// The inset a fluid document keeps: enough that the first glyph is not
+    /// flush against the edge of the pane, and no more.
+    static let baseInset: CGFloat = 20
+
+    /// How wide prose may run, or nil for edge to edge.
+    var measure: CGFloat? {
+        didSet {
+            guard measure != oldValue else { return }
+            applyMeasure()
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        applyMeasure()
+    }
+
+    /// ⚠️ Guarded against the loop it would otherwise be. Setting
+    /// `textContainerInset` invalidates layout, layout can resize a vertically
+    /// resizable text view, and a resize comes back through `setFrameSize` —
+    /// so this must be a no-op once the inset is right, not merely idempotent.
+    private func applyMeasure() {
+        let inset = MarkdownPreviewWidth.inset(
+            paneWidth: bounds.width,
+            measure: measure,
+            base: Self.baseInset
+        )
+        guard abs(textContainerInset.width - inset) > 0.5 else { return }
+        textContainerInset = CGSize(width: inset, height: Self.baseInset)
     }
 }
 

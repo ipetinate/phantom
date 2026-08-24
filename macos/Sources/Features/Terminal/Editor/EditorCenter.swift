@@ -10,7 +10,43 @@ import SwiftUI
 /// terminal back" mean something local.
 @MainActor
 final class EditorCenter: ObservableObject {
-    @Published private(set) var tabs = EditorTabSet()
+    /// How the pane is divided, and what is open in each cell.
+    ///
+    /// The one source of truth for the editor's layout. `tabs` below is a
+    /// view onto the cell in focus rather than state of its own, so the two
+    /// can never disagree — the shape this replaces held a single tab set and
+    /// could not express a second cell at all.
+    @Published private(set) var tree: EditorGroupTree
+
+    /// The cell a file opens in, and the one `tabs` describes.
+    ///
+    /// Kept pointing at a cell that exists: the tree removes a cell that runs
+    /// out of files, and focus then falls to the sibling that took its space.
+    @Published private(set) var activeGroupID: EditorGroup.ID
+
+    /// The two facts the pane's AppKit host needs, as one value.
+    ///
+    /// Published in its own right rather than derived by the host from
+    /// `tree`, because `@Published` sends in `willSet`: a host reading
+    /// `tree` — or anything computed from it, `tabs` included — from inside
+    /// that callback sees the *previous* value. One value, computed here
+    /// after each change, is a seam with no ordering to get wrong.
+    @Published private(set) var paneVisibility = PaneVisibility(
+        showsTerminal: true, showsTabBar: false)
+
+    struct PaneVisibility: Equatable {
+        var showsTerminal: Bool
+        var showsTabBar: Bool
+    }
+
+    /// The open files of the cell in focus.
+    ///
+    /// Computed rather than stored: every reader that predates the grid is
+    /// asking about the cell being worked in, and answering from the tree
+    /// leaves nothing to keep in step.
+    var tabs: EditorTabSet {
+        tree.group(activeGroupID)?.tabs ?? EditorTabSet()
+    }
 
     /// Documents by path. Kept alongside the tab set rather than inside it
     /// because the tab set stays a value type — every rule about ordering
@@ -37,6 +73,20 @@ final class EditorCenter: ObservableObject {
     /// How far down the terminal's content starts, so the pane's tab bar has
     /// space of its own instead of covering it.
     @Published var paneTabBarInset: CGFloat = 0
+
+    /// The coat the pane paints behind its own content: the terminal's
+    /// background colour at the opacity it is configured with, which
+    /// `AppearanceCoordinator` resolves for the sidebar too. Pushed in by the
+    /// controller on every appearance sync.
+    ///
+    /// Per window rather than on `ThemePalette`, because it follows the
+    /// *focused surface* — two windows on different themes carry different
+    /// coats — and the grid already observes this object.
+    ///
+    /// Nil while no surface has answered yet, which draws nothing: the window
+    /// under it is translucent by design, and a guessed colour there is the
+    /// opaque slab the pane used to show for a frame on open.
+    @Published var paneBackground: NSColor?
 
     /// Raised when a file can't be opened, for the host to explain and
     /// offer the external editor instead.
@@ -87,6 +137,214 @@ final class EditorCenter: ObservableObject {
 
     private var documentObservers: [String: AnyCancellable] = [:]
 
+    init() {
+        let group = EditorGroup(hostsTerminal: true)
+        tree = .leaf(group)
+        activeGroupID = group.id
+    }
+
+    // MARK: Routing a change to a cell
+
+    /// Changes the cell in focus, and leaves focus on a cell that exists.
+    ///
+    /// The sibling is read *before* the change: a cell that empties is
+    /// removed by the tree, and afterwards there is no split left to ask.
+    private func mutateActive(_ body: (inout EditorTabSet) -> Void) {
+        let fallback = tree.neighbour(of: activeGroupID)
+        tree.update(activeGroupID) { body(&$0.tabs) }
+        if tree.group(activeGroupID) == nil {
+            activeGroupID = fallback ?? tree.groupIDs[0]
+        }
+        refreshPaneVisibility()
+    }
+
+    /// Changes the cell that has this file open, wherever it is.
+    ///
+    /// The dirty dot, a rename and a close are each about one file, and that
+    /// file is not necessarily in the cell being worked in. Routing them to
+    /// the active cell instead would drop a dot on a tab in another cell, and
+    /// leave a renamed tab pointing at a path that no longer exists.
+    private func mutateHolder(of path: String, _ body: (inout EditorTabSet) -> Void) {
+        guard let holder = tree.groupHolding(path) else { return }
+        let fallback = tree.neighbour(of: holder)
+        tree.update(holder) { body(&$0.tabs) }
+        if tree.group(activeGroupID) == nil {
+            activeGroupID = fallback ?? tree.groupIDs[0]
+        }
+        refreshPaneVisibility()
+    }
+
+    /// Puts a file in the cell in focus, or moves focus to the cell that
+    /// already has it — the grid's form of "reopening never duplicates".
+    private func place(_ path: String) {
+        activeGroupID = tree.open(path, in: activeGroupID)
+        refreshPaneVisibility()
+    }
+
+    /// The dirty dot, on whichever cell holds the file.
+    private func setDirty(_ isDirty: Bool, for path: String) {
+        mutateHolder(of: path) { $0.setDirty(isDirty, for: path) }
+    }
+
+    /// A renamed tab, on whichever cell holds it.
+    private func repathTab(from oldPath: String, to newPath: String) {
+        mutateHolder(of: oldPath) { $0.repath(from: oldPath, to: newPath) }
+    }
+
+    // MARK: Reading one cell
+
+    /// The open files of a particular cell.
+    ///
+    /// The grid draws a bar and a surface per cell, so each of those asks
+    /// about *its* cell rather than about the one in focus — which is what
+    /// `tabs` answers, and what every reader that predates the grid wants.
+    func tabs(in id: EditorGroup.ID) -> EditorTabSet {
+        tree.group(id)?.tabs ?? EditorTabSet()
+    }
+
+    /// Whether a cell is the one the terminal lives in, and so the one whose
+    /// bar offers the terminal's tab.
+    func hostsTerminal(_ id: EditorGroup.ID) -> Bool {
+        tree.group(id)?.hostsTerminal ?? false
+    }
+
+    /// Whether a cell draws a bar of tabs.
+    ///
+    /// Files in the cell are the first reason, and the only one that used to
+    /// exist: a lone terminal offered no choice, so a bar over it would have
+    /// been a control that does nothing while costing the terminal a row of
+    /// its height.
+    ///
+    /// A grid adds the second. The terminal's tab is the handle for moving
+    /// the terminal, so a terminal alone in its cell still needs it as soon
+    /// as there is another cell to move it to. Alone in the whole grid it
+    /// stays bare, which is both the old look and the honest one — there is
+    /// nowhere to drag it, and a drop on its own cell is already a no-op.
+    ///
+    /// Answered here rather than in the bar because the *drop* needs it too:
+    /// a tab dropped on a bar joins that cell, and a cell with no bar has no
+    /// such strip to aim at. Two copies of this rule would eventually
+    /// disagree, and the disagreement would read as a split appearing where
+    /// the reader aimed to merge.
+    func showsTabBar(in id: EditorGroup.ID) -> Bool {
+        let cell = tabs(in: id)
+        if !cell.isEmpty { return true }
+        return hostsTerminal(id) && tree.groups.count > 1
+    }
+
+    /// What a particular cell is showing, if it is showing a file.
+    func selected(in id: EditorGroup.ID) -> OpenPane? {
+        guard let path = tabs(in: id).selectedPath else { return nil }
+        if let document = documents[path] { return .text(document) }
+        if let document = media[path] { return .media(document) }
+        return nil
+    }
+
+    func selectedDocument(in id: EditorGroup.ID) -> EditorDocument? {
+        selected(in: id)?.text
+    }
+
+    // MARK: The grid's gestures
+
+    /// Moves focus to a cell, which is what working in one does.
+    func focus(_ id: EditorGroup.ID) {
+        guard tree.group(id) != nil, id != activeGroupID else { return }
+        activeGroupID = id
+        refreshPaneVisibility()
+    }
+
+    /// What a drag carries: an open file, or the terminal itself.
+    ///
+    /// The terminal is draggable for the same reason a file is — it is a tab
+    /// in a bar — and it is a case rather than a path because there is only
+    /// ever one of it.
+    enum DragItem: Equatable {
+        case file(String)
+        case terminal
+    }
+
+    /// Drops a dragged tab on a cell.
+    ///
+    /// The centre of a cell means "move it here"; an edge means "split this
+    /// cell and put it on that side". Both are the same two steps — split,
+    /// then move — because splitting with an *empty* cell and moving into it
+    /// lets the tree's own healing settle every awkward case: dragging a
+    /// cell's only tab onto its own edge empties the cell it left, which
+    /// collapses, so the layout ends where it began instead of leaving a
+    /// half-made split behind.
+    func drop(_ item: DragItem, on target: EditorGroup.ID, zone: EditorDropZone) {
+        guard tree.group(target) != nil else { return }
+
+        var destination = target
+        if let split = zone.split {
+            let cell = EditorGroup()
+            guard tree.split(
+                target,
+                direction: split.direction,
+                inserting: cell,
+                onFirstSide: split.onFirstSide)
+            else { return }
+            destination = cell.id
+        }
+
+        switch item {
+        case .file(let path):
+            tree.move(path, to: destination)
+        case .terminal:
+            tree.moveTerminal(to: destination)
+        }
+
+        activeGroupID = tree.group(destination) != nil ? destination : tree.groupIDs[0]
+        refreshPaneVisibility()
+    }
+
+    /// Divides the cell in focus, carrying what it is showing into the new
+    /// half — the keyboard's form of a drag to that edge, routed through the
+    /// same `drop` so the two cannot disagree.
+    ///
+    /// Whatever the cell is showing travels: a file if it is showing one, the
+    /// terminal if it is showing that. A cell showing the terminal and holding
+    /// nothing else has nothing to divide, and `drop` already answers that
+    /// with the layout it started in.
+    func divideFocusedCell(_ zone: EditorDropZone) {
+        let cell = tabs
+        if let path = cell.selectedPath {
+            drop(.file(path), on: activeGroupID, zone: zone)
+        } else if cell.showsTerminal {
+            drop(.terminal, on: activeGroupID, zone: zone)
+        }
+    }
+
+    /// Closes a cell, its files with it, and lets the sibling take the space.
+    ///
+    /// The files are closed through `close` rather than dropped with the
+    /// cell, so a dirty one is still guarded and a language server still
+    /// hears about it.
+    func closeCell(_ id: EditorGroup.ID) {
+        guard let cell = tree.group(id) else { return }
+        for tab in cell.tabs.tabs { close(tab.path) }
+        guard tree.group(id) != nil else { return }
+        let fallback = tree.neighbour(of: id)
+        tree.remove(id)
+        if tree.group(activeGroupID) == nil {
+            activeGroupID = fallback ?? tree.groupIDs[0]
+        }
+        refreshPaneVisibility()
+    }
+
+    /// Moves a divider, addressed by the split's own id so a drag survives
+    /// the grid changing shape around it.
+    func setRatio(_ ratio: CGFloat, forSplit id: UUID) {
+        tree.setRatio(ratio, forSplit: id)
+    }
+
+    private func refreshPaneVisibility() {
+        let cell = tabs
+        let next = PaneVisibility(
+            showsTerminal: cell.showsTerminal, showsTabBar: cell.showsTabBar)
+        if paneVisibility != next { paneVisibility = next }
+    }
+
     // MARK: Opening and closing
 
     /// Opens a file, optionally landing on a particular range.
@@ -133,7 +391,7 @@ final class EditorCenter: ObservableObject {
             /// being compared against the base. Only setting it when non-nil
             /// would leave the second reading showing the first one's diff.
             existing.reviewBase = reviewBase
-            tabs.select(path)
+            place(path)
             lastSelectedFile = path
             return true
         }
@@ -157,6 +415,11 @@ final class EditorCenter: ObservableObject {
 
             documents[path] = document
             document.startWatching()
+            /// Before the tab exists, so the first render already has the
+            /// timeline this file left behind — and so the disk check that
+            /// may throw it away happens once, here, with the text that was
+            /// just read rather than one the view guessed at.
+            EditorUndoCenter.shared.attach(path: path, text: document.currentText)
             // The tab's dirty dot follows the document, and the document is
             // its own observable object — a change inside it doesn't reach
             // this one on its own.
@@ -167,11 +430,11 @@ final class EditorCenter: ObservableObject {
                     // one. The hop is what makes the dot correct.
                     DispatchQueue.main.async {
                         guard let self, let document else { return }
-                        self.tabs.setDirty(document.isDirty, for: path)
+                        self.setDirty(document.isDirty, for: path)
                     }
                 }
             if let reveal { document.reveal = (id: UUID().uuidString, range: reveal) }
-            tabs.open(path)
+            place(path)
             lastSelectedFile = path
             return true
         }
@@ -186,7 +449,7 @@ final class EditorCenter: ObservableObject {
     /// tab, its label and its icon come out right with no work at all.
     private func openMedia(_ url: URL, path: String, kind: EditorMediaKind) -> Bool {
         if media[path] != nil {
-            tabs.select(path)
+            place(path)
             lastSelectedFile = path
             return true
         }
@@ -198,7 +461,7 @@ final class EditorCenter: ObservableObject {
         }
 
         media[path] = MediaDocument(url: url, kind: kind)
-        tabs.open(path)
+        place(path)
         lastSelectedFile = path
         return true
     }
@@ -232,6 +495,123 @@ final class EditorCenter: ObservableObject {
         requestClose(path)
     }
 
+    /// The cell the terminal lives in, which is what "the main pane" means.
+    ///
+    /// Named for the reader rather than for the tree: a grid has cells, and
+    /// the one holding the shell is the one they started from.
+    var mainPaneID: EditorGroup.ID? { tree.terminalHost }
+
+    /// Whether this file is open in any cell.
+    func isOpen(_ path: String) -> Bool { tree.groupHolding(path) != nil }
+
+    /// Whether dividing the pane can produce anything at all, for a file that
+    /// is not open yet: the cell it would land in has to have something in it
+    /// already, or the new half heals straight back.
+    var canSplitAnything: Bool {
+        guard let cell = tree.group(activeGroupID) else { return false }
+        return !cell.tabs.tabs.isEmpty || cell.hostsTerminal
+    }
+
+    /// Whether this file is already in the main pane, which is what decides
+    /// whether offering to send it there would do anything.
+    func isInMainPane(_ path: String) -> Bool {
+        guard let main = mainPaneID else { return false }
+        return tree.groupHolding(path) == main
+    }
+
+    /// Whether the cell holding `path` has anything left if that tab leaves.
+    ///
+    /// A lone tab cannot be split out of its own cell: the tree would divide
+    /// the cell, move the tab across, find the half it left empty and heal it
+    /// away again — a menu item that reads as an action and is a no-op. The
+    /// terminal counts as something left behind, so a cell showing the shell
+    /// and one file can still divide.
+    func canSplitOut(_ item: DragItem) -> Bool {
+        guard let holder = holder(of: item), let cell = tree.group(holder) else { return false }
+
+        switch item {
+        case .file:
+            return cell.tabs.tabs.count > 1 || cell.hostsTerminal
+        case .terminal:
+            /// The terminal leaving takes the shell with it, so what has to
+            /// stay behind is a file.
+            return !cell.tabs.tabs.isEmpty
+        }
+    }
+
+    /// What a tab's menu may offer, which is a question about where it is.
+    func availability(of item: DragItem) -> EditorTabCommand.Availability {
+        let holder = holder(of: item)
+        let cell = holder.flatMap { tree.group($0) }
+
+        return EditorTabCommand.Availability(
+            hasSiblings: (cell?.tabs.tabs.count ?? 0) > 1,
+            canSplitOut: canSplitOut(item),
+            /// The terminal *is* the main pane, so it can never be sent there.
+            canReturnToMainPane: {
+                guard case .file = item, let main = mainPaneID else { return false }
+                return holder != main
+            }()
+        )
+    }
+
+    /// Divides the cell a tab is in and puts the tab in the new half — the
+    /// menu's form of dragging it to that edge, routed through `drop` so the
+    /// two cannot disagree about what an edge means.
+    func splitOut(_ item: DragItem, zone: EditorDropZone) {
+        guard let holder = holder(of: item) else { return }
+        drop(item, on: holder, zone: zone)
+    }
+
+    /// Sends a tab back to the main pane, which is the gesture that undoes a
+    /// split: the cell it leaves heals away when nothing is left in it.
+    func moveToMainPane(_ item: DragItem) {
+        guard let main = mainPaneID else { return }
+        drop(item, on: main, zone: .center)
+    }
+
+    /// Opens a file and divides the cell it landed in, for a reader who asked
+    /// for it beside what they are looking at rather than in front of it.
+    func openInSplit(_ url: URL, zone: EditorDropZone) {
+        guard open(url) else { return }
+        splitOut(.file(url.path), zone: zone)
+    }
+
+    private func holder(of item: DragItem) -> EditorGroup.ID? {
+        switch item {
+        case .terminal: return tree.terminalHost
+        case .file(let path): return tree.groupHolding(path)
+        }
+    }
+
+    /// Closes every other tab in one cell.
+    ///
+    /// A tab with unsaved edits is left open rather than closed or asked
+    /// about. `CloseConfirmation` holds one path, so a bulk close cannot ask
+    /// about several — it would raise a question per file and each would
+    /// overwrite the last, which is how a dialog ends up answering for a file
+    /// the reader never saw. Leaving them needs no dialog and loses nothing:
+    /// the tabs that stay are exactly the ones still wearing the dirty dot.
+    ///
+    /// - Returns: the paths kept back, so the caller can say so if it wants.
+    @discardableResult
+    func closeOthers(of path: String, in groupID: EditorGroup.ID) -> [String] {
+        close(tabs(in: groupID).tabs.map(\.path).filter { $0 != path })
+    }
+
+    /// Closes every tab in one cell, on the same terms as `closeOthers`.
+    @discardableResult
+    func closeAll(in groupID: EditorGroup.ID) -> [String] {
+        close(tabs(in: groupID).tabs.map(\.path))
+    }
+
+    /// Closes the clean ones and answers with the dirty ones.
+    private func close(_ paths: [String]) -> [String] {
+        let dirty = paths.filter { documents[$0]?.isDirty == true }
+        for path in paths where !dirty.contains(path) { close(path) }
+        return dirty
+    }
+
     /// Saves and then closes, for the "Save" answer.
     func saveAndClose(_ path: String) {
         if documents[path]?.save() == true { close(path) }
@@ -239,37 +619,69 @@ final class EditorCenter: ObservableObject {
 
     func close(_ path: String) {
         documents[path]?.stopWatching()
+        /// Before the document goes, because what is being recorded is the
+        /// text it holds: from here until the file is opened again, the only
+        /// thing that can change it is the world outside this app, and that
+        /// fingerprint is what notices.
+        if let document = documents[path] {
+            EditorUndoCenter.shared.detach(path: path, text: document.currentText)
+        }
         documents.removeValue(forKey: path)
         documentObservers.removeValue(forKey: path)
         media.removeValue(forKey: path)
-        tabs.close(path)
+        mutateHolder(of: path) { $0.close(path) }
     }
 
-    /// Shows the terminal without closing anything.
+    /// Shows the terminal without closing anything, and moves focus to the
+    /// cell it lives in — which is not necessarily the cell being worked in.
     func selectTerminal() {
-        tabs.selectTerminal()
+        guard let host = tree.terminalHost else { return }
+        tree.update(host) { $0.tabs.selectTerminal() }
+        activeGroupID = host
+        refreshPaneVisibility()
     }
 
     /// Alternates terminal ⇄ the file last looked at.
+    ///
+    /// Asked of the terminal's own cell rather than of the cell in focus: the
+    /// question is whether the shell is on screen, and with a grid those are
+    /// different cells.
     func toggleTerminal() {
-        tabs.toggleTerminal(lastFile: lastSelectedFile)
+        guard let host = tree.terminalHost else { return }
+        guard tree.group(host)?.tabs.showsTerminal == true else {
+            selectTerminal()
+            return
+        }
+        let fallback = tree.groups.flatMap(\.tabs.tabs).last?.path
+        guard let target = lastSelectedFile ?? fallback else { return }
+        select(target)
     }
 
     func selectFile(at number: Int) {
-        tabs.selectFile(at: number)
+        mutateActive { $0.selectFile(at: number) }
     }
 
     func closeAll() {
         documents.values.forEach { $0.stopWatching() }
+        for (path, document) in documents {
+            EditorUndoCenter.shared.detach(path: path, text: document.currentText)
+        }
         documents.removeAll()
         documentObservers.removeAll()
         media.removeAll()
-        tabs.closeAll()
+        tree.closeAllFiles()
+        activeGroupID = tree.terminalHost ?? tree.groupIDs[0]
+        refreshPaneVisibility()
     }
 
+    /// Selects an open file, in whichever cell has it — clicking a tab in
+    /// another cell is also a request to work in that cell.
     func select(_ path: String) {
-        tabs.select(path)
+        guard let holder = tree.groupHolding(path) else { return }
+        tree.update(holder) { $0.tabs.select(path) }
+        activeGroupID = holder
         lastSelectedFile = path
+        refreshPaneVisibility()
     }
 
     /// The open documents a change to `path` reaches: the file itself, and
@@ -334,6 +746,12 @@ final class EditorCenter: ObservableObject {
         documentObservers.removeValue(forKey: oldPath)
         if wasAnnounced { LSPCenter.shared.didClose(path: oldPath) }
 
+        /// The history moves with the buffer. A rename is one file changing
+        /// address, so leaving the timeline at the old path would drop it on
+        /// the floor — and would leave a stale entry keyed to a path nothing
+        /// will ask for again.
+        EditorUndoCenter.shared.repath(from: oldPath, to: newPath)
+
         let moved = document.transferred(to: URL(fileURLWithPath: newPath))
         documents[newPath] = moved
         moved.startWatching()
@@ -341,12 +759,12 @@ final class EditorCenter: ObservableObject {
             .sink { [weak self, weak moved] (_: Void) in
                 DispatchQueue.main.async {
                     guard let self, let moved else { return }
-                    self.tabs.setDirty(moved.isDirty, for: newPath)
+                    self.setDirty(moved.isDirty, for: newPath)
                 }
             }
-        if moved.isDirty { tabs.setDirty(true, for: newPath) }
+        if moved.isDirty { setDirty(true, for: newPath) }
 
-        tabs.repath(from: oldPath, to: newPath)
+        repathTab(from: oldPath, to: newPath)
         if lastSelectedFile == oldPath { lastSelectedFile = newPath }
 
         /// After the buffer has moved, so the text the server is handed is
@@ -374,7 +792,7 @@ final class EditorCenter: ObservableObject {
             url: URL(fileURLWithPath: newPath),
             kind: EditorMediaKind.resolve(fileName: name) ?? document.kind)
 
-        tabs.repath(from: oldPath, to: newPath)
+        repathTab(from: oldPath, to: newPath)
         if lastSelectedFile == oldPath { lastSelectedFile = newPath }
     }
 
@@ -385,8 +803,12 @@ final class EditorCenter: ObservableObject {
     /// In tab-bar order, so the popover's list of what stays behind reads
     /// top-to-bottom the way the bar does. Media is included and is never
     /// dirty — a PDF has no buffer to lose, so it simply follows.
+    /// Every cell's tabs, because a dirty file in another cell is exactly
+    /// the one a migration must not leave behind quietly.
     var openForMigration: [(path: String, isDirty: Bool)] {
-        tabs.tabs.map { (path: $0.path, isDirty: $0.isDirty) }
+        tree.groups
+            .flatMap(\.tabs.tabs)
+            .map { (path: $0.path, isDirty: $0.isDirty) }
     }
 
     /// Saves one open document, answering with something the caller can put
@@ -466,6 +888,13 @@ final class EditorCenter: ObservableObject {
         documentObservers.removeValue(forKey: oldPath)
         if wasAnnounced { LSPCenter.shared.didClose(path: oldPath) }
 
+        /// Not `repath`: a worktree switch means there are two files, and the
+        /// one arriving is the other one. Its history is its own — checked
+        /// against the text just read off that checkout, which is what stops
+        /// a timeline recorded on one branch being offered over another's.
+        EditorUndoCenter.shared.detach(path: oldPath, text: leaving.currentText)
+        EditorUndoCenter.shared.attach(path: newPath, text: arrived.currentText)
+
         /// The one thing that does travel: how the file was being looked at.
         /// A reader who switched an SVG to its source is asking about this
         /// file, not about this checkout of it.
@@ -477,12 +906,12 @@ final class EditorCenter: ObservableObject {
             .sink { [weak self, weak arrived] (_: Void) in
                 DispatchQueue.main.async {
                     guard let self, let arrived else { return }
-                    self.tabs.setDirty(arrived.isDirty, for: newPath)
+                    self.setDirty(arrived.isDirty, for: newPath)
                 }
             }
 
-        tabs.repath(from: oldPath, to: newPath)
-        tabs.setDirty(false, for: newPath)
+        repathTab(from: oldPath, to: newPath)
+        setDirty(false, for: newPath)
         if lastSelectedFile == oldPath { lastSelectedFile = newPath }
 
         if wasAnnounced {
@@ -515,7 +944,7 @@ final class EditorCenter: ObservableObject {
         guard let document = selectedDocument else { return false }
         let saved = document.save()
         if saved {
-            tabs.setDirty(false, for: document.id)
+            setDirty(false, for: document.id)
             LSPCenter.shared.didSave(path: document.url.path, text: document.currentText)
             Self.noteGitChange(at: document.url.path)
         }
@@ -525,7 +954,7 @@ final class EditorCenter: ObservableObject {
     func saveAll() {
         for document in documents.values where document.isDirty {
             guard document.save() else { continue }
-            tabs.setDirty(false, for: document.id)
+            setDirty(false, for: document.id)
             LSPCenter.shared.didSave(path: document.url.path, text: document.currentText)
             Self.noteGitChange(at: document.url.path)
         }

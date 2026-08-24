@@ -133,8 +133,22 @@ enum EditorSettings {
     /// turning it off should silence the trigger rather than just the rows.
     static let markdownSnippetsKey = "EditorMarkdownSnippets"
 
+    /// How wide the Markdown preview lets its prose run — one of
+    /// `MarkdownPreviewWidth`'s raw values.
+    ///
+    /// A preference rather than a property of the file, like the split
+    /// direction beside it: someone who reads their READMEs in a column wants
+    /// the next one in a column too.
+    static let markdownPreviewWidthKey = "EditorMarkdownPreviewWidth"
+
     static let defaultFontSize = 12.0
     static let defaultTabWidth = 4
+
+    /// Contained, which is the answer this setting exists to give: the preview
+    /// drew edge to edge and a full-screen window ran it to twice a readable
+    /// line. Someone who wants the old behaviour is one click from it, and
+    /// that click is remembered.
+    static let defaultMarkdownPreviewWidth = MarkdownPreviewWidth.contained
 
     /// The editor's own font if one is set, else the interface family, else
     /// the system monospace.

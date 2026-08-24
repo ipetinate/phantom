@@ -36,6 +36,10 @@ final class SidebarLayoutModel: ObservableObject {
     /// Creates a new terminal tab that immediately starts an OpenCode session.
     var onNewOpenCodeTab: () -> Void = {}
 
+    /// Creates a new terminal tab that immediately starts an Antigravity
+    /// session.
+    var onNewAntigravityTab: () -> Void = {}
+
     /// Opens a terminal — or a terminal already running an agent — with its
     /// cwd inside a chosen worktree. Wired by the controller like the
     /// callbacks above; the worktree pane is the only caller.
@@ -151,6 +155,13 @@ final class SidebarSplitView: NSSplitView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if routeEditingCommand(event) { return true }
+
+        if let center = editorCenter,
+           let zone = EditorCommands.divideZone(
+               keyCode: event.keyCode, modifiers: event.modifierFlags) {
+            center.divideFocusedCell(zone)
+            return true
+        }
 
         if let center = editorCenter,
            let characters = event.charactersIgnoringModifiers,

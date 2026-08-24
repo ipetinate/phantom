@@ -1054,6 +1054,7 @@ extension LSPServerDefinition {
         case "zig": base = "zig"
         case "json": base = "json"
         case "yaml": base = "yaml"
+        case "toml": base = "toml"
         case "shellscript": base = "bash"
         case "html": base = "html"
         case "css", "scss", "less": base = "css"

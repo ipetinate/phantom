@@ -84,11 +84,11 @@ struct SidebarGroup: Identifiable, Codable, Equatable {
     /// Every git repository at or under a project group's root.
     ///
     /// A project group's root is often a *workspace* — a plain folder that
-    /// holds several repos side by side (`~/Projects/Aurora/aurora-backend`,
-    /// `.../front-app-aurora`) — rather than a repo itself. Only tabs whose
-    /// pwd happens to be open inside one of those repos showed up in the
-    /// group's PR list before; a repo nobody has a tab open in didn't, even
-    /// though it belongs to the group just as much.
+    /// holds several repos side by side (`~/Projects/Acme/acme-backend`,
+    /// `.../acme-web`) — rather than a repo itself. Only tabs whose pwd
+    /// happens to be open inside one of those repos showed up in the group's
+    /// PR list before; a repo nobody has a tab open in didn't, even though it
+    /// belongs to the group just as much.
     ///
     /// Bounded to a shallow walk (workspace / repo, or workspace / team /
     /// repo) so this stays a quick popover-open check rather than a real
@@ -134,18 +134,26 @@ struct SidebarGroupIcon: View {
     let icon: String
     var size: CGFloat = 12
 
-    private var isEmoji: Bool {
-        icon.count == 1 && !(icon.unicodeScalars.first?.isASCII ?? true)
-    }
+    /// The fallback for the two cases with no icon of their own to draw.
+    ///
+    /// `unknownAgent` used to reach `Image(systemName:)` with the whole
+    /// `agent:aider` string and draw an empty box — the thing `SidebarIconID`
+    /// says it exists to prevent. An unfamiliar agent gets the same plain
+    /// folder an unset icon does.
+    private static let fallback = "folder"
 
     var body: some View {
-        if let agent = SidebarIconID.agent(for: icon) {
+        switch SidebarIconID.kind(of: icon) {
+        case .agent(let agent):
             agentMark(agent)
-        } else if isEmoji {
+        case .emoji:
             Text(icon)
                 .font(.system(size: size))
-        } else {
-            Image(systemName: icon.isEmpty ? "folder" : icon)
+        case .empty, .unknownAgent:
+            Image(systemName: Self.fallback)
+                .font(.system(size: size - 1, weight: .medium))
+        case .symbol:
+            Image(systemName: icon)
                 .font(.system(size: size - 1, weight: .medium))
         }
     }
@@ -164,6 +172,7 @@ struct SidebarGroupIcon: View {
         case .claude: ClaudeIcon(size: size, tint: .original)
         case .codex: CodexIcon(size: size, originalColors: true)
         case .opencode: OpenCodeIcon(size: size, originalColors: true)
+        case .antigravity: AntigravityIcon(size: size, tint: .original)
         }
     }
 }

@@ -15,7 +15,7 @@ struct MarkdownPreviewTests {
     /// enough for TextKit 1 to lay out real glyphs and for the bounding
     /// rects to be true, without putting anything on the developer's actual
     /// display. Nothing here reaches `orderFront`.
-    private func laidOut(_ markdown: String) -> (NSWindow, MarkdownPreviewView.Coordinator) {
+    private func laidOut(_ markdown: String, baseURL: URL? = nil) -> (NSWindow, MarkdownPreviewView.Coordinator) {
         let frame = NSRect(x: 0, y: 0, width: 520, height: 400)
 
         let storage = NSTextStorage()
@@ -27,12 +27,16 @@ struct MarkdownPreviewTests {
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
 
-        let textView = NSTextView(frame: frame, textContainer: container)
+        /// The preview's own subclass, because the coordinator holds that type
+        /// — it is the view that owns the column arithmetic. Nothing here sets
+        /// a measure, so it behaves as the plain text view it used to be.
+        let textView = MarkdownDocumentTextView(frame: frame, textContainer: container)
         textView.isEditable = false
         textView.isVerticallyResizable = true
         textView.textContainerInset = CGSize(width: 20, height: 20)
 
-        let output = MarkdownRenderer(style: .fallback).render(MarkdownParser.parse(markdown))
+        let output = MarkdownRenderer(style: .fallback, baseURL: baseURL)
+            .render(MarkdownParser.parse(markdown))
         textView.textStorage?.setAttributedString(output.text)
         layoutManager.ensureLayout(for: container)
 
@@ -162,6 +166,44 @@ struct MarkdownPreviewTests {
             (viewport \(viewport.height)pt) — everything past the first screen is unreachable
             """
         )
+    }
+
+    // MARK: - An image has to take up room
+
+    /// ⚠️ That an attachment carries the right attribute is not the same claim
+    /// as an image being *drawn*, and only the second one is what the reader
+    /// asked for. `MarkdownRendererTests` can assert the attribute without a
+    /// window; this measures the laid-out text and fails if the picture cost
+    /// nothing, which is what a preview that draws no images looks like from
+    /// the outside.
+    @Test func aDrawnImageTakesUpItsOwnHeight() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("markdown-preview-image-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let size = CGSize(width: 200, height: 120)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.red.drawSwatch(in: CGRect(origin: .zero, size: size))
+        image.unlockFocus()
+        try #require(image.tiffRepresentation).write(to: directory.appendingPathComponent("logo.tiff"))
+
+        let withImage = try height(of: "![logo](./logo.tiff)", baseURL: directory)
+        let withoutImage = try height(of: "logo", baseURL: directory)
+        #expect(withImage > withoutImage + 60, "the image cost \(withImage - withoutImage)pt of height")
+    }
+
+    /// How tall a document lays out, in points.
+    private func height(of markdown: String, baseURL: URL?) throws -> CGFloat {
+        let (window, coordinator) = laidOut(markdown, baseURL: baseURL)
+        _ = window
+
+        let textView = try #require(coordinator.textView)
+        let layoutManager = try #require(textView.layoutManager)
+        let container = try #require(textView.textContainer)
+        layoutManager.ensureLayout(for: container)
+        return layoutManager.usedRect(for: container).height
     }
 
     // MARK: - Decoration must not strangle the text it decorates

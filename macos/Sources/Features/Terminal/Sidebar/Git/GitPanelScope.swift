@@ -5,7 +5,7 @@ import Foundation
 /// A terminal that isn't in a repository used to mean one thing — "nothing
 /// to show". It actually means two, and the difference is the whole point
 /// of this type: a folder that *contains* repositories (a workspace like
-/// `~/Projects/Aurora`, with several checkouts side by side) is somewhere
+/// `~/Projects/Acme`, with several checkouts side by side) is somewhere
 /// the panel has plenty to say, while a folder with nothing underneath it
 /// really is empty.
 ///

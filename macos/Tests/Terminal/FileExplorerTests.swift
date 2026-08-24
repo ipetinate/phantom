@@ -1,5 +1,7 @@
 import Foundation
 @testable import Ghostty
+import SwiftUI
+import AppKit
 import Testing
 
 /// The file explorer's directory listing: ordering and hidden-file
@@ -278,7 +280,7 @@ struct FileExplorerTests {
     /// would truncate away the one part that tells the tabs apart.
     @Test func aTabIsNamedAfterTheFileAlone() {
         let url = URL(fileURLWithPath:
-            "/Users/x/Projects/Aurora/aurora-backend/src/main/kotlin/DevAuthz.class")
+            "/Users/x/Projects/Acme/acme-backend/src/main/kotlin/DevAuthz.class")
         #expect(FileOpener.tabName(for: url) == "DevAuthz.class")
     }
 
@@ -301,5 +303,218 @@ struct FileExplorerTests {
     /// to the path keeps the tab from being renamed to nothing at all.
     @Test func aPathWithNoNameFallsBackRatherThanBlanking() {
         #expect(!FileOpener.tabName(for: URL(fileURLWithPath: "/")).isEmpty)
+    }
+
+    // MARK: The keys that act on the selection
+
+    /// The regression itself, spelled as a comparison.
+    ///
+    /// Settings advertises Delete under **Fixed** as "Move to Trash in the
+    /// file explorer" and the key did nothing, because the view matched
+    /// presses against `SwiftUI.KeyEquivalent.delete` — U+0008, the ASCII
+    /// backspace — while the Delete key reports U+007F. Both spellings are
+    /// named here so a future edit cannot quietly swap one for the other.
+    @Test func theDeleteKeyIsNotSwiftUIsDeleteKeyEquivalent() {
+        #expect(FileExplorerKeyCommand.moveToTrashCharacter == "\u{7F}")
+        #expect(KeyEquivalent.delete.character == "\u{8}")
+        #expect(FileExplorerKeyCommand.moveToTrashCharacter != KeyEquivalent.delete.character)
+    }
+
+    /// And the shortcut Settings promises is the one the tree answers on.
+    @MainActor
+    @Test func settingsAdvertisesTheKeyTheTreeAnswersOn() {
+        let advertised = ShortcutCollisionChecker.fileExplorerShortcuts
+            .first { $0.owner == "Move to Trash in the file explorer" }?
+            .shortcut
+        #expect(advertised?.key == String(FileExplorerKeyCommand.moveToTrashCharacter))
+        #expect(advertised?.modifiers.isEmpty == true)
+    }
+
+    @Test func deleteWithASelectedRowAsksToTrashIt() {
+        let command = FileExplorerKeyCommand.resolve(
+            character: FileExplorerKeyCommand.moveToTrashCharacter,
+            hasFocus: true,
+            isEditing: false,
+            selection: "/w/notes.md"
+        )
+        #expect(command == .moveToTrash(path: "/w/notes.md"))
+    }
+
+    @Test func returnWithASelectedRowAsksToRenameIt() {
+        let command = FileExplorerKeyCommand.resolve(
+            character: FileExplorerKeyCommand.renameCharacter,
+            hasFocus: true,
+            isEditing: false,
+            selection: "/w/notes.md"
+        )
+        #expect(command == .rename(path: "/w/notes.md"))
+    }
+
+    /// Nothing clicked, nothing to trash. The press belongs to whoever else
+    /// wants it, so it must not even be reported as handled.
+    @Test func deleteWithNoSelectionTrashesNothing() {
+        let command = FileExplorerKeyCommand.resolve(
+            character: FileExplorerKeyCommand.moveToTrashCharacter,
+            hasFocus: true,
+            isEditing: false,
+            selection: nil
+        )
+        #expect(command == nil)
+    }
+
+    /// The one that matters more than the fix. The explorer shares its window
+    /// with a terminal, and a Delete answered while the reader is typing down
+    /// there would trash a row they last clicked minutes ago — a worse bug
+    /// than the dead key this replaced.
+    @Test func deleteWithFocusElsewhereTrashesNothing() {
+        let command = FileExplorerKeyCommand.resolve(
+            character: FileExplorerKeyCommand.moveToTrashCharacter,
+            hasFocus: false,
+            isEditing: false,
+            selection: "/w/notes.md"
+        )
+        #expect(command == nil)
+    }
+
+    /// A name field is open, so Delete is a backspace inside it.
+    @Test func deleteWhileANameIsBeingTypedTrashesNothing() {
+        let command = FileExplorerKeyCommand.resolve(
+            character: FileExplorerKeyCommand.moveToTrashCharacter,
+            hasFocus: true,
+            isEditing: true,
+            selection: "/w/notes.md"
+        )
+        #expect(command == nil)
+    }
+
+    /// Every other key falls through, which is what leaves the arrows to
+    /// navigation and the letters to whatever claims them.
+    @Test func anOrdinaryKeyIsNeitherCommand() {
+        let command = FileExplorerKeyCommand.resolve(
+            character: "n",
+            hasFocus: true,
+            isEditing: false,
+            selection: "/w/notes.md"
+        )
+        #expect(command == nil)
+    }
+
+    // MARK: The row menu
+
+    /// One list, walked by the right-click menu and by the double-click menu
+    /// alike — which is the point of it being a list. A file cannot be created
+    /// inside, so a file's menu is the folder's minus the two that create, and
+    /// minus the separator that separated them — plus the split commands,
+    /// which need a pane and so belong to files alone.
+    @Test func aFolderOffersTheCreateCommandsAndAFileTheSplits() {
+        #expect(FileExplorerRowCommand.menu(availability(isDirectory: true)) == [
+            .command(.newFile),
+            .command(.newFolder),
+            .separator,
+            .command(.rename),
+            .command(.delete),
+            .separator,
+            .command(.revealInFinder),
+            .command(.copyPath),
+        ])
+
+        #expect(FileExplorerRowCommand.menu(availability(isDirectory: false)) == [
+            .command(.openLeading),
+            .command(.openTrailing),
+            .command(.openTop),
+            .command(.openBottom),
+            .command(.moveToMainPane),
+            .separator,
+            .command(.rename),
+            .command(.delete),
+            .separator,
+            .command(.revealInFinder),
+            .command(.copyPath),
+        ])
+    }
+
+    /// With nothing in the pane to divide around, a split heals straight back,
+    /// so the commands are left out rather than offered as a no-op.
+    @Test func aFileWithNothingToDivideIsNotOfferedSplits() {
+        let menu = FileExplorerRowCommand.menu(
+            availability(isDirectory: false, canSplit: false))
+
+        for command in FileExplorerRowCommand.allCases where command.zone != nil {
+            #expect(!menu.contains(.command(command)), "\(command.title) should be absent")
+        }
+    }
+
+    @Test func aFileNotOpenElsewhereIsNotOfferedTheWayBack() {
+        let menu = FileExplorerRowCommand.menu(
+            availability(isDirectory: false, canReturnToMainPane: false))
+        #expect(!menu.contains(.command(.moveToMainPane)))
+    }
+
+    /// An icon this build cannot draw is a menu item with a hole where its
+    /// glyph should be, so the names are asserted rather than trusted.
+    @Test func everyIconResolves() {
+        for command in FileExplorerRowCommand.allCases {
+            let image = NSImage(systemSymbolName: command.icon, accessibilityDescription: nil)
+            #expect(image != nil, "\(command.icon) is not a symbol this build has")
+        }
+    }
+
+    /// A separator falls where the group changes and nowhere else, so a menu
+    /// can never open on a rule with nothing above it.
+    @Test func noMenuBeginsOrEndsWithASeparator() {
+        let cases = [
+            availability(isDirectory: true),
+            availability(isDirectory: false),
+            availability(isDirectory: false, canSplit: false),
+            availability(isDirectory: false, canReturnToMainPane: false),
+            availability(isDirectory: false, canSplit: false, canReturnToMainPane: false),
+        ]
+
+        for availability in cases {
+            let entries = FileExplorerRowCommand.menu(availability)
+            #expect(entries.first != .separator)
+            #expect(entries.last != .separator)
+
+            for (index, entry) in entries.enumerated() where entry == .separator {
+                #expect(entries[index - 1] != .separator, "two rules in a row")
+            }
+        }
+    }
+
+    private func availability(
+        isDirectory: Bool,
+        canSplit: Bool = true,
+        canReturnToMainPane: Bool = true
+    ) -> FileExplorerRowCommand.Availability {
+        FileExplorerRowCommand.Availability(
+            isDirectory: isDirectory,
+            canSplit: canSplit,
+            canReturnToMainPane: canReturnToMainPane)
+    }
+
+    // MARK: One click or two
+
+    /// The first click opens the row. It has to: waiting out the double-click
+    /// interval before opening a file is the cost this deliberately refuses.
+    @Test func aClickWithNothingBeforeItOpensTheRow() {
+        #expect(FileExplorerRowClick.resolve(at: 100, previous: nil, interval: 0.5) == .open)
+    }
+
+    /// The second click inside the interval asks for the menu — and, just as
+    /// importantly, does not open the row a second time. Two
+    /// `FileOpener.prompt` calls for one gesture spawn two terminals.
+    @Test func aSecondClickInsideTheIntervalAsksForTheMenu() {
+        #expect(FileExplorerRowClick.resolve(at: 100.2, previous: 100, interval: 0.5) == .menu)
+    }
+
+    @Test func aSecondClickAfterTheIntervalIsAnotherSingleClick() {
+        #expect(FileExplorerRowClick.resolve(at: 101, previous: 100, interval: 0.5) == .open)
+    }
+
+    /// A clock that ran backwards — a system sleep between two clicks — reads
+    /// as a fresh click rather than as a double one, because the safe reading
+    /// of an impossible gap is "these are unrelated".
+    @Test func aBackwardsClockIsNotADoubleClick() {
+        #expect(FileExplorerRowClick.resolve(at: 99, previous: 100, interval: 0.5) == .open)
     }
 }

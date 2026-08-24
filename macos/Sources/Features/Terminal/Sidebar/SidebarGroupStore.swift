@@ -115,6 +115,30 @@ final class SidebarGroupStore: ObservableObject {
         scheduleSave()
     }
 
+    /// Deletes a group and forgets everything this store held for the tabs
+    /// that go with it: the assignment, the place in `tabOrder`, and the
+    /// per-tab override — custom name, icon, color and file.
+    ///
+    /// The surfaces are passed in rather than derived from `assignments`,
+    /// because membership is not only manual: a project group claims a tab by
+    /// its pwd and that tab has no assignment row to find. Only the sidebar
+    /// that drew the rows knows which terminals the reader was looking at.
+    ///
+    /// Everything outside `surfaceIds` is left exactly as it was, including a
+    /// tab of this same group that lives in another window — it is not on
+    /// screen here, its terminal is not closed, and dropping its name and
+    /// color would be a change the reader never asked for.
+    func deleteGroup(_ id: UUID, closingTabs surfaceIds: [UUID]) {
+        let closing = Set(surfaceIds)
+        groups.removeAll { $0.id == id }
+        assignments = assignments.filter {
+            $0.value.groupId != id && !closing.contains($0.key)
+        }
+        tabOverrides = tabOverrides.filter { !closing.contains($0.key) }
+        tabOrder.removeAll { closing.contains($0) }
+        scheduleSave()
+    }
+
     func moveGroup(_ id: UUID, toIndex index: Int) {
         guard let from = groups.firstIndex(where: { $0.id == id }) else { return }
         let group = groups.remove(at: from)

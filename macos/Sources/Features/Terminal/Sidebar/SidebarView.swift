@@ -74,6 +74,7 @@ struct SidebarView: View {
     /// Same as `onNewTabInGroup`, with a Codex session started in it.
     var onNewCodexTabInGroup: (SidebarGroup?) -> Void = { _ in }
     var onNewOpenCodeTabInGroup: (SidebarGroup?) -> Void = { _ in }
+    var onNewAntigravityTabInGroup: (SidebarGroup?) -> Void = { _ in }
 
     /// Opens a terminal directly beside the selected one — same group, or
     /// ungrouped if that's where the selection lives — and hands back its
@@ -221,6 +222,7 @@ struct SidebarView: View {
             onNewClaudeTab: onNewClaudeTabInGroup,
             onNewCodexTab: onNewCodexTabInGroup,
             onNewOpenCodeTab: onNewOpenCodeTabInGroup,
+            onNewAntigravityTab: onNewAntigravityTabInGroup,
             editorCenter: editorCenter,
             onNewWorktreeTab: layout.onNewWorktreeTab,
             onNewWorktreeTabInGroup: layout.onNewWorktreeTabInGroup
@@ -321,9 +323,10 @@ struct SidebarTitlebarChrome: View {
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
     @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
-    @AppStorage("SidebarShowClaude") private var showClaude = true
-    @AppStorage("SidebarShowCodex") private var showCodex = true
-    @AppStorage("SidebarShowOpenCode") private var showOpenCode = true
+    @AppStorage("SidebarShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
 
     /// Whether the pane actions (new terminal, new Claude session, new
     /// group, refresh) stay visible without a hover — off by default,
@@ -407,6 +410,13 @@ struct SidebarTitlebarChrome: View {
                     layout.onNewOpenCodeTab()
                 } label: {
                     OpenCodeIcon(size: 12)
+                }
+            }
+            if showAntigravity {
+                SidebarIconButton(help: "New Antigravity Session") {
+                    layout.onNewAntigravityTab()
+                } label: {
+                    AntigravityIcon(size: 12)
                 }
             }
             if showWorktreesPane {
@@ -619,6 +629,7 @@ private struct SidebarGroupSection: View {
     var onNewClaudeTab: (SidebarGroup?) -> Void = { _ in }
     var onNewCodexTab: (SidebarGroup?) -> Void = { _ in }
     var onNewOpenCodeTab: (SidebarGroup?) -> Void = { _ in }
+    var onNewAntigravityTab: (SidebarGroup?) -> Void = { _ in }
 
     /// Passed straight through to the rows, which is the only reason this
     /// view knows about either: a group header draws no documents and opens
@@ -635,9 +646,10 @@ private struct SidebarGroupSection: View {
     @ObservedObject private var palette: ThemePalette = .shared
 
     @AppStorage("SidebarGroupShowPullRequests") private var showPullRequests = true
-    @AppStorage("SidebarGroupShowClaude") private var showClaude = true
-    @AppStorage("SidebarGroupShowCodex") private var showCodex = true
-    @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = true
+    @AppStorage("SidebarGroupShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarGroupShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarGroupShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var showWorktree = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
@@ -650,6 +662,26 @@ private struct SidebarGroupSection: View {
     @State private var isEditing = false
     @State private var isHeaderHovered = false
     @State private var isShowingPRs = false
+
+    /// The terminals "Delete Group and Close Terminals" is asking about, or
+    /// nil while nothing is being asked.
+    @State private var pendingClose: PendingGroupClose?
+
+    /// What the confirmation was written about, measured once when the menu
+    /// item is picked rather than on every render.
+    ///
+    /// `needsConfirmQuit` crosses into libghostty for every surface, and this
+    /// header re-renders on hover, on selection and on every metadata tick —
+    /// asking there would pay for a number nobody is reading. Measuring once
+    /// also pins the sheet to the set the reader was shown: a terminal that
+    /// finishes its build while the sheet is up does not quietly change the
+    /// sentence they are answering.
+    private struct PendingGroupClose {
+        let tabs: [SidebarTabModel]
+
+        /// How many of `tabs` the core says still have something running.
+        let runningProcesses: Int
+    }
 
     private var accent: Color? { group.accentColor }
     private var collapsed: Bool { group.collapsed }
@@ -714,6 +746,88 @@ private struct SidebarGroupSection: View {
         .sheet(isPresented: $isEditing) {
             SidebarGroupEditor(group: group, store: store)
         }
+        .confirmationDialog(
+            closeConfirmationTitle,
+            isPresented: Binding(
+                get: { pendingClose != nil },
+                set: { if !$0 { pendingClose = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            closeConfirmationButtons
+        } message: {
+            Text(closeConfirmationMessage)
+        }
+    }
+
+    /// The destructive button repeats the menu item word for word, so the
+    /// reader confirms the sentence they picked.
+    ///
+    /// Cancel takes both the cancel role and the default action, which is the
+    /// one place this sheet departs from the file explorer's delete: that one
+    /// moves a file to the Trash and the Trash gives it back, while this kills
+    /// processes and nothing gives those back. Return must not be the key that
+    /// does it.
+    @ViewBuilder
+    private var closeConfirmationButtons: some View {
+        Button(deleteWithTerminalsTitle, role: .destructive) {
+            if let pendingClose {
+                deleteGroupAndCloseTerminals(pendingClose)
+            }
+            pendingClose = nil
+        }
+        Button("Cancel", role: .cancel) { pendingClose = nil }
+            .keyboardShortcut(.defaultAction)
+    }
+
+    /// The number every sentence about this is written around: the snapshot
+    /// once one exists, the rows on screen before that.
+    ///
+    /// Both spellings matter. The menu item is read before anything is
+    /// snapshotted and must name what is on screen; the button is read after,
+    /// and must name what the title above it just named — not a count that
+    /// moved because a terminal exited while the sheet was up.
+    private var closingTerminalCount: Int {
+        pendingClose?.tabs.count ?? tabs.count
+    }
+
+    /// "1 Terminal" / "4 Terminals", so the count reaches the reader in the
+    /// menu, in the title and on the button they press.
+    private var terminalCountPhrase: String {
+        closingTerminalCount == 1 ? "1 Terminal" : "\(closingTerminalCount) Terminals"
+    }
+
+    private var deleteWithTerminalsTitle: String {
+        "Delete Group and Close \(terminalCountPhrase)"
+    }
+
+    private var closeConfirmationTitle: String {
+        let count = closingTerminalCount
+        let terminals = count == 1 ? "its terminal" : "its \(count) terminals"
+        return "Delete \u{201C}\(group.name)\u{201D} and close \(terminals)?"
+    }
+
+    /// Written for a reader who is half paying attention: what goes, what it
+    /// costs, and that nothing brings it back.
+    ///
+    /// The running-process sentence borrows the wording the app already uses
+    /// when a single tab is closed on a live process, because it is the same
+    /// fact — this is only the batch spelling of it, as `Close Other Tabs`
+    /// is. There is no undo: the tab-restore each close registers brings back
+    /// a terminal in the same directory, never the process that was running
+    /// in it.
+    private var closeConfirmationMessage: String {
+        guard let pendingClose else { return "" }
+        let count = pendingClose.tabs.count
+        let terminals = count == 1 ? "its terminal" : "its \(count) terminals"
+        let base = "Deleting the group closes \(terminals). This cannot be undone."
+
+        guard pendingClose.runningProcesses > 0 else { return base }
+        let running = pendingClose.runningProcesses == 1
+            ? "One still has a running process, and that process will be killed."
+            : "\(pendingClose.runningProcesses) still have a running process, "
+                + "and those processes will be killed."
+        return "\(base) \(running)"
     }
 
     private var header: some View {
@@ -808,6 +922,16 @@ private struct SidebarGroupSection: View {
                 .allowsHitTesting(alwaysShowActions || isHeaderHovered)
             }
 
+            if showAntigravity {
+                SidebarIconButton(help: "New Antigravity Session in Group") {
+                    onNewAntigravityTab(group)
+                } label: {
+                    AntigravityIcon(size: 12)
+                }
+                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+            }
+
             /// Always a new terminal from here, never a migration: a header
             /// stands for several terminals, so there is no single tab a
             /// switch could be about. See `WorktreeEntryRule`.
@@ -864,6 +988,7 @@ private struct SidebarGroupSection: View {
         Button("New Claude Session in Group") { onNewClaudeTab(group) }
         Button("New Codex Session in Group") { onNewCodexTab(group) }
         Button("New OpenCode Session in Group") { onNewOpenCodeTab(group) }
+        Button("New Antigravity Session in Group") { onNewAntigravityTab(group) }
 
         Divider()
 
@@ -920,6 +1045,66 @@ private struct SidebarGroupSection: View {
         Button("Delete Group", role: .destructive) {
             store.deleteGroup(group.id)
         }
+
+        /// Hidden rather than disabled on an empty group: with no terminals
+        /// the two items would say the same thing, and the one a reader has
+        /// to think about should only be there when it means something.
+        if !tabs.isEmpty {
+            Button("\(deleteWithTerminalsTitle)\u{2026}", role: .destructive) {
+                pendingClose = PendingGroupClose(
+                    tabs: tabs,
+                    runningProcesses: runningProcessCount
+                )
+            }
+        }
+    }
+
+    /// How many of this header's terminals still have something running,
+    /// asked of the core the way every other batch close in the app asks it
+    /// (`TerminalController.closeOtherTabs`).
+    private var runningProcessCount: Int {
+        tabs.filter { tab in
+            guard let controller = tab.window?.windowController as? BaseTerminalController
+            else { return false }
+            return controller.surfaceTree.contains { $0.needsConfirmQuit }
+        }.count
+    }
+
+    /// Closes every terminal this header draws, then drops the group.
+    ///
+    /// Each tab leaves through `TerminalController.closeTabImmediately`, the
+    /// step `Close Other Tabs` and `Close Tabs to the Right` both end at, so a
+    /// tab that is the last one in its window still turns into a window close
+    /// and each one registers its own restore. The running-process question is
+    /// asked once, above, for the whole set — the shape every batch close in
+    /// this app already has. Per-tab sheets were the alternative and they are
+    /// worse here: a stack of four alerts on four tabs is not a safety net a
+    /// reader reads, and the count they agreed to would stop being the count
+    /// that goes.
+    ///
+    /// Only these surfaces are cleared from the store. A member of the same
+    /// group living in another window is not drawn here and is not closed, so
+    /// it keeps its name, icon and color and only loses the group.
+    private func deleteGroupAndCloseTerminals(_ pending: PendingGroupClose) {
+        let controllers = pending.tabs.compactMap {
+            $0.window?.windowController as? TerminalController
+        }
+        WindowBreadcrumbs.note(
+            "sidebar delete group with terminals: group=\(group.name) "
+            + "tabs=\(pending.tabs.count) controllers=\(controllers.count)")
+
+        store.deleteGroup(group.id, closingTabs: pending.tabs.compactMap(\.surfaceId))
+
+        /// Read before the first close, while there is still a window to read
+        /// it from, and grouped so one undo answers for the whole batch
+        /// instead of giving the tabs back one press at a time.
+        let undoManager = controllers.first?.undoManager
+        undoManager?.beginUndoGrouping()
+        for controller in controllers {
+            controller.closeTabImmediately(registerRedo: false)
+        }
+        undoManager?.setActionName("Close Terminals in Group")
+        undoManager?.endUndoGrouping()
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -1303,9 +1488,10 @@ private struct SidebarTabRow: View {
 
     /// Which agents this row offers to start, mirroring the keys the sidebar
     /// header and the group header already use for their own buttons.
-    @AppStorage("SidebarTabShowClaude") private var showClaudeAction = true
-    @AppStorage("SidebarTabShowCodex") private var showCodexAction = true
-    @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = true
+    @AppStorage("SidebarTabShowClaude") private var showClaudeAction = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarTabShowCodex") private var showCodexAction = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarTabShowAntigravity") private var showAntigravityAction = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage("SidebarTabShowWorktree") private var showWorktreeAction = true
     @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
@@ -1337,6 +1523,7 @@ private struct SidebarTabRow: View {
         if showClaudeAction { shown.insert(.claude) }
         if showCodexAction { shown.insert(.codex) }
         if showOpenCodeAction { shown.insert(.opencode) }
+        if showAntigravityAction { shown.insert(.antigravity) }
 
         return TabRowAgentActions.agents(shown: shown, liveAgent: tab.liveAgent)
     }
@@ -1349,6 +1536,7 @@ private struct SidebarTabRow: View {
         case .claude: ClaudeIcon(size: 11)
         case .codex: CodexIcon(size: 11)
         case .opencode: OpenCodeIcon(size: 11)
+        case .antigravity: AntigravityIcon(size: 11)
         }
     }
 
@@ -1377,6 +1565,41 @@ private struct SidebarTabRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            /// The tab's own colour, opening the row rather than sitting
+            /// between the icon and the title.
+            ///
+            /// It was a 6pt dot there, which is the same shape and the same
+            /// size as the unread dot `statusIndicator` draws for
+            /// `needsAttention` — one row carrying two round marks that mean
+            /// unrelated things, and the colour one landed where a badge
+            /// belongs. A bar at the leading edge cannot be read as
+            /// notification: nothing else on the row is a bar. It stays a row
+            /// element and not a border on `rowBackground`, so the icon and
+            /// the title move over for it.
+            ///
+            /// Left inside the same `if let` the dot used, because that is
+            /// what keeps an uncoloured tab laying out exactly as before: a
+            /// view that is absent adds no `HStack` spacing, while a
+            /// zero-width placeholder would still push the icon over by 6.
+            if let accent = override?.accentColor {
+                /// As tall as the row, less a short inset at each end, rather
+                /// than as tall as the icon. At the icon's height it read as
+                /// a mark beside the icon; running most of the row it reads
+                /// as the row's own label, which is what it is. The inset is
+                /// what keeps it from touching the row's rounded background.
+                ///
+                /// `maxHeight` rather than a number: the row grows with the
+                /// density setting and with the metadata under the title, and
+                /// a fixed height would come loose from it. The stack's height
+                /// is set by its other children, so this takes it without
+                /// being able to stretch the row.
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(accent)
+                    .frame(width: 3)
+                    .frame(maxHeight: .infinity)
+                    .padding(.vertical, 3)
+            }
+
             // A tab opened for a file wears that file's icon, from whichever
             // icon theme is active — the same artwork the explorer and the
             // Git panel show it with, so the three read as one thing. A hand
@@ -1385,13 +1608,7 @@ private struct SidebarTabRow: View {
                 SidebarGroupIcon(icon: icon, size: 13)
                     .foregroundStyle(.secondary)
             } else if let file = override?.fileName, !file.isEmpty {
-                FileIconView(icon: icons.icon(forFile: file), size: 14)
-            }
-
-            if let accent = override?.accentColor {
-                Circle()
-                    .fill(accent)
-                    .frame(width: 6, height: 6)
+                FileIconView(icon: icons.icon(forFile: file), size: iconBoxHeight)
             }
 
             VStack(alignment: .leading, spacing: isCompact ? 2 : 4) {
@@ -1621,6 +1838,17 @@ private struct SidebarTabRow: View {
             }
         }
     }
+
+    /// The box the row opens with: the file icon's frame, and with it the
+    /// height of the colour bar that precedes the icon.
+    ///
+    /// Measured from `FileIconView`, which frames itself square at the size
+    /// it is given and is the tallest of the things that can start a row —
+    /// rather than picked to look right, which is how the bar would drift out
+    /// of line the next time the icon is resized. Density is not part of it:
+    /// the icon is the one piece of the row compact leaves alone, so both
+    /// densities center the same bar against the same icon.
+    private var iconBoxHeight: CGFloat { 14 }
 
     /// The shared line box every chip element is centered within.
     private var chipLineHeight: CGFloat { 11 }
@@ -1870,12 +2098,21 @@ private struct SidebarIconCell<Mark: View>: View {
     }
 }
 
-/// Visual icon picker: an evenly-filled grid of curated SF Symbols plus
-/// a compact emoji field for anything the grid doesn't cover.
+/// Visual icon picker: what was chosen lately, a grid of curated SF Symbols,
+/// the agents' marks, a compact emoji field, and a door to the rest of SF
+/// Symbols for anything none of that covers.
 private struct SidebarIconPicker: View {
     @Binding var selection: String
 
     @State private var emoji: String = ""
+
+    /// Read from the store once, in `onAppear`, and then only ever grown by a
+    /// pick out of the browser. Reading it live would reorder the top row the
+    /// moment a pick lands in it, and a grid that rearranges itself under the
+    /// cursor is a grid you misclick.
+    @State private var recents: [String] = []
+
+    @State private var isBrowsing = false
 
     @FocusState private var emojiFieldFocused: Bool
 
@@ -1905,19 +2142,50 @@ private struct SidebarIconPicker: View {
     )
 
     var body: some View {
+        if !recents.isEmpty {
+            sectionLabel("Recents")
+
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(recents, id: \.self) { icon in
+                    SidebarIconCell(isSelected: selection == icon) {
+                        choose(icon)
+                    } mark: {
+                        SidebarGroupIcon(icon: icon, size: 14)
+                            .foregroundStyle(selection == icon ? .white : .primary)
+                    }
+                    .help(Self.tooltip(for: icon))
+                }
+            }
+            .padding(.vertical, 4)
+        }
+
         sectionLabel("General")
 
         LazyVGrid(columns: columns, spacing: 6) {
             ForEach(Self.symbols, id: \.self) { symbol in
                 SidebarIconCell(isSelected: selection == symbol) {
-                    selection = symbol
-                    emoji = ""
+                    choose(symbol)
                 } mark: {
                     Image(systemName: symbol)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(selection == symbol ? .white : .primary)
                 }
             }
+
+            /// The thirty-sixth cell of a seven-column grid, alone on a sixth
+            /// row on purpose: the five full rows above it are the curated
+            /// set, and this one is not part of it. Putting it beside the
+            /// "General" heading instead would read as a heading control and
+            /// lose the "and there is more where those came from" it has here,
+            /// at the end of the list.
+            SidebarIconCell(isSelected: false) {
+                isBrowsing = true
+            } mark: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .help("All Symbols…")
         }
         .padding(.vertical, 4)
 
@@ -1928,8 +2196,7 @@ private struct SidebarIconPicker: View {
                 let id = SidebarIconID.id(for: agent)
 
                 SidebarIconCell(isSelected: selection == id) {
-                    selection = id
-                    emoji = ""
+                    choose(id)
                 } mark: {
                     SidebarGroupIcon(icon: id, size: 15)
                 }
@@ -1938,8 +2205,7 @@ private struct SidebarIconPicker: View {
 
             ForEach(Self.agentSymbols, id: \.self) { symbol in
                 SidebarIconCell(isSelected: selection == symbol) {
-                    selection = symbol
-                    emoji = ""
+                    choose(symbol)
                 } mark: {
                     Image(systemName: symbol)
                         .font(.system(size: 13, weight: .medium))
@@ -1977,16 +2243,74 @@ private struct SidebarIconPicker: View {
             }
         }
         .onAppear {
-            /// An agent id is neither a symbol nor an emoji, and without this
-            /// it would land in the emoji field — which trims to one character
-            /// on edit, so opening the sheet and touching that field would
-            /// quietly turn `agent:claude` into `a`.
-            if !selection.isEmpty,
-               !Self.symbols.contains(selection),
-               !Self.agentSymbols.contains(selection),
-               SidebarIconID.agent(for: selection) == nil {
-                emoji = selection
+            /// Only an actual emoji goes in the emoji field, because that
+            /// field trims to one character on edit. This used to ask the
+            /// question backwards — anything absent from the curated lists
+            /// and not an agent — which was true of every symbol the browser
+            /// can now return, so opening the sheet on `rectangle.3.group`
+            /// and touching the field would quietly turn it into `r`.
+            if SidebarIconID.kind(of: selection) == .emoji { emoji = selection }
+
+            recents = Self.visibleRecents(selection: selection)
+        }
+        .sheet(isPresented: $isBrowsing) {
+            SidebarIconBrowser(selection: selection) { picked in
+                choose(picked)
+
+                /// Added rather than merged: a symbol out of the browser has
+                /// no cell in the curated grid, so without a cell here the
+                /// sheet lights up nothing at all and the only sign the pick
+                /// landed is the tab itself, after Save. Added only when it
+                /// is missing, so a row already holding it does not shuffle
+                /// under the cursor on the way back.
+                if !recents.contains(picked) {
+                    recents = SidebarIconRecents.recording(picked, into: recents)
+                }
             }
+        }
+    }
+
+    /// One pick, whatever it was picked from.
+    ///
+    /// The emoji field follows the choice rather than being cleared blindly:
+    /// choosing 🔥 from the Recents row has to leave the field showing 🔥, or
+    /// the sheet says two different things about one selection.
+    private func choose(_ icon: String) {
+        selection = icon
+        emoji = SidebarIconID.kind(of: icon) == .emoji ? icon : ""
+    }
+
+    /// The stored Recents row, plus the icon this tab or group already wears
+    /// when nothing else in the sheet stands for it.
+    ///
+    /// An icon chosen from the browser last week is a symbol with no cell in
+    /// the curated grid, and a row trimmed to ten may no longer hold it — so
+    /// the sheet would open on it and light up nothing. Prepending it is not
+    /// a lie either: it *is* the most recent choice for this tab. It goes
+    /// through the same merge as a stored one, so it cannot duplicate an
+    /// entry or push the row past ten.
+    private static func visibleRecents(selection: String) -> [String] {
+        let stored = SidebarIconRecents().icons
+        guard !hasOwnCell(selection) else { return stored }
+        return SidebarIconRecents.recording(selection, into: stored)
+    }
+
+    /// The Recents row mixes all three forms, so its cells cannot all be
+    /// named by the string they hold: `agent:claude` is the file format, not
+    /// something to show a reader. The agents' own row says "Claude", and
+    /// this says the same.
+    private static func tooltip(for icon: String) -> String {
+        SidebarIconID.agent(for: icon)?.displayName ?? icon
+    }
+
+    /// Whether some other control in this sheet already shows `icon` as
+    /// chosen: a curated cell, an agent's cell, or the emoji field.
+    private static func hasOwnCell(_ icon: String) -> Bool {
+        switch SidebarIconID.kind(of: icon) {
+        case .empty, .emoji, .agent, .unknownAgent:
+            return true
+        case .symbol:
+            return symbols.contains(icon) || agentSymbols.contains(icon)
         }
     }
 
@@ -1997,6 +2321,125 @@ private struct SidebarIconPicker: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The rest of SF Symbols, searchable — what the last cell of the curated
+/// grid opens.
+///
+/// A sheet on top of the editor's sheet, not a popover. Four thousand cells
+/// want a scroll view with real height, and a popover hanging off a row of a
+/// 330-point-wide form would spend most of that height off the window. A
+/// sheet also keeps Escape meaning "close the browser" rather than "close the
+/// editor and lose the name I typed".
+private struct SidebarIconBrowser: View {
+    /// Read, not written. The picker owns what a pick means — the emoji field
+    /// to clear, the Recents row to extend — so this hands the name back and
+    /// closes rather than writing through a binding and leaving the picker to
+    /// work out where the new value came from.
+    let selection: String
+    let onPick: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var query = ""
+
+    /// Held rather than recomputed in `body`, which reads the list twice —
+    /// once for the grid and once for the count — and would search the
+    /// catalogue twice per keystroke for it.
+    @State private var results: [String] = []
+
+    @FocusState private var queryFocused: Bool
+
+    /// Ten columns against the picker's seven: this sheet is wider, and the
+    /// point here is to sweep a lot of symbols with your eyes rather than to
+    /// keep the rhythm of the curated grid.
+    private let columns = Array(
+        repeating: GridItem(.flexible(), spacing: 6),
+        count: 10
+    )
+
+    var body: some View {
+        VStack(spacing: 0) {
+            search
+
+            Divider()
+
+            if results.isEmpty {
+                Spacer()
+                Text("No symbols match.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 6) {
+                        ForEach(results, id: \.self) { symbol in
+                            SidebarIconCell(isSelected: selection == symbol) {
+                                onPick(symbol)
+                                dismiss()
+                            } mark: {
+                                Image(systemName: symbol)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(selection == symbol ? .white : .primary)
+                            }
+                            .help(symbol)
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Text(verbatim: "\(results.count) symbols")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+        }
+        .frame(width: 470, height: 520)
+        .onAppear {
+            results = SidebarIconCatalog.matches(query)
+            queryFocused = true
+        }
+        .onChange(of: query) { value in
+            results = SidebarIconCatalog.matches(value)
+        }
+    }
+
+    /// The same field the file explorer and the worktree panel use: no submit
+    /// button, filters as you type, and a clear button only once there is
+    /// something to clear.
+    private var search: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            TextField("Search symbols", text: $query)
+                .textFieldStyle(.plain)
+                .focused($queryFocused)
+
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear")
+            }
+        }
+        .padding(10)
     }
 }
 
@@ -2195,7 +2638,7 @@ private struct SidebarTabEditor: View {
             }
             .padding(12)
         }
-        .frame(width: 330, height: 420)
+        .frame(width: 365, height: 460)
         .onAppear { populate() }
     }
 
@@ -2215,6 +2658,7 @@ private struct SidebarTabEditor: View {
             color: color == .none ? nil : color,
             colorHex: colorHex
         ))
+        SidebarIconRecents().record(icon)
     }
 }
 
@@ -2285,7 +2729,7 @@ private struct SidebarGroupEditor: View {
                             TextField(
                                 "",
                                 text: $projectRoot,
-                                prompt: Text("~/Projects/front-app-eita")
+                                prompt: Text("~/Projects")
                             )
                             .labelsHidden()
                             .multilineTextAlignment(.leading)
@@ -2334,7 +2778,7 @@ private struct SidebarGroupEditor: View {
             }
             .padding(12)
         }
-        .frame(width: 380, height: 780)
+        .frame(width: 420, height: 860)
         .onAppear { populate() }
     }
 
@@ -2404,5 +2848,7 @@ private struct SidebarGroupEditor: View {
                 store.assign(surfaceId: surfaceId, to: created.id)
             }
         }
+
+        SidebarIconRecents().record(icon)
     }
 }

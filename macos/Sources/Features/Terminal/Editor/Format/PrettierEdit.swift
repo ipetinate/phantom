@@ -14,6 +14,12 @@ import Foundation
 /// — it is the shape `CodeTextView` already applies. It is a separate type
 /// only so this stays compilable and testable on its own, with nothing of the
 /// completion machinery behind it.
+///
+/// The arithmetic itself lives on `CodeTextEdit` and is delegated to here.
+/// It moved there when the text view started needing the same computation for
+/// every *other* replacement a host makes — a language server's formatting, a
+/// rename, a reload — and two copies of a surrogate-pair rule is one copy too
+/// many.
 struct PrettierEdit: Equatable, Sendable {
     /// UTF-16 offsets into the *old* text, which is what `NSTextStorage`
     /// indexes by.
@@ -23,86 +29,25 @@ struct PrettierEdit: Equatable, Sendable {
 
 extension PrettierEdit {
     /// The minimal edit between two texts, or nil when there is nothing to do.
-    ///
-    /// ## Why UTF-16 and not `Character`
-    ///
-    /// The buffer is `NSString`-indexed, so any offset handed back has to be
-    /// in UTF-16 code units. Trimming by `Character` and converting afterwards
-    /// is not the same computation, because Swift's `Character` is a grapheme
-    /// cluster:
-    ///
-    /// - `"\r\n"` is **one** `Character` and **two** code units. A file
-    ///   converted from CRLF to LF differs at every line ending, and a
-    ///   grapheme-counted prefix would be short by one unit per line already
-    ///   passed — an offset that drifts further from the truth the further
-    ///   into the file the first real change is.
-    /// - `"👩‍👩‍👧"` is one `Character` and eight code units, and every flag,
-    ///   skin tone and combining accent has its own ratio.
-    ///
-    /// Counting the units the buffer counts removes the conversion entirely.
-    ///
-    /// ## Why the boundaries get nudged
-    ///
-    /// A code-unit boundary can fall *inside* a surrogate pair: `"😀"` and
-    /// `"😁"` share their leading unit, so the naive common prefix is one unit
-    /// long and the replacement text would begin with an unpaired trailing
-    /// surrogate. Swift cannot hold one — `String(decoding:as: UTF16.self)`
-    /// substitutes U+FFFD — so the emoji would come back as a replacement
-    /// character. Both boundaries are therefore pulled back off any pair they
-    /// would have split.
+    /// See ``CodeTextEdit/minimal(from:to:)`` for why it counts UTF-16 units
+    /// and why it refuses to split a surrogate pair.
     static func minimal(from old: String, to new: String) -> PrettierEdit? {
-        let oldUnits = Array(old.utf16)
-        let newUnits = Array(new.utf16)
-
-        /// Compared as code units rather than as `String`s on purpose. `==`
-        /// on `String` is canonical equivalence, so a text that differs only
-        /// in Unicode normalisation reads as unchanged — and the buffer would
-        /// keep bytes Prettier did not produce.
-        guard oldUnits != newUnits else { return nil }
-
-        var prefix = 0
-        let shorter = min(oldUnits.count, newUnits.count)
-        while prefix < shorter, oldUnits[prefix] == newUnits[prefix] { prefix += 1 }
-        if prefix > 0, isHighSurrogate(oldUnits[prefix - 1]) { prefix -= 1 }
-
-        var suffix = 0
-        while suffix < shorter - prefix,
-              oldUnits[oldUnits.count - 1 - suffix] == newUnits[newUnits.count - 1 - suffix] {
-            suffix += 1
-        }
-        if suffix > 0, isLowSurrogate(oldUnits[oldUnits.count - suffix]) { suffix -= 1 }
-
-        let range = NSRange(location: prefix, length: oldUnits.count - suffix - prefix)
-        let replacement = newUnits[prefix..<(newUnits.count - suffix)]
-        return PrettierEdit(range: range, newText: String(decoding: replacement, as: UTF16.self))
+        guard let edit = CodeTextEdit.minimal(from: old, to: new) else { return nil }
+        return PrettierEdit(range: edit.range, newText: edit.newText)
     }
 
     /// Applies the edit to the text it was computed from.
-    ///
-    /// For callers with no text view — and for tests, which is the honest way
-    /// to assert a minimal edit: that it reconstructs the formatted text
-    /// exactly, not merely that its numbers look plausible.
     func applied(to text: String) -> String {
-        (text as NSString).replacingCharacters(in: range, with: newText)
+        asCodeTextEdit.applied(to: text)
     }
 
-    /// Where a caret sitting at `offset` should end up.
-    ///
-    /// The point of the whole exercise. A caret before the edit does not move;
-    /// one after it shifts by however much the edit grew or shrank the text.
-    /// A caret *inside* the rewritten span has no honest answer — the text it
-    /// was pointing at is gone — so it is held where it is, clamped to the end
-    /// of the replacement, which for the common case of a reindented line
-    /// leaves it on the same line.
+    /// Where a caret sitting at `offset` should end up. See
+    /// ``CodeTextEdit/movedCaret(from:)``.
     func movedCaret(from offset: Int) -> Int {
-        guard offset > range.location else { return offset }
-
-        let replacementLength = (newText as NSString).length
-        let end = range.location + range.length
-        if offset >= end { return offset + replacementLength - range.length }
-        return min(offset, range.location + replacementLength)
+        asCodeTextEdit.movedCaret(from: offset)
     }
 
-    private static func isHighSurrogate(_ unit: UInt16) -> Bool { (0xD800...0xDBFF).contains(unit) }
-    private static func isLowSurrogate(_ unit: UInt16) -> Bool { (0xDC00...0xDFFF).contains(unit) }
+    private var asCodeTextEdit: CodeTextEdit {
+        CodeTextEdit(range: range, newText: newText)
+    }
 }

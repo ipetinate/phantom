@@ -87,7 +87,7 @@ struct ShortcutCollisionChecker {
     /// without a word and then fight the tree.
     static let fileExplorerShortcuts: [(owner: String, shortcut: PhantomShortcut)] = [
         ("Rename in the file explorer", PhantomShortcut(key: "\r", modifiers: [])),
-        ("Move to Trash in the file explorer", PhantomShortcut(key: "\u{7f}", modifiers: [])),
+        ("Move to Trash in the file explorer", PhantomShortcut(key: PhantomShortcut.deleteKey, modifiers: [])),
         ("Open a file in the file explorer", PhantomShortcut(key: " ", modifiers: [])),
         ("Move up in the file explorer", PhantomShortcut(key: "\u{f700}", modifiers: [])),
         ("Move down in the file explorer", PhantomShortcut(key: "\u{f701}", modifiers: [])),

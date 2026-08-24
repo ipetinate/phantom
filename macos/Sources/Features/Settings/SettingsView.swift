@@ -194,24 +194,27 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarShowDevServer") private var showDevServer = true
     @AppStorage("SidebarShowPlan") private var showPlan = true
     @AppStorage("SidebarTabShowWorktree") private var tabShowWorktree = true
-    @AppStorage("SidebarTabShowClaude") private var tabShowClaude = true
-    @AppStorage("SidebarTabShowCodex") private var tabShowCodex = true
-    @AppStorage("SidebarTabShowOpenCode") private var tabShowOpenCode = true
+    @AppStorage("SidebarTabShowClaude") private var tabShowClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarTabShowCodex") private var tabShowCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarTabShowOpenCode") private var tabShowOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarTabShowAntigravity") private var tabShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage("SidebarTabAlwaysShowActions") private var tabAlwaysShowActions = false
 
     @AppStorage("SidebarGroupShowPullRequests") private var groupShowPullRequests = true
-    @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = true
-    @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = true
-    @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = true
+    @AppStorage("SidebarGroupShowClaude") private var groupShowClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarGroupShowAntigravity") private var groupShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage("SidebarGroupShowNewTerminal") private var groupShowNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var groupShowWorktree = true
     @AppStorage("SidebarGroupShowCount") private var groupShowCount = true
     @AppStorage("SidebarGroupAlwaysShowActions") private var groupAlwaysShowActions = false
 
     @AppStorage("SidebarChromeShowWorktree") private var chromeShowWorktree = true
-    @AppStorage("SidebarShowClaude") private var chromeShowClaude = true
-    @AppStorage("SidebarShowCodex") private var chromeShowCodex = true
-    @AppStorage("SidebarShowOpenCode") private var chromeShowOpenCode = true
+    @AppStorage("SidebarShowClaude") private var chromeShowClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage("SidebarShowCodex") private var chromeShowCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage("SidebarShowOpenCode") private var chromeShowOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage("SidebarShowAntigravity") private var chromeShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage("SidebarChromeAlwaysShowActions") private var chromeAlwaysShowActions = false
 
     @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
@@ -259,6 +262,8 @@ struct SidebarSettingsView: View {
                               short: "Claude", isOn: $chromeShowClaude),
                         .init(id: "codex", title: "Codex", isOn: $chromeShowCodex),
                         .init(id: "opencode", title: "OpenCode", isOn: $chromeShowOpenCode),
+                        .init(id: "antigravity", title: "Antigravity",
+                              isOn: $chromeShowAntigravity),
                     ],
                     emptyLabel: "Hidden")
 
@@ -298,6 +303,8 @@ struct SidebarSettingsView: View {
                               short: "Claude", isOn: $tabShowClaude),
                         .init(id: "codex", title: "Codex", isOn: $tabShowCodex),
                         .init(id: "opencode", title: "OpenCode", isOn: $tabShowOpenCode),
+                        .init(id: "antigravity", title: "Antigravity",
+                              isOn: $tabShowAntigravity),
                     ],
                     emptyLabel: "Hidden")
 
@@ -324,6 +331,8 @@ struct SidebarSettingsView: View {
                               short: "Claude", isOn: $groupShowClaude),
                         .init(id: "codex", title: "Codex", isOn: $groupShowCodex),
                         .init(id: "opencode", title: "OpenCode", isOn: $groupShowOpenCode),
+                        .init(id: "antigravity", title: "Antigravity",
+                              isOn: $groupShowAntigravity),
                     ],
                     emptyLabel: "Hidden")
 
@@ -370,6 +379,7 @@ struct AgentsSettingsView: View {
     @State private var claudeInstalled = ClaudeHooksInstaller.isInstalled
     @State private var codexInstalled = CodexHooksInstaller.isInstalled
     @State private var openCodeInstalled = OpenCodeHooksInstaller.isInstalled
+    @State private var antigravityInstalled = AntigravityHooksInstaller.isInstalled
     @State private var feedback: String?
 
     @AppStorage("AgentNotificationsEnabled") private var agentNotifications = true
@@ -420,11 +430,26 @@ struct AgentsSettingsView: View {
                         feedback = openCodeInstalled ? "OpenCode removal failed" : "OpenCode hooks removed"
                     }
                 )
+                agentHookRow(
+                    title: "Antigravity",
+                    icon: AnyView(AntigravityIcon(size: 14, tint: .original)),
+                    installed: antigravityInstalled,
+                    install: {
+                        let ok = AntigravityHooksInstaller.install()
+                        antigravityInstalled = AntigravityHooksInstaller.isInstalled
+                        feedback = ok && antigravityInstalled ? "Antigravity hooks installed ✓" : "Antigravity install failed: \(AntigravityHooksInstaller.lastError ?? "status did not update")"
+                    },
+                    uninstall: {
+                        let ok = AntigravityHooksInstaller.uninstall()
+                        antigravityInstalled = AntigravityHooksInstaller.isInstalled
+                        feedback = ok && !antigravityInstalled ? "Antigravity hooks removed" : "Antigravity removal failed"
+                    }
+                )
                 if let feedback { Text(feedback).font(.caption).foregroundStyle(feedback.contains("failed") ? .red : .secondary) }
             } header: {
                 Text("Hooks")
             } footer: {
-                Text("Installs Phantom hooks for each agent while preserving existing configuration. Hooks update the tab activity indicator when an agent is working, waiting, or done.")
+                Text("Installs Phantom hooks for each agent while preserving existing configuration. Hooks update the tab activity indicator when an agent is working, waiting, or done. Antigravity reports only working and done: its hook system has no event for a permission prompt that Phantom can answer without also approving the tool call.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -447,6 +472,7 @@ struct AgentsSettingsView: View {
             claudeInstalled = ClaudeHooksInstaller.isInstalled
             codexInstalled = CodexHooksInstaller.isInstalled
             openCodeInstalled = OpenCodeHooksInstaller.isInstalled
+            antigravityInstalled = AntigravityHooksInstaller.isInstalled
         }
         // Claude Code owns this settings file too and rewrites it when its
         // own settings change, which can drop our registrations. Recheck on
@@ -459,6 +485,7 @@ struct AgentsSettingsView: View {
             claudeInstalled = ClaudeHooksInstaller.isInstalled
             codexInstalled = CodexHooksInstaller.isInstalled
             openCodeInstalled = OpenCodeHooksInstaller.isInstalled
+            antigravityInstalled = AntigravityHooksInstaller.isInstalled
         }
     }
 

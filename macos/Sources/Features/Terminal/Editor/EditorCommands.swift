@@ -104,5 +104,39 @@ enum EditorCommands {
 
         /// ⌥⌘1–9 — the nth open file.
         case selectFile(Int)
+
+    }
+
+    /// Where ⌥⌘ and an arrow asks for a new cell, or nil for any other key.
+    ///
+    /// An arrow *is* a direction, so ⌥⌘→ puts the new cell on the right and
+    /// ⌥⌘↑ above — and the four arrows spell the same four answers a drop on
+    /// an edge does, so the keyboard and the drag share one vocabulary instead
+    /// of each inventing its own. Returning the zone rather than a direction
+    /// is what makes that literal: both go through `drop`.
+    ///
+    /// Matched on the key code, and separate from `paneCommand`, because an
+    /// arrow is not a character. `charactersIgnoringModifiers` carries a
+    /// private-use scalar at best and, for a synthesised event, an empty
+    /// string — which is how the first attempt was measured failing, silently.
+    /// Key codes are what the hardware sends and what AppKit always fills in.
+    ///
+    /// Not ⌥⌘D, which was tried before the arrows and never arrived at all:
+    /// macOS keeps it for showing and hiding the Dock, so the app is never
+    /// asked. The symptom was a Dock appearing and a pane that did not divide.
+    nonisolated static func divideZone(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags
+    ) -> EditorDropZone? {
+        let relevant = modifiers.intersection([.command, .option, .shift, .control])
+        guard relevant == [.command, .option] else { return nil }
+
+        switch keyCode {
+        case 123: return .leading
+        case 124: return .trailing
+        case 125: return .bottom
+        case 126: return .top
+        default: return nil
+        }
     }
 }

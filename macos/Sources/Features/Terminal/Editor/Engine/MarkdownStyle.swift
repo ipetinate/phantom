@@ -21,9 +21,22 @@ struct MarkdownStyle: Equatable {
     /// Point sizes for heading levels one to six.
     var headingSizes: [CGFloat]
 
+    /// How wide a column of prose is allowed to run, in points.
+    ///
+    /// **Derived, not chosen.** Typography puts a comfortable line at 65 to 80
+    /// characters — past that the eye loses its place on the return sweep — so
+    /// the number is 72 of *this* font's characters, measured rather than
+    /// guessed at. That is what keeps it right when the reader changes the
+    /// editor's font size, which a hardcoded pixel width would not.
+    var measure: CGFloat { Self.measure(for: bodyFont) }
+
     /// The widest an image is drawn, before its aspect ratio scales the
     /// height to match.
-    var maxImageWidth: CGFloat = 460
+    ///
+    /// The measure, so a picture is never wider than the prose it sits in —
+    /// in a contained preview it lines up with the column, and in a fluid one
+    /// it stops a screenshot from being blown up to the width of the window.
+    var maxImageWidth: CGFloat { measure }
 
     /// Whether an image at an `http(s)` URL may be fetched.
     ///
@@ -48,6 +61,24 @@ struct MarkdownStyle: Equatable {
 
     func headingSize(_ level: Int) -> CGFloat {
         headingSizes[min(max(level, 1), headingSizes.count) - 1]
+    }
+
+    /// `characters` of `font`, in points.
+    ///
+    /// Measured off the lowercase alphabet and a space, because that *is* the
+    /// average character of prose — a proportional font has no single advance,
+    /// and the digits, which are the obvious thing to measure and what CSS's
+    /// `ch` unit uses, are among its widest glyphs. In the system font a `0` is
+    /// 21% wider than the average lowercase letter, so taking it as the sample
+    /// would have given a 584-point column for 481 points of text.
+    ///
+    /// At the editor's default size that is 481 points, and it moves with the
+    /// font: 417 at 11 points, 756 at 22.
+    static func measure(for font: NSFont, characters: CGFloat = 72) -> CGFloat {
+        let sample = "abcdefghijklmnopqrstuvwxyz "
+        let width = (sample as NSString).size(withAttributes: [.font: font]).width
+        guard width > 0 else { return font.pointSize * 0.5 * characters }
+        return (width / CGFloat(sample.count) * characters).rounded()
     }
 
     /// Derived from the editor's own configuration, so changing the editor
@@ -100,6 +131,7 @@ extension CodeLanguage {
         "dockerfile": .shell,
         "json": .json, "jsonc": .json, "json5": .json,
         "yaml": .yaml, "yml": .yaml,
+        "toml": .toml,
         "markdown": .markdown, "md": .markdown, "mdx": .markdown,
         "html": .html, "xml": .html, "svg": .html, "vue-html": .html,
         "css": .css, "scss": .css, "sass": .css, "less": .css,

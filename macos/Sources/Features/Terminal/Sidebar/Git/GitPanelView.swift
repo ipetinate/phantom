@@ -8,7 +8,7 @@ import SwiftUI
 /// repository gets that repository, filling the pane — the panel this
 /// started as. A terminal sitting in a folder that merely *contains*
 /// repositories gets one collapsible section per repository, because a
-/// workspace like `~/Projects/Aurora` is a real place to work from and
+/// workspace like `~/Projects/Acme` is a real place to work from and
 /// answering "this terminal isn't in a git repository" while sitting on top
 /// of five of them was never useful.
 ///
