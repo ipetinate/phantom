@@ -152,6 +152,7 @@ private struct TerminalTabItem: View {
         .overlay {
             EditorTabDragSource(
                 item: .terminal,
+                label: title,
                 onClick: { _ in onSelect() },
                 /// The terminal's tab has no menu: it cannot be closed, it has
                 /// no path to reveal or copy, and every command there is would
@@ -212,6 +213,7 @@ private struct EditorTabItem: View {
             .overlay {
                 EditorTabDragSource(
                     item: .file(tab.path),
+                    label: tab.name,
                     onClick: { clicks in
                         if clicks >= 2 { showMenu() } else { onSelect() }
                     },

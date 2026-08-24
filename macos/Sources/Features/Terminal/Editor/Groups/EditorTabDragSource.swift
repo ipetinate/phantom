@@ -49,6 +49,11 @@ final class EditorTabDragSession: ObservableObject {
 struct EditorTabDragSource: NSViewRepresentable {
     let item: EditorCenter.DragItem
 
+    /// What the thing following the pointer says. Handed in rather than
+    /// derived: the terminal's tab is named by the window's title, which only
+    /// the bar knows.
+    let label: String
+
     /// Called on release without a drag, with AppKit's own click count.
     let onClick: (Int) -> Void
 
@@ -67,12 +72,14 @@ struct EditorTabDragSource: NSViewRepresentable {
 
     private func apply(to view: DragSourceView) {
         view.item = item
+        view.label = label
         view.onClick = onClick
         view.onMenu = onMenu
     }
 
     final class DragSourceView: NSView, NSDraggingSource {
         var item: EditorCenter.DragItem?
+        var label: String = ""
         var onClick: ((Int) -> Void)?
         var onMenu: (() -> Void)?
 
@@ -103,16 +110,17 @@ struct EditorTabDragSource: NSViewRepresentable {
             guard let pasteboardItem = item.pasteboardItem() else { return }
 
             let dragged = NSDraggingItem(pasteboardWriter: pasteboardItem)
-            if let image = snapshot() {
-                let origin = convert(event.locationInWindow, from: nil)
-                dragged.setDraggingFrame(
-                    NSRect(
-                        x: origin.x - image.size.width / 2,
-                        y: origin.y - image.size.height / 2,
-                        width: image.size.width,
-                        height: image.size.height),
-                    contents: image)
-            }
+            let image = Self.image(for: label)
+            let origin = convert(event.locationInWindow, from: nil)
+            /// Centred on the pointer, which is where macOS puts a dragged
+            /// tab of its own.
+            dragged.setDraggingFrame(
+                NSRect(
+                    x: origin.x - image.size.width / 2,
+                    y: origin.y - image.size.height / 2,
+                    width: image.size.width,
+                    height: image.size.height),
+                contents: image)
 
             isDragging = true
             EditorTabDragSession.shared.begin(item)
@@ -125,18 +133,46 @@ struct EditorTabDragSource: NSViewRepresentable {
             session.animatesToStartingPositionsOnCancelOrFail = false
         }
 
-        /// The tab as the reader sees it, for the thing that follows the
-        /// pointer. Drawn from the superview because that is where SwiftUI
-        /// renders the tab; this view is a transparent layer over it.
-        private func snapshot() -> NSImage? {
-            guard let superview, bounds.width > 1, bounds.height > 1 else { return nil }
-            let rect = convert(bounds, to: superview)
-            guard let representation = superview.bitmapImageRepForCachingDisplay(in: rect)
-            else { return nil }
+        /// The thing that follows the pointer: a small pill naming the tab.
+        ///
+        /// Drawn rather than captured. Snapshotting the tab was the first
+        /// attempt — `cacheDisplay` on the superview, which is where SwiftUI
+        /// renders it — and it produced an empty image every time, so the drag
+        /// had no visible payload at all. SwiftUI draws through a layer tree
+        /// that `cacheDisplay` does not reach.
+        ///
+        /// A drawn pill is also the only version that cannot come out blank,
+        /// which matters for the one part of this gesture the reader watches
+        /// the whole time.
+        static func image(for label: String) -> NSImage {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                .foregroundColor: NSColor.labelColor,
+            ]
 
-            superview.cacheDisplay(in: rect, to: representation)
-            let image = NSImage(size: rect.size)
-            image.addRepresentation(representation)
+            let text = label.isEmpty ? "Tab" : label
+            let measured = (text as NSString).size(withAttributes: attributes)
+            /// Capped, because a tab's name can be a whole path and a pill as
+            /// wide as the window tells the reader nothing about where it is.
+            let size = NSSize(
+                width: min(measured.width, 260) + 20,
+                height: measured.height + 12)
+
+            let image = NSImage(size: size)
+            image.lockFocus()
+
+            let border = NSRect(origin: .zero, size: size).insetBy(dx: 0.5, dy: 0.5)
+            let pill = NSBezierPath(roundedRect: border, xRadius: 6, yRadius: 6)
+            NSColor.controlBackgroundColor.withAlphaComponent(0.95).setFill()
+            pill.fill()
+            NSColor.separatorColor.setStroke()
+            pill.stroke()
+
+            (text as NSString).draw(
+                in: NSRect(x: 10, y: 6, width: size.width - 20, height: measured.height),
+                withAttributes: attributes)
+
+            image.unlockFocus()
             return image
         }
 
