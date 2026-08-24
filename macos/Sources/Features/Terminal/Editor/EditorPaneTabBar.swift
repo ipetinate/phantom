@@ -63,6 +63,9 @@ struct EditorPaneTabBar: View {
                     onSelect: { center.select($0) },
                     onClose: { center.requestClose($0) },
                     onCommand: perform,
+                    availability: { center.availability(of: .file($0.path)) },
+                    terminalAvailability: center.availability(of: .terminal),
+                    onTerminalCommand: performOnTerminal,
                     terminalTitle: center.terminalTitle,
                     onSelectTerminal: { center.selectTerminal() },
                     hostsTerminal: center.hostsTerminal(groupID)
@@ -92,7 +95,19 @@ struct EditorPaneTabBar: View {
         case .copyPath:
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(tab.path, forType: .string)
+        case .splitLeading, .splitTrailing, .splitTop, .splitBottom:
+            guard let zone = command.zone else { return }
+            center.splitOut(.file(tab.path), zone: zone)
+        case .moveToMainPane:
+            center.moveToMainPane(.file(tab.path))
         }
+    }
+
+    /// The terminal's menu offers the splits only, so nothing else can arrive
+    /// here — and a command that did would be one this tab must not run.
+    private func performOnTerminal(_ command: EditorTabCommand) {
+        guard let zone = command.zone else { return }
+        center.splitOut(.terminal, zone: zone)
     }
 
     /// See `EditorCenter.showsTabBar(in:)`, which is where the rule lives so

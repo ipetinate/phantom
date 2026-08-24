@@ -24,6 +24,15 @@ struct EditorTabBar: View {
     /// description does.
     let onCommand: (EditorTabCommand, EditorTab) -> Void
 
+    /// What each tab can be asked to do. Asked per tab rather than per bar:
+    /// only the centre knows whether a tab's cell survives it leaving, and
+    /// whether the main pane is somewhere else.
+    let availability: (EditorTab) -> EditorTabCommand.Availability
+
+    /// The same, for the terminal's own tab, and what its menu asks for.
+    let terminalAvailability: EditorTabCommand.Availability
+    let onTerminalCommand: (EditorTabCommand) -> Void
+
     /// The title of the terminal this pane belongs to, for its own tab.
     let terminalTitle: String
     let onSelectTerminal: () -> Void
@@ -58,7 +67,9 @@ struct EditorTabBar: View {
                     TerminalTabItem(
                         title: terminalTitle,
                         isSelected: selection == .terminal,
-                        onSelect: onSelectTerminal
+                        availability: terminalAvailability,
+                        onSelect: onSelectTerminal,
+                        onCommand: onTerminalCommand
                     )
                 }
 
@@ -68,7 +79,7 @@ struct EditorTabBar: View {
                         isSelected: selection == .file(tab.id),
                         showsDirectory: needsDirectory(tab),
                         isDivergent: isDivergent(tab),
-                        hasSiblings: tabs.count > 1,
+                        availability: availability(tab),
                         onSelect: { onSelect(tab.id) },
                         onClose: { onClose(tab.id) },
                         onCommand: { onCommand($0, tab) }
@@ -116,7 +127,9 @@ struct EditorTabBar: View {
 private struct TerminalTabItem: View {
     let title: String
     let isSelected: Bool
+    let availability: EditorTabCommand.Availability
     let onSelect: () -> Void
+    let onCommand: (EditorTabCommand) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
     @State private var isHovered = false
@@ -154,11 +167,10 @@ private struct TerminalTabItem: View {
                 item: .terminal,
                 label: title,
                 preview: { dragPreview },
-                onClick: { _ in onSelect() },
-                /// The terminal's tab has no menu: it cannot be closed, it has
-                /// no path to reveal or copy, and every command there is would
-                /// be greyed out.
-                onMenu: {}
+                onClick: { clicks in
+                    if clicks >= 2 { showMenu() } else { onSelect() }
+                },
+                onMenu: showMenu
             )
         }
         .onHover { hovering in
@@ -166,6 +178,32 @@ private struct TerminalTabItem: View {
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
         .help(title)
+    }
+
+    /// The terminal's own menu: the four splits and nothing else.
+    ///
+    /// It cannot be closed — the pane belongs to it — and it has no path to
+    /// reveal or to copy. `EditorTabCommand.menu` leaves all of that out on
+    /// its own: the availability it is given says the terminal is already in
+    /// the main pane, and the close commands are filtered here because they
+    /// are the one group this tab must never offer.
+    private func showMenu() {
+        let popup = NSMenu()
+        for entry in EditorTabCommand.menu(availability) {
+            switch entry {
+            case .separator:
+                popup.addItem(.separator())
+            case .command(let command):
+                guard command.zone != nil else { continue }
+                popup.addItem(
+                    ClosureMenuItem(title: command.title, systemImage: command.icon) {
+                        onCommand(command)
+                    })
+            }
+        }
+
+        guard !popup.items.isEmpty else { return }
+        popup.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 
     /// The terminal's tab, for the drag: its own glyph and title, in the shape
@@ -206,9 +244,9 @@ private struct EditorTabItem: View {
     let showsDirectory: Bool
     let isDivergent: Bool
 
-    /// Whether this bar holds more than this tab, which is what decides
-    /// whether "Close Others" is offered.
-    let hasSiblings: Bool
+    /// What this tab can be asked to do, which depends on where it is in the
+    /// grid. Resolved by the centre, which is what knows.
+    let availability: EditorTabCommand.Availability
     let onSelect: () -> Void
     let onClose: () -> Void
     let onCommand: (EditorTabCommand) -> Void
@@ -291,12 +329,15 @@ private struct EditorTabItem: View {
     /// neither of them is a SwiftUI `.contextMenu`.
     private func showMenu() {
         let popup = NSMenu()
-        for entry in EditorTabCommand.menu(hasSiblings: hasSiblings) {
+        for entry in EditorTabCommand.menu(availability) {
             switch entry {
             case .separator:
                 popup.addItem(.separator())
             case .command(let command):
-                popup.addItem(ClosureMenuItem(title: command.title) { onCommand(command) })
+                popup.addItem(
+                    ClosureMenuItem(title: command.title, systemImage: command.icon) {
+                        onCommand(command)
+                    })
             }
         }
         popup.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)

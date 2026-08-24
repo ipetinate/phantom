@@ -269,27 +269,7 @@ struct FileExplorerView: View {
                     }
 
                     ForEach(visibleRows) { row in
-                        FileExplorerRow(
-                            row: row,
-                            editing: model.editing,
-                            isExpanded: model.isExpanded(row.node),
-                            isCurrent: row.node.path == model.currentDirectory,
-                            isSelected: row.node.path == model.selection,
-                            ghostPath: ghostPath(for: row),
-                            isOpenInEditor: row.node.path == editorCenter.tabs.selectedPath,
-                            onTap: { handleTap(row) },
-                            onBeginRename: { model.beginRename(path: row.node.path) },
-                            onCommitRename: { name in commitRename(row, to: name) },
-                            onCommitCreate: { parent, isFolder, name in
-                                commitCreate(parent: parent, isFolder: isFolder, name: name)
-                            },
-                            onCancelEdit: { model.cancelEditing() },
-                            onDelete: { requestDelete(row.node.path) },
-                            onCreateFile: { model.beginCreate(in: row.node.path, isFolder: false) },
-                            onCreateFolder: { model.beginCreate(in: row.node.path, isFolder: true) },
-                            onDropInto: { urls in handleDrop(urls, into: row.node.path) }
-                        )
-                        .id(row.id)
+                        rowView(row).id(row.id)
                     }
                 }
                 .padding(.horizontal, 6)
@@ -580,6 +560,58 @@ struct FileExplorerView: View {
         treeFocused = true
     }
 
+    /// One row, built in a function of its own.
+    ///
+    /// Inline in the `ForEach` this initializer's seventeen arguments are more
+    /// than the SwiftUI type checker will solve — it gives up and fails the
+    /// build rather than compiling slowly, which is what adding the menu's
+    /// value to it did.
+    @ViewBuilder
+    private func rowView(_ row: FileRow) -> some View {
+        FileExplorerRow(
+            row: row,
+            editing: model.editing,
+            isExpanded: model.isExpanded(row.node),
+            isCurrent: row.node.path == model.currentDirectory,
+            isSelected: row.node.path == model.selection,
+            ghostPath: ghostPath(for: row),
+            isOpenInEditor: row.node.path == editorCenter.tabs.selectedPath,
+            onTap: { handleTap(row) },
+            onBeginRename: { model.beginRename(path: row.node.path) },
+            onCommitRename: { name in commitRename(row, to: name) },
+            onCommitCreate: { parent, isFolder, name in
+                commitCreate(parent: parent, isFolder: isFolder, name: name)
+            },
+            onCancelEdit: { model.cancelEditing() },
+            onDelete: { requestDelete(row.node.path) },
+            onCreateFile: { model.beginCreate(in: row.node.path, isFolder: false) },
+            onCreateFolder: { model.beginCreate(in: row.node.path, isFolder: true) },
+            rowMenu: rowMenu(for: row.node),
+            onDropInto: { urls in handleDrop(urls, into: row.node.path) }
+        )
+    }
+
+    /// What a row's menu may offer, which for the split commands is a question
+    /// about the editor rather than about the file.
+    ///
+    /// A file that is not open yet can still be opened into a split — the pane
+    /// is divided around whatever is already there — so `canSplit` asks about
+    /// the destination when the file is closed, and about the file's own cell
+    /// when it is already open.
+    private func rowMenu(for node: FileNode) -> FileExplorerRowMenu {
+        let isOpen = editorCenter.isOpen(node.path)
+
+        return FileExplorerRowMenu(
+            availability: FileExplorerRowCommand.Availability(
+                isDirectory: node.isDirectory,
+                canSplit: isOpen
+                    ? editorCenter.canSplitOut(.file(node.path))
+                    : editorCenter.canSplitAnything,
+                canReturnToMainPane: isOpen && !editorCenter.isInMainPane(node.path)),
+            openInSplit: { editorCenter.openInSplit(node.url, zone: $0) },
+            moveToMainPane: { editorCenter.moveToMainPane(.file(node.path)) })
+    }
+
     private func requestDelete(_ path: String) {
         guard model.editing == nil else { return }
         pendingDelete = path
@@ -661,6 +693,12 @@ private struct FileExplorerRow: View {
     let onDelete: () -> Void
     let onCreateFile: () -> Void
     let onCreateFolder: () -> Void
+
+    /// What the menu may offer for this row, and the two commands the editor
+    /// answers. Handed in rather than read from the centre here: a row that
+    /// observed the editor would redraw on every keystroke in an open file,
+    /// and there is one of these per visible line of the tree.
+    let rowMenu: FileExplorerRowMenu
     let onDropInto: ([URL]) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
@@ -848,8 +886,10 @@ private struct FileExplorerRow: View {
     /// both the right-click menu below and the double-click menu in
     /// `showMenu`.
     private var menuEntries: [FileExplorerRowMenuEntry] {
-        FileExplorerRowCommand.menu(isDirectory: row.node.isDirectory)
+        FileExplorerRowCommand.menu(rowMenu.availability)
     }
+
+    /// The row's own availability comes from the parent — see the property.
 
     /// Keyed by position rather than by entry: a menu with two separators in
     /// it has two entries that compare equal, and `ForEach` needs them apart.
@@ -861,10 +901,14 @@ private struct FileExplorerRow: View {
                 Divider()
             case .command(let command):
                 if command.isDestructive {
-                    Button(command.title) { perform(command) }
-                        .foregroundStyle(.red)
+                    Button { perform(command) } label: {
+                        Label(command.title, systemImage: command.icon)
+                    }
+                    .foregroundStyle(.red)
                 } else {
-                    Button(command.title) { perform(command) }
+                    Button { perform(command) } label: {
+                        Label(command.title, systemImage: command.icon)
+                    }
                 }
             }
         }
@@ -893,7 +937,10 @@ private struct FileExplorerRow: View {
             case .separator:
                 menu.addItem(.separator())
             case .command(let command):
-                menu.addItem(ClosureMenuItem(title: command.title) { perform(command) })
+                menu.addItem(
+                    ClosureMenuItem(title: command.title, systemImage: command.icon) {
+                        perform(command)
+                    })
             }
         }
 
@@ -917,6 +964,11 @@ private struct FileExplorerRow: View {
         case .copyPath:
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(row.node.path, forType: .string)
+        case .openLeading, .openTrailing, .openTop, .openBottom:
+            guard let zone = command.zone else { return }
+            rowMenu.openInSplit(zone)
+        case .moveToMainPane:
+            rowMenu.moveToMainPane()
         }
     }
 

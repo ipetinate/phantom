@@ -1,6 +1,7 @@
 import Foundation
 @testable import Ghostty
 import SwiftUI
+import AppKit
 import Testing
 
 /// The file explorer's directory listing: ordering and hidden-file
@@ -403,9 +404,10 @@ struct FileExplorerTests {
     /// One list, walked by the right-click menu and by the double-click menu
     /// alike — which is the point of it being a list. A file cannot be created
     /// inside, so a file's menu is the folder's minus the two that create, and
-    /// minus the separator that separated them.
-    @Test func aFolderOffersTheCreateCommandsAndAFileDoesNot() {
-        #expect(FileExplorerRowCommand.menu(isDirectory: true) == [
+    /// minus the separator that separated them — plus the split commands,
+    /// which need a pane and so belong to files alone.
+    @Test func aFolderOffersTheCreateCommandsAndAFileTheSplits() {
+        #expect(FileExplorerRowCommand.menu(availability(isDirectory: true)) == [
             .command(.newFile),
             .command(.newFolder),
             .separator,
@@ -416,7 +418,13 @@ struct FileExplorerTests {
             .command(.copyPath),
         ])
 
-        #expect(FileExplorerRowCommand.menu(isDirectory: false) == [
+        #expect(FileExplorerRowCommand.menu(availability(isDirectory: false)) == [
+            .command(.openLeading),
+            .command(.openTrailing),
+            .command(.openTop),
+            .command(.openBottom),
+            .command(.moveToMainPane),
+            .separator,
             .command(.rename),
             .command(.delete),
             .separator,
@@ -425,14 +433,63 @@ struct FileExplorerTests {
         ])
     }
 
+    /// With nothing in the pane to divide around, a split heals straight back,
+    /// so the commands are left out rather than offered as a no-op.
+    @Test func aFileWithNothingToDivideIsNotOfferedSplits() {
+        let menu = FileExplorerRowCommand.menu(
+            availability(isDirectory: false, canSplit: false))
+
+        for command in FileExplorerRowCommand.allCases where command.zone != nil {
+            #expect(!menu.contains(.command(command)), "\(command.title) should be absent")
+        }
+    }
+
+    @Test func aFileNotOpenElsewhereIsNotOfferedTheWayBack() {
+        let menu = FileExplorerRowCommand.menu(
+            availability(isDirectory: false, canReturnToMainPane: false))
+        #expect(!menu.contains(.command(.moveToMainPane)))
+    }
+
+    /// An icon this build cannot draw is a menu item with a hole where its
+    /// glyph should be, so the names are asserted rather than trusted.
+    @Test func everyIconResolves() {
+        for command in FileExplorerRowCommand.allCases {
+            let image = NSImage(systemSymbolName: command.icon, accessibilityDescription: nil)
+            #expect(image != nil, "\(command.icon) is not a symbol this build has")
+        }
+    }
+
     /// A separator falls where the group changes and nowhere else, so a menu
     /// can never open on a rule with nothing above it.
     @Test func noMenuBeginsOrEndsWithASeparator() {
-        for isDirectory in [true, false] {
-            let entries = FileExplorerRowCommand.menu(isDirectory: isDirectory)
+        let cases = [
+            availability(isDirectory: true),
+            availability(isDirectory: false),
+            availability(isDirectory: false, canSplit: false),
+            availability(isDirectory: false, canReturnToMainPane: false),
+            availability(isDirectory: false, canSplit: false, canReturnToMainPane: false),
+        ]
+
+        for availability in cases {
+            let entries = FileExplorerRowCommand.menu(availability)
             #expect(entries.first != .separator)
             #expect(entries.last != .separator)
+
+            for (index, entry) in entries.enumerated() where entry == .separator {
+                #expect(entries[index - 1] != .separator, "two rules in a row")
+            }
         }
+    }
+
+    private func availability(
+        isDirectory: Bool,
+        canSplit: Bool = true,
+        canReturnToMainPane: Bool = true
+    ) -> FileExplorerRowCommand.Availability {
+        FileExplorerRowCommand.Availability(
+            isDirectory: isDirectory,
+            canSplit: canSplit,
+            canReturnToMainPane: canReturnToMainPane)
     }
 
     // MARK: One click or two

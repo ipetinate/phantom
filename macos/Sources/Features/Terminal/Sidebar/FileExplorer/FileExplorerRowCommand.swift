@@ -11,6 +11,11 @@ import Foundation
 enum FileExplorerRowCommand: String, Equatable, Hashable, CaseIterable {
     case newFile
     case newFolder
+    case openLeading
+    case openTrailing
+    case openTop
+    case openBottom
+    case moveToMainPane
     case rename
     case delete
     case revealInFinder
@@ -20,10 +25,49 @@ enum FileExplorerRowCommand: String, Equatable, Hashable, CaseIterable {
         switch self {
         case .newFile: return "New File"
         case .newFolder: return "New Folder"
+        case .openLeading: return "Open in Split Left"
+        case .openTrailing: return "Open in Split Right"
+        case .openTop: return "Open in Split Up"
+        case .openBottom: return "Open in Split Down"
+        case .moveToMainPane: return "Move to Main Pane"
         case .rename: return "Rename"
         case .delete: return "Delete"
         case .revealInFinder: return "Reveal in Finder"
         case .copyPath: return "Copy Path"
+        }
+    }
+
+    /// The glyph beside the title, in the same vocabulary the tab menu uses —
+    /// the two menus sit inches apart and offer some of the same commands, so
+    /// a command that appears in both looks the same in both.
+    ///
+    /// Asserted to resolve in `FileExplorerTests`: an SF Symbol this build
+    /// cannot draw is a menu item with a hole where its icon should be.
+    var icon: String {
+        switch self {
+        case .newFile: return "doc.badge.plus"
+        case .newFolder: return "folder.badge.plus"
+        case .openLeading: return "arrow.left.square"
+        case .openTrailing: return "arrow.right.square"
+        case .openTop: return "arrow.up.square"
+        case .openBottom: return "arrow.down.square"
+        case .moveToMainPane: return "arrow.uturn.backward"
+        case .rename: return "pencil"
+        case .delete: return "trash"
+        case .revealInFinder: return "folder"
+        case .copyPath: return "doc.on.doc"
+        }
+    }
+
+    /// Which edge this command opens the file towards, or nil when it opens
+    /// nothing to a side.
+    var zone: EditorDropZone? {
+        switch self {
+        case .openLeading: return .leading
+        case .openTrailing: return .trailing
+        case .openTop: return .top
+        case .openBottom: return .bottom
+        default: return nil
         }
     }
 
@@ -33,8 +77,9 @@ enum FileExplorerRowCommand: String, Equatable, Hashable, CaseIterable {
     var group: Int {
         switch self {
         case .newFile, .newFolder: return 0
-        case .rename, .delete: return 1
-        case .revealInFinder, .copyPath: return 2
+        case .openLeading, .openTrailing, .openTop, .openBottom, .moveToMainPane: return 1
+        case .rename, .delete: return 2
+        case .revealInFinder, .copyPath: return 3
         }
     }
 
@@ -56,14 +101,53 @@ enum FileExplorerRowCommand: String, Equatable, Hashable, CaseIterable {
         }
     }
 
+    /// A folder has nothing to open into a pane, so the split commands belong
+    /// to files alone.
+    private var needsFile: Bool {
+        switch self {
+        case .openLeading, .openTrailing, .openTop, .openBottom, .moveToMainPane:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// What a row can be asked to do, beyond what its kind already decides.
+    struct Availability: Equatable {
+        var isDirectory: Bool
+
+        /// Whether the pane can be divided for this file at all — see
+        /// `EditorCenter.canSplitOut`. A file that is the only thing in the
+        /// only cell divides into a split that heals straight back.
+        var canSplit: Bool
+
+        /// Whether this file is open somewhere other than the main pane, the
+        /// one case where sending it there does anything.
+        var canReturnToMainPane: Bool
+    }
+
+    private func isOffered(_ availability: Availability) -> Bool {
+        if needsDirectory { return availability.isDirectory }
+        if needsFile && availability.isDirectory { return false }
+
+        switch self {
+        case .openLeading, .openTrailing, .openTop, .openBottom:
+            return availability.canSplit
+        case .moveToMainPane:
+            return availability.canReturnToMainPane
+        default:
+            return true
+        }
+    }
+
     /// The row's menu, separators already placed.
     ///
     /// Placed here rather than by each renderer: both of them then walk one
     /// list and neither can re-derive the rules differently. It is also the
     /// form an assertion wants — "this is the menu a folder offers, in this
     /// order" is one comparison.
-    static func menu(isDirectory: Bool) -> [FileExplorerRowMenuEntry] {
-        let commands = allCases.filter { isDirectory || !$0.needsDirectory }
+    static func menu(_ availability: Availability) -> [FileExplorerRowMenuEntry] {
+        let commands = allCases.filter { $0.isOffered(availability) }
 
         var entries: [FileExplorerRowMenuEntry] = []
         var previous: FileExplorerRowCommand?
@@ -115,4 +199,17 @@ enum FileExplorerRowClick: Equatable {
         guard let previous, time >= previous, time - previous <= interval else { return .open }
         return .menu
     }
+}
+
+/// What a row's menu needs from the editor: what it may offer, and the two
+/// commands only the editor can run.
+///
+/// One value rather than three parameters on the row, and not for tidiness:
+/// three more arguments in that initializer put the tree's row past what the
+/// SwiftUI type checker will solve, and it says so by failing the build.
+@MainActor
+struct FileExplorerRowMenu {
+    var availability: FileExplorerRowCommand.Availability
+    var openInSplit: (EditorDropZone) -> Void
+    var moveToMainPane: () -> Void
 }

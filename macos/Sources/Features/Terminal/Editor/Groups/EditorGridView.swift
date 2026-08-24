@@ -114,6 +114,11 @@ private struct EditorGridCell: View {
     /// `EditorCellDropState` for the enter/leave storm it caused when it did.
     @State private var drop = EditorCellDropState()
 
+    /// Watched only to know whether a drag is in flight, which is two events
+    /// per drag — the begin and the end. Nothing here reacts to the pointer
+    /// moving, which is the thing that must not re-run this body.
+    @ObservedObject private var dragSession: EditorTabDragSession = .shared
+
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
@@ -124,6 +129,7 @@ private struct EditorGridCell: View {
                 )
                 .background(coat)
                 surface
+                    .overlay { catcher(in: geometry.size) }
             }
             /// Behind the cell's content, which is where the terminal's own
             /// splits put theirs — see `TerminalSplitTreeView`.
@@ -145,8 +151,7 @@ private struct EditorGridCell: View {
                         of: [EditorTabDrag.type],
                         delegate: EditorCellDropDelegate(
                             size: geometry.size,
-                            barHeight: center.showsTabBar(in: group.id)
-                                ? EditorTabBar.height : 0,
+                            barHeight: barHeight,
                             state: drop,
                             perform: { item, zone in
                                 center.drop(item, on: group.id, zone: zone)
@@ -159,6 +164,49 @@ private struct EditorGridCell: View {
                 EditorCellDropHighlight(state: drop, size: geometry.size)
             }
         }
+    }
+
+    /// A drop region over the surface, present only while a tab is in flight.
+    ///
+    /// The region in the cell's background is enough almost everywhere, and
+    /// for the terminal it is not: a Metal-backed `NSView` is a real subview
+    /// above it, and a drag over the shell never reached the cell underneath.
+    /// The editor's text view lets it through; the terminal does not.
+    ///
+    /// Above the surface and *only during a drag*, which is what makes it
+    /// safe. A clear layer with a shape takes every click under it — that is
+    /// how an earlier version of this cost the tabs their own gestures — and
+    /// there are no clicks to take while the pointer is holding a tab.
+    ///
+    /// Over the surface rather than the whole cell, so the tab bar keeps its
+    /// own gestures either way, and the geometry is the surface's: the bar is
+    /// not under this layer, so it has no height to subtract.
+    @ViewBuilder
+    private func catcher(in cell: CGSize) -> some View {
+        if dragSession.item != nil {
+            Color.clear
+                .contentShape(Rectangle())
+                .onDrop(
+                    of: [EditorTabDrag.type],
+                    delegate: EditorCellDropDelegate(
+                        size: CGSize(
+                            width: cell.width,
+                            height: max(cell.height - barHeight, 0)),
+                        barHeight: 0,
+                        state: drop,
+                        perform: { item, zone in
+                            center.drop(item, on: group.id, zone: zone)
+                        },
+                        label: cellLabel
+                    )
+                )
+        }
+    }
+
+    /// How tall this cell's bar is, or zero when it has none. Asked of the
+    /// centre so the drop regions and the bar itself cannot disagree.
+    private var barHeight: CGFloat {
+        center.showsTabBar(in: group.id) ? EditorTabBar.height : 0
     }
 
     /// How this cell is named in the breadcrumbs. A log that says only "a

@@ -13,10 +13,16 @@ import AppKit
 final class ClosureMenuItem: NSMenuItem {
     private let handler: () -> Void
 
-    init(title: String, handler: @escaping () -> Void) {
+    /// `systemImage` is an SF Symbol name. A name this build cannot draw
+    /// leaves the item without an icon rather than raising, which is why the
+    /// command types that supply one assert it resolves.
+    init(title: String, systemImage: String? = nil, handler: @escaping () -> Void) {
         self.handler = handler
         super.init(title: title, action: #selector(fire), keyEquivalent: "")
         target = self
+        if let systemImage {
+            image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        }
     }
 
     /// Never called: nothing archives these menus.

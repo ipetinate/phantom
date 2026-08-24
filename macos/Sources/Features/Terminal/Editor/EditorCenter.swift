@@ -490,6 +490,95 @@ final class EditorCenter: ObservableObject {
         requestClose(path)
     }
 
+    /// The cell the terminal lives in, which is what "the main pane" means.
+    ///
+    /// Named for the reader rather than for the tree: a grid has cells, and
+    /// the one holding the shell is the one they started from.
+    var mainPaneID: EditorGroup.ID? { tree.terminalHost }
+
+    /// Whether this file is open in any cell.
+    func isOpen(_ path: String) -> Bool { tree.groupHolding(path) != nil }
+
+    /// Whether dividing the pane can produce anything at all, for a file that
+    /// is not open yet: the cell it would land in has to have something in it
+    /// already, or the new half heals straight back.
+    var canSplitAnything: Bool {
+        guard let cell = tree.group(activeGroupID) else { return false }
+        return !cell.tabs.tabs.isEmpty || cell.hostsTerminal
+    }
+
+    /// Whether this file is already in the main pane, which is what decides
+    /// whether offering to send it there would do anything.
+    func isInMainPane(_ path: String) -> Bool {
+        guard let main = mainPaneID else { return false }
+        return tree.groupHolding(path) == main
+    }
+
+    /// Whether the cell holding `path` has anything left if that tab leaves.
+    ///
+    /// A lone tab cannot be split out of its own cell: the tree would divide
+    /// the cell, move the tab across, find the half it left empty and heal it
+    /// away again — a menu item that reads as an action and is a no-op. The
+    /// terminal counts as something left behind, so a cell showing the shell
+    /// and one file can still divide.
+    func canSplitOut(_ item: DragItem) -> Bool {
+        guard let holder = holder(of: item), let cell = tree.group(holder) else { return false }
+
+        switch item {
+        case .file:
+            return cell.tabs.tabs.count > 1 || cell.hostsTerminal
+        case .terminal:
+            /// The terminal leaving takes the shell with it, so what has to
+            /// stay behind is a file.
+            return !cell.tabs.tabs.isEmpty
+        }
+    }
+
+    /// What a tab's menu may offer, which is a question about where it is.
+    func availability(of item: DragItem) -> EditorTabCommand.Availability {
+        let holder = holder(of: item)
+        let cell = holder.flatMap { tree.group($0) }
+
+        return EditorTabCommand.Availability(
+            hasSiblings: (cell?.tabs.tabs.count ?? 0) > 1,
+            canSplitOut: canSplitOut(item),
+            /// The terminal *is* the main pane, so it can never be sent there.
+            canReturnToMainPane: {
+                guard case .file = item, let main = mainPaneID else { return false }
+                return holder != main
+            }()
+        )
+    }
+
+    /// Divides the cell a tab is in and puts the tab in the new half — the
+    /// menu's form of dragging it to that edge, routed through `drop` so the
+    /// two cannot disagree about what an edge means.
+    func splitOut(_ item: DragItem, zone: EditorDropZone) {
+        guard let holder = holder(of: item) else { return }
+        drop(item, on: holder, zone: zone)
+    }
+
+    /// Sends a tab back to the main pane, which is the gesture that undoes a
+    /// split: the cell it leaves heals away when nothing is left in it.
+    func moveToMainPane(_ item: DragItem) {
+        guard let main = mainPaneID else { return }
+        drop(item, on: main, zone: .center)
+    }
+
+    /// Opens a file and divides the cell it landed in, for a reader who asked
+    /// for it beside what they are looking at rather than in front of it.
+    func openInSplit(_ url: URL, zone: EditorDropZone) {
+        guard open(url) else { return }
+        splitOut(.file(url.path), zone: zone)
+    }
+
+    private func holder(of item: DragItem) -> EditorGroup.ID? {
+        switch item {
+        case .terminal: return tree.terminalHost
+        case .file(let path): return tree.groupHolding(path)
+        }
+    }
+
     /// Closes every other tab in one cell.
     ///
     /// A tab with unsaved edits is left open rather than closed or asked
