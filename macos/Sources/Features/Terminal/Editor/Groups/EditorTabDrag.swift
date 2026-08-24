@@ -160,7 +160,19 @@ struct EditorCellDropDelegate: DropDelegate {
     /// callback, so the tab flew back and nothing happened. Nil takes the
     /// default proposal, which is by construction one the source allows.
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        state.show(resolve(info))
+        let zone = resolve(info)
+
+        /// Noted on a change only. Every pointer move calls this, so logging
+        /// each one buries the drag in its own trace — and what a report needs
+        /// is where the answer changed, which is also the only thing the
+        /// reader sees.
+        if zone != state.zone {
+            WindowBreadcrumbs.note(
+                "tab drag: over \(label) at "
+                + "\(Int(info.location.x)),\(Int(info.location.y)) zone=\(zone)")
+        }
+
+        state.show(zone)
         return nil
     }
 

@@ -125,21 +125,42 @@ private struct EditorGridCell: View {
                 .background(coat)
                 surface
             }
+            /// The drop region goes **over** the cell's content, not under it.
+            ///
+            /// Attached to the stack itself it sat below the surface, and the
+            /// surface is an AppKit view — the editor's text view, or the
+            /// terminal. A real subview wins the pointer over a SwiftUI drop
+            /// region beneath it, so the region kept being exited the moment
+            /// the pointer crossed onto the document. The breadcrumbs from a
+            /// reader's drag showed it exactly: `entered` and `left`, over and
+            /// over, and the only two places a highlight ever appeared were
+            /// the tab bar and the strip of minimap on the right — the two
+            /// parts of the cell the text view does not cover.
+            ///
+            /// A clear layer with a `contentShape`, so it is a shape the drag
+            /// can find. It answers for one private type, so a file dragged in
+            /// from the Finder still reaches whatever wanted it, and it takes
+            /// no mouse events of its own.
+            .overlay {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onDrop(
+                        of: [EditorTabDrag.type],
+                        delegate: EditorCellDropDelegate(
+                            size: geometry.size,
+                            barHeight: center.showsTabBar(in: group.id)
+                                ? EditorTabBar.height : 0,
+                            state: drop,
+                            perform: { item, zone in
+                                center.drop(item, on: group.id, zone: zone)
+                            },
+                            label: cellLabel
+                        )
+                    )
+            }
             .overlay(alignment: .topLeading) {
                 EditorCellDropHighlight(state: drop, size: geometry.size)
             }
-            .onDrop(
-                of: [EditorTabDrag.type],
-                delegate: EditorCellDropDelegate(
-                    size: geometry.size,
-                    barHeight: center.showsTabBar(in: group.id) ? EditorTabBar.height : 0,
-                    state: drop,
-                    perform: { item, zone in
-                        center.drop(item, on: group.id, zone: zone)
-                    },
-                    label: cellLabel
-                )
-            )
         }
     }
 
