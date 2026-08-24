@@ -893,7 +893,7 @@ private struct FileExplorerRow: View {
             case .separator:
                 menu.addItem(.separator())
             case .command(let command):
-                menu.addItem(RowMenuItem(title: command.title) { perform(command) })
+                menu.addItem(ClosureMenuItem(title: command.title) { perform(command) })
             }
         }
 
@@ -1007,25 +1007,3 @@ private struct FileExplorerRow: View {
     }
 }
 
-/// A menu item that runs a closure, so the double-click menu can be built
-/// from `FileExplorerRowCommand` without a target-action detour through the
-/// view — which a SwiftUI `View` cannot offer, being a struct with no
-/// `@objc` surface of its own.
-private final class RowMenuItem: NSMenuItem {
-    private let handler: () -> Void
-
-    init(title: String, handler: @escaping () -> Void) {
-        self.handler = handler
-        super.init(title: title, action: #selector(fire), keyEquivalent: "")
-        target = self
-    }
-
-    /// Never called: nothing archives this menu.
-    required init(coder: NSCoder) {
-        fatalError("RowMenuItem is built in code, never unarchived")
-    }
-
-    @objc private func fire() {
-        handler()
-    }
-}

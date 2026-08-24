@@ -18,6 +18,12 @@ struct EditorTabBar: View {
     let onSelect: (String) -> Void
     let onClose: (String) -> Void
 
+    /// What the tab's own menu asks for. One closure rather than one per
+    /// command: the menu is described by `EditorTabCommand`, and a callback
+    /// per item would mean this row growing a parameter every time that
+    /// description does.
+    let onCommand: (EditorTabCommand, EditorTab) -> Void
+
     /// The title of the terminal this pane belongs to, for its own tab.
     let terminalTitle: String
     let onSelectTerminal: () -> Void
@@ -63,8 +69,10 @@ struct EditorTabBar: View {
                         isSelected: selection == .file(tab.id),
                         showsDirectory: needsDirectory(tab),
                         isDivergent: isDivergent(tab),
+                        hasSiblings: tabs.count > 1,
                         onSelect: { onSelect(tab.id) },
-                        onClose: { onClose(tab.id) }
+                        onClose: { onClose(tab.id) },
+                        onCommand: { onCommand($0, tab) }
                     )
                     .onDrag { EditorTabDrag.provider(for: .file(tab.path)) }
                 }
@@ -157,12 +165,22 @@ private struct EditorTabItem: View {
     let isSelected: Bool
     let showsDirectory: Bool
     let isDivergent: Bool
+
+    /// Whether this bar holds more than this tab, which is what decides
+    /// whether "Close Others" is offered.
+    let hasSiblings: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
+    let onCommand: (EditorTabCommand) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
     @ObservedObject private var icons: FileIconProvider = .shared
     @State private var isHovered = false
+
+    /// When this tab was last clicked, so the second click of a double click
+    /// can be recognised rather than waited for — see `FileExplorerRowClick`,
+    /// whose rule this borrows because it is the same gesture.
+    @State private var lastClickAt: TimeInterval?
 
     private var accent: Color { palette.accent ?? .accentColor }
 
@@ -201,7 +219,8 @@ private struct EditorTabItem: View {
                 .frame(width: 1)
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
+        .onTapGesture(perform: handleClick)
+        .contextMenu { menu }
         // The I-beam has to be pushed back explicitly: it belongs to the
         // text view underneath, and AppKit keeps it while the pointer is
         // over a SwiftUI view that never says otherwise — so a tab looked
@@ -211,6 +230,59 @@ private struct EditorTabItem: View {
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
         .help(tab.path)
+    }
+
+    /// A single click selects, a double click opens the menu.
+    ///
+    /// The first click of a double click has already selected the tab, which
+    /// is harmless here — selecting the tab you are about to act on is what
+    /// the menu would have done anyway — and it is what keeps a single click
+    /// from waiting out the double-click interval before the file appears.
+    private func handleClick() {
+        let now = Date.timeIntervalSinceReferenceDate
+        let gesture = FileExplorerRowClick.resolve(
+            at: now,
+            previous: lastClickAt,
+            interval: NSEvent.doubleClickInterval)
+        lastClickAt = now
+
+        switch gesture {
+        case .open:
+            onSelect()
+        case .menu:
+            lastClickAt = nil
+            showMenu()
+        }
+    }
+
+    /// The right-click menu, drawn as SwiftUI buttons.
+    @ViewBuilder
+    private var menu: some View {
+        ForEach(Array(EditorTabCommand.menu(hasSiblings: hasSiblings).enumerated()), id: \.offset) { entry in
+            switch entry.element {
+            case .separator:
+                Divider()
+            case .command(let command):
+                Button(command.title) { onCommand(command) }
+            }
+        }
+    }
+
+    /// The same menu, popped at the pointer for the double click. SwiftUI
+    /// will not open a `.contextMenu` without a right click, so the second
+    /// opening has to go through `NSMenu` — which is what the file
+    /// explorer's rows do for the same reason.
+    private func showMenu() {
+        let popup = NSMenu()
+        for entry in EditorTabCommand.menu(hasSiblings: hasSiblings) {
+            switch entry {
+            case .separator:
+                popup.addItem(.separator())
+            case .command(let command):
+                popup.addItem(ClosureMenuItem(title: command.title) { onCommand(command) })
+            }
+        }
+        popup.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 
     /// The worktree mark, for a tab whose file is from a checkout its

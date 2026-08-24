@@ -490,6 +490,34 @@ final class EditorCenter: ObservableObject {
         requestClose(path)
     }
 
+    /// Closes every other tab in one cell.
+    ///
+    /// A tab with unsaved edits is left open rather than closed or asked
+    /// about. `CloseConfirmation` holds one path, so a bulk close cannot ask
+    /// about several — it would raise a question per file and each would
+    /// overwrite the last, which is how a dialog ends up answering for a file
+    /// the reader never saw. Leaving them needs no dialog and loses nothing:
+    /// the tabs that stay are exactly the ones still wearing the dirty dot.
+    ///
+    /// - Returns: the paths kept back, so the caller can say so if it wants.
+    @discardableResult
+    func closeOthers(of path: String, in groupID: EditorGroup.ID) -> [String] {
+        close(tabs(in: groupID).tabs.map(\.path).filter { $0 != path })
+    }
+
+    /// Closes every tab in one cell, on the same terms as `closeOthers`.
+    @discardableResult
+    func closeAll(in groupID: EditorGroup.ID) -> [String] {
+        close(tabs(in: groupID).tabs.map(\.path))
+    }
+
+    /// Closes the clean ones and answers with the dirty ones.
+    private func close(_ paths: [String]) -> [String] {
+        let dirty = paths.filter { documents[$0]?.isDirty == true }
+        for path in paths where !dirty.contains(path) { close(path) }
+        return dirty
+    }
+
     /// Saves and then closes, for the "Save" answer.
     func saveAndClose(_ path: String) {
         if documents[path]?.save() == true { close(path) }

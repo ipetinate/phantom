@@ -62,6 +62,7 @@ struct EditorPaneTabBar: View {
                     isDivergent: { divergent.contains($0.path) },
                     onSelect: { center.select($0) },
                     onClose: { center.requestClose($0) },
+                    onCommand: perform,
                     terminalTitle: center.terminalTitle,
                     onSelectTerminal: { center.selectTerminal() },
                     hostsTerminal: center.hostsTerminal(groupID)
@@ -72,6 +73,27 @@ struct EditorPaneTabBar: View {
     }
 
     private var cell: EditorTabSet { center.tabs(in: groupID) }
+
+    /// Runs one of the tab menu's commands, against *this* cell.
+    ///
+    /// Closing is asked of the cell rather than of the window: a bar belongs
+    /// to one cell, and "Close All" on a grid means the cell whose menu the
+    /// reader opened, not every file on screen.
+    private func perform(_ command: EditorTabCommand, on tab: EditorTab) {
+        switch command {
+        case .close:
+            center.requestClose(tab.path)
+        case .closeOthers:
+            center.closeOthers(of: tab.path, in: groupID)
+        case .closeAll:
+            center.closeAll(in: groupID)
+        case .revealInFinder:
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: tab.path)])
+        case .copyPath:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(tab.path, forType: .string)
+        }
+    }
 
     /// See `EditorCenter.showsTabBar(in:)`, which is where the rule lives so
     /// the drop can read the same answer.
