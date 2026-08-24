@@ -290,18 +290,87 @@ private struct EditorCellDropHighlight: View {
 private struct TerminalCellHost: NSViewRepresentable {
     let terminal: NSView
 
-    func makeNSView(context: Context) -> NSView {
-        let host = NSView()
+    func makeNSView(context: Context) -> TerminalHostView {
+        let host = TerminalHostView()
         host.translatesAutoresizingMaskIntoConstraints = false
+        host.terminal = terminal
         return host
     }
 
-    func updateNSView(_ host: NSView, context: Context) {
-        guard terminal.superview !== host else { return }
+    func updateNSView(_ host: TerminalHostView, context: Context) {
+        host.terminal = terminal
+        host.adopt()
+    }
+}
+
+/// The host, which can also rescue a terminal that has been orphaned.
+///
+/// Moving the terminal to another cell tears down the host it was in and
+/// builds one in the cell it goes to, and the order of those two is SwiftUI's
+/// to choose. When the teardown lands *after* the new host has already
+/// updated, the old host takes the terminal down with it and nothing asks
+/// again: the cell showed an empty frame with the window's blur through it,
+/// and the keys went to whatever held focus instead — which is how it was
+/// reported.
+///
+/// So the adoption is not only done on update. Every layout pass checks
+/// whether the terminal has a superview at all and takes it back when it does
+/// not. Only when it is orphaned, deliberately: a stale host that stole a
+/// live one would be the same bug with the cells swapped.
+private final class TerminalHostView: NSView {
+    weak var terminal: NSView?
+
+    override func layout() {
+        super.layout()
+        guard let terminal else { return }
+
+        /// A host on its way out does not claim anything: it has already left
+        /// the window, and the only thing it could do is take the terminal
+        /// back off the cell that now owns it.
+        guard window != nil else { return }
+
+        /// Parked anywhere that is not this host — orphaned, or still inside
+        /// the host of a cell that has since collapsed. The second case is
+        /// what was missing: adoption only rescued an orphan, so a terminal
+        /// left in a stale host kept that host's size while the live cell grew
+        /// around it, and the part of the cell the surface no longer covered
+        /// was a hole straight through to the desktop. It happened while
+        /// moving a tab between two *other* cells, which is why it looked like
+        /// the terminal had lost its background on its own.
+        guard terminal.superview === self else {
+            adopt()
+            return
+        }
+
+        /// The frame is set here as well as on adoption, and this is the half
+        /// that matters. A host adopts before it has been laid out, so at that
+        /// moment `bounds` is zero — and an autoresizing mask resizes a frame
+        /// *proportionally*, so a frame that starts at zero stays at zero
+        /// through every resize after it. The terminal was in the hierarchy
+        /// with nothing to draw into, which is a transparent pane showing the
+        /// desktop through the window, and it came back only when switching
+        /// tabs built the host again with a size already known.
+        guard terminal.frame != bounds else { return }
+        terminal.frame = bounds
+    }
+
+    func adopt() {
+        guard let terminal, terminal.superview !== self else { return }
+
+        /// Focus travels with the view. The terminal is only first responder
+        /// while the reader is typing in it, and a move that dropped that on
+        /// the floor sent the next keystroke somewhere else.
+        let responder = window?.firstResponder as? NSView
+        let wasFocused = responder.map { $0 === terminal || $0.isDescendant(of: terminal) } ?? false
+
         terminal.removeFromSuperview()
         terminal.translatesAutoresizingMaskIntoConstraints = true
-        terminal.frame = host.bounds
+        terminal.frame = bounds
         terminal.autoresizingMask = [.width, .height]
-        host.addSubview(terminal)
+        addSubview(terminal)
+
+        if wasFocused, let responder {
+            window?.makeFirstResponder(responder)
+        }
     }
 }
