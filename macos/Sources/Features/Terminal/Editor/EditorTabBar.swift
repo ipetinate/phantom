@@ -168,8 +168,9 @@ private struct TerminalTabItem: View {
         .help(title)
     }
 
-    /// The terminal's tab, for the drag. Its own glyph and title, in the
-    /// shape `EditorTabItem.dragPreview` uses, so the two tabs travel alike.
+    /// The terminal's tab, for the drag: its own glyph and title, in the shape
+    /// `EditorTabItem.dragPreview` uses, so the two tabs travel alike. No
+    /// close mark, because this tab has none.
     private var dragPreview: NSImage? {
         let renderer = ImageRenderer(
             content: HStack(spacing: 5) {
@@ -177,19 +178,20 @@ private struct TerminalTabItem: View {
                     .font(.system(size: 11))
 
                 Text(title)
-                    .font(palette.font(size: 11, weight: .medium))
+                    .font(palette.font(size: 11, weight: .semibold))
                     .lineLimit(1)
             }
             .padding(.horizontal, 10)
             .frame(height: EditorTabBar.tabHeight)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.95))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(accent.opacity(0.7), lineWidth: 1)
-            )
+            .background {
+                ZStack {
+                    Color(nsColor: .controlBackgroundColor)
+                    accent.opacity(0.18)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(accent).frame(height: 2)
+            }
             .frame(maxWidth: 280)
         )
 
@@ -308,29 +310,38 @@ private struct EditorTabItem: View {
     /// in AppKit is a second opinion about how a tab looks that would drift
     /// from this one. The same icon, the same name, the same font.
     ///
-    /// Rounded and outlined, unlike the tab in the bar. On screen a tab is
-    /// square-cornered because it sits in a row of them; lifted out and
-    /// following the pointer it is a single object, and a floating square with
-    /// no edge reads as a piece of the window that came loose.
+    /// The selected tab, square-cornered, close mark and accent rule and all.
+    /// A rounded pill with a border was the first version and it looked like
+    /// a control from another app; what should follow the pointer is the tab.
+    ///
+    /// Opaque underneath, which is the one departure and not a choice: in the
+    /// bar the tab's tint sits over the pane's own coat, and rendered on its
+    /// own that tint is half transparent and lets the desktop through.
     private var dragPreview: NSImage? {
         let renderer = ImageRenderer(
             content: HStack(spacing: 5) {
                 FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
 
                 Text(tab.name)
-                    .font(palette.font(size: 11, weight: .medium))
+                    .font(palette.font(size: 11, weight: .semibold))
                     .lineLimit(1)
+
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 14)
             }
             .padding(.horizontal, 10)
             .frame(height: EditorTabBar.tabHeight)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.95))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(accent.opacity(0.7), lineWidth: 1)
-            )
+            .background {
+                ZStack {
+                    Color(nsColor: .controlBackgroundColor)
+                    accent.opacity(0.18)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(accent).frame(height: 2)
+            }
             .frame(maxWidth: 280)
         )
 
