@@ -84,13 +84,13 @@ struct WorktreePathTests {
     @Test func derivesTheRepositoryNameFromTheLastComponent() {
         let derived = WorktreePath.derive(
             managedRoot: "/Users/dev/.phantom/worktrees",
-            mainCheckout: "/Users/dev/Projects/front-app-eita/",
+            mainCheckout: "/Users/dev/Projects/my-app/",
             branch: "main"
         )
 
-        #expect(derived == "/Users/dev/.phantom/worktrees/front-app-eita-main")
-        #expect(WorktreePath.repoName(mainCheckout: "/Users/dev/Projects/front-app-eita/")
-            == "front-app-eita")
+        #expect(derived == "/Users/dev/.phantom/worktrees/my-app-main")
+        #expect(WorktreePath.repoName(mainCheckout: "/Users/dev/Projects/my-app/")
+            == "my-app")
     }
 
     /// The prompt is why the layout is flat: a shell shows the last path

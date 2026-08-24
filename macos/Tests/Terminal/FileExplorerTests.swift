@@ -279,7 +279,7 @@ struct FileExplorerTests {
     /// would truncate away the one part that tells the tabs apart.
     @Test func aTabIsNamedAfterTheFileAlone() {
         let url = URL(fileURLWithPath:
-            "/Users/x/Projects/Aurora/aurora-backend/src/main/kotlin/DevAuthz.class")
+            "/Users/x/Projects/Acme/acme-backend/src/main/kotlin/DevAuthz.class")
         #expect(FileOpener.tabName(for: url) == "DevAuthz.class")
     }
 

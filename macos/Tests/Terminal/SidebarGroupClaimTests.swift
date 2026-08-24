@@ -26,9 +26,9 @@ struct SidebarGroupClaimTests {
     /// makes the next one meaningful.
     @Test func aProjectGroupClaimsAnUnassignedTabInItsRoot() {
         let store = makeStore()
-        let group = store.createGroup(name: "Aurora", kind: .project(root: "/tmp/aurora"))
+        let group = store.createGroup(name: "Acme", kind: .project(root: "/tmp/acme"))
 
-        let resolved = store.resolveGroup(surfaceId: UUID(), pwd: "/tmp/aurora/src")
+        let resolved = store.resolveGroup(surfaceId: UUID(), pwd: "/tmp/acme/src")
 
         #expect(resolved?.id == group.id)
     }
@@ -40,12 +40,12 @@ struct SidebarGroupClaimTests {
     /// jumped into the project's section on its own.
     @Test func anExplicitlyUngroupedTabIsNotClaimedByAProjectGroup() {
         let store = makeStore()
-        _ = store.createGroup(name: "Aurora", kind: .project(root: "/tmp/aurora"))
+        _ = store.createGroup(name: "Acme", kind: .project(root: "/tmp/acme"))
         let surface = UUID()
 
         store.assign(surfaceId: surface, to: nil)
 
-        #expect(store.resolveGroup(surfaceId: surface, pwd: "/tmp/aurora/src") == nil)
+        #expect(store.resolveGroup(surfaceId: surface, pwd: "/tmp/acme/src") == nil)
     }
 
     /// `cd`-ing into a project's root does not move a tab that was created
@@ -53,12 +53,12 @@ struct SidebarGroupClaimTests {
     /// shell happens to be now.
     @Test func walkingIntoAProjectRootDoesNotAdoptAnUngroupedTab() {
         let store = makeStore()
-        _ = store.createGroup(name: "Aurora", kind: .project(root: "/tmp/aurora"))
+        _ = store.createGroup(name: "Acme", kind: .project(root: "/tmp/acme"))
         let surface = UUID()
         store.assign(surfaceId: surface, to: nil)
 
         #expect(store.resolveGroup(surfaceId: surface, pwd: "/tmp/elsewhere") == nil)
-        #expect(store.resolveGroup(surfaceId: surface, pwd: "/tmp/aurora") == nil)
+        #expect(store.resolveGroup(surfaceId: surface, pwd: "/tmp/acme") == nil)
     }
 
     /// An explicit assignment to a real group still wins, and keeps winning
@@ -66,12 +66,12 @@ struct SidebarGroupClaimTests {
     @Test func anExplicitGroupAssignmentSurvivesADirectoryInAnotherProject() {
         let store = makeStore()
         let mine = store.createGroup(name: "Mine")
-        _ = store.createGroup(name: "Aurora", kind: .project(root: "/tmp/aurora"))
+        _ = store.createGroup(name: "Acme", kind: .project(root: "/tmp/acme"))
         let surface = UUID()
 
         store.assign(surfaceId: surface, to: mine.id)
 
-        #expect(store.resolveGroup(surfaceId: surface, pwd: "/tmp/aurora/src")?.id == mine.id)
+        #expect(store.resolveGroup(surfaceId: surface, pwd: "/tmp/acme/src")?.id == mine.id)
     }
 
     /// A manual group has no root, so it never claims anyone by directory —

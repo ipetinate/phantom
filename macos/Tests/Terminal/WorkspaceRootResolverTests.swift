@@ -11,12 +11,12 @@ import Testing
 /// pin down which one each mode picks and, just as importantly, what
 /// happens when the preferred source is missing.
 struct WorkspaceRootResolverTests {
-    private let group = "~/Projects/Aurora"
+    private let group = "~/Projects/Acme"
     private let repo = "/Users/test/Projects/Tools/phantom"
     private let pwd = "/Users/test/Projects/Tools/phantom/macos/Sources"
 
     private var expandedGroup: String {
-        (("~/Projects/Aurora") as NSString).expandingTildeInPath
+        (("~/Projects/Acme") as NSString).expandingTildeInPath
     }
 
     // MARK: auto
@@ -82,7 +82,7 @@ struct WorkspaceRootResolverTests {
     /// picker writes), but every filesystem call needs the real path.
     @Test func tildesAreExpanded() {
         let result = WorkspaceRootResolver.resolve(
-            mode: .auto, groupRoot: "~/Projects/Aurora", repoRoot: nil, pwd: nil
+            mode: .auto, groupRoot: "~/Projects/Acme", repoRoot: nil, pwd: nil
         )
         #expect(result?.hasPrefix("/") == true)
         #expect(result?.contains("~") == false)

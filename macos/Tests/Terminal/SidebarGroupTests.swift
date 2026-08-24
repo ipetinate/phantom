@@ -5,9 +5,9 @@ import Testing
 /// `SidebarGroup.discoverRepoRoots` against a throwaway directory tree —
 /// this is the fix for a real report: a project group's root was a
 /// *workspace* folder holding several repos side by side
-/// (`~/Projects/Aurora/aurora-backend`, `.../front-app-aurora`), and the PR
-/// popover showed "No repositories in this group" because it only looked
-/// at tabs' own pwds, never at the group's root.
+/// (`~/Projects/Acme/acme-backend`, `.../acme-web`), and the PR popover
+/// showed "No repositories in this group" because it only looked at tabs'
+/// own pwds, never at the group's root.
 struct SidebarGroupTests {
     private func makeDir(_ base: URL, _ path: String, isRepo: Bool = false) throws -> URL {
         let url = base.appendingPathComponent(path, isDirectory: true)
@@ -51,8 +51,8 @@ struct SidebarGroupTests {
     /// member repos.
     @Test func findsRepoRootsOneLevelDown() throws {
         let base = try tempWorkspace()
-        let repoA = try makeDir(base, "aurora-backend", isRepo: true)
-        let repoB = try makeDir(base, "front-app-aurora", isRepo: true)
+        let repoA = try makeDir(base, "acme-backend", isRepo: true)
+        let repoB = try makeDir(base, "acme-web", isRepo: true)
         _ = try makeDir(base, "not-a-repo")
 
         let found = Set(SidebarGroup.discoverRepoRoots(under: base.path))

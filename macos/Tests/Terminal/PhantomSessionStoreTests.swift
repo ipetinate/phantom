@@ -384,7 +384,7 @@ struct PhantomSessionStoreTests {
           "states": [
             {
               "isFullscreen": false,
-              "titleOverride": "front-app-eita",
+              "titleOverride": "my-app",
               "frame": [[0, 0], [1800, 1130]],
               "surfaceTree": {
                 "root": {"view": {"id": "87C47F3F-9F16-4AEC-8387-B1F2C14B0EB6"}},
@@ -451,7 +451,7 @@ struct PhantomSessionStoreTests {
         #expect(standalones.count == 1)
 
         let orphan = try #require(standalones.first)
-        #expect(orphan.titleOverride == "front-app-eita")
+        #expect(orphan.titleOverride == "my-app")
         #expect(orphan.tabGroupID == nil)
         #expect(orphan.tabIndex == nil)
         #expect(orphan.isSelectedTab == nil)

@@ -2476,7 +2476,7 @@ private struct SidebarTabEditor: View {
             }
             .padding(12)
         }
-        .frame(width: 330, height: 420)
+        .frame(width: 365, height: 460)
         .onAppear { populate() }
     }
 
@@ -2567,7 +2567,7 @@ private struct SidebarGroupEditor: View {
                             TextField(
                                 "",
                                 text: $projectRoot,
-                                prompt: Text("~/Projects/front-app-eita")
+                                prompt: Text("~/Projects")
                             )
                             .labelsHidden()
                             .multilineTextAlignment(.leading)
@@ -2616,7 +2616,7 @@ private struct SidebarGroupEditor: View {
             }
             .padding(12)
         }
-        .frame(width: 380, height: 780)
+        .frame(width: 420, height: 860)
         .onAppear { populate() }
     }
 

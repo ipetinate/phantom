@@ -133,7 +133,7 @@ struct PhantomStateFileTests {
 
         let surfaceId = UUID()
         let before = SidebarGroupStore(fileURL: shared)
-        let group = before.createGroup(name: "Aurora")
+        let group = before.createGroup(name: "Acme")
         before.registerNewTab(surfaceId: surfaceId, atStart: false)
 
         /// The store's writes are debounced by 500ms, and this waits for the

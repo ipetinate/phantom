@@ -84,11 +84,11 @@ struct SidebarGroup: Identifiable, Codable, Equatable {
     /// Every git repository at or under a project group's root.
     ///
     /// A project group's root is often a *workspace* — a plain folder that
-    /// holds several repos side by side (`~/Projects/Aurora/aurora-backend`,
-    /// `.../front-app-aurora`) — rather than a repo itself. Only tabs whose
-    /// pwd happens to be open inside one of those repos showed up in the
-    /// group's PR list before; a repo nobody has a tab open in didn't, even
-    /// though it belongs to the group just as much.
+    /// holds several repos side by side (`~/Projects/Acme/acme-backend`,
+    /// `.../acme-web`) — rather than a repo itself. Only tabs whose pwd
+    /// happens to be open inside one of those repos showed up in the group's
+    /// PR list before; a repo nobody has a tab open in didn't, even though it
+    /// belongs to the group just as much.
     ///
     /// Bounded to a shallow walk (workspace / repo, or workspace / team /
     /// repo) so this stays a quick popover-open check rather than a real

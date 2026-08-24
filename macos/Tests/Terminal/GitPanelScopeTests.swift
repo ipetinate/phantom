@@ -33,12 +33,12 @@ struct GitPanelScopeTests {
     @Test func aFolderHoldingRepositoriesBecomesAWorkspace() {
         let scope = GitPanelScope.resolve(
             repoRoot: nil,
-            pwd: "/Projects/Aurora",
-            discovered: ["/Projects/Aurora/backend", "/Projects/Aurora/front"]
+            pwd: "/Projects/Acme",
+            discovered: ["/Projects/Acme/backend", "/Projects/Acme/front"]
         )
         #expect(scope == .workspace(
-            root: "/Projects/Aurora",
-            repos: ["/Projects/Aurora/backend", "/Projects/Aurora/front"]
+            root: "/Projects/Acme",
+            repos: ["/Projects/Acme/backend", "/Projects/Acme/front"]
         ))
     }
 
@@ -46,8 +46,8 @@ struct GitPanelScopeTests {
     /// must not read as "nothing here", or the empty state flashes on every
     /// tab switch before the workspace appears.
     @Test func anUnfinishedScanIsNotAnEmptyWorkspace() {
-        let pending = GitPanelScope.resolve(repoRoot: nil, pwd: "/Projects/Aurora", discovered: nil)
-        let answered = GitPanelScope.resolve(repoRoot: nil, pwd: "/Projects/Aurora", discovered: [])
+        let pending = GitPanelScope.resolve(repoRoot: nil, pwd: "/Projects/Acme", discovered: nil)
+        let answered = GitPanelScope.resolve(repoRoot: nil, pwd: "/Projects/Acme", discovered: [])
 
         #expect(pending == .none)
         #expect(answered == .none)

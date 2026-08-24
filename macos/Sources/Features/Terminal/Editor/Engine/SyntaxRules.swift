@@ -227,12 +227,13 @@ struct SyntaxRules {
     /// decision rather than a style one.** The readable spelling puts the
     /// guard first — `(?<![^\s…])<` — and that makes the engine evaluate a
     /// lookbehind at *every position in the file* before failing on a
-    /// character that was never a `<`. Measured over the 401 `.ts` files of
-    /// `front-app-eita`, one line re-highlighted each, best of three: 6.1 ms
-    /// before this rule, **9.4 ms** with the guard first, **6.8 ms** with the
-    /// literal first. Same tokens, 1.8 µs per keystroke per file instead of
-    /// 8.2. So the lookbehind is written after the `<` it guards, spanning
-    /// both characters, which is why it reads as awkwardly as it does.
+    /// character that was never a `<`. Measured over a corpus of 401 `.ts`
+    /// files — the `src` tree of a mid-size web app — one line re-highlighted
+    /// each, best of three: 6.1 ms before this rule, **9.4 ms** with the
+    /// guard first, **6.8 ms** with the literal first. Same tokens, 1.8 µs
+    /// per keystroke per file instead of 8.2. So the lookbehind is written
+    /// after the `<` it guards, spanning both characters, which is why it
+    /// reads as awkwardly as it does.
     static let jsxTag =
         #"</[A-Za-z][A-Za-z0-9._-]*|<(?<=(?:^|[\s(\[{,;=>&|?:!])<)[A-Za-z][A-Za-z0-9._-]*|</?>"#
 
