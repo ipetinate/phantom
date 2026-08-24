@@ -663,6 +663,26 @@ private struct SidebarGroupSection: View {
     @State private var isHeaderHovered = false
     @State private var isShowingPRs = false
 
+    /// The terminals "Delete Group and Close Terminals" is asking about, or
+    /// nil while nothing is being asked.
+    @State private var pendingClose: PendingGroupClose?
+
+    /// What the confirmation was written about, measured once when the menu
+    /// item is picked rather than on every render.
+    ///
+    /// `needsConfirmQuit` crosses into libghostty for every surface, and this
+    /// header re-renders on hover, on selection and on every metadata tick —
+    /// asking there would pay for a number nobody is reading. Measuring once
+    /// also pins the sheet to the set the reader was shown: a terminal that
+    /// finishes its build while the sheet is up does not quietly change the
+    /// sentence they are answering.
+    private struct PendingGroupClose {
+        let tabs: [SidebarTabModel]
+
+        /// How many of `tabs` the core says still have something running.
+        let runningProcesses: Int
+    }
+
     private var accent: Color? { group.accentColor }
     private var collapsed: Bool { group.collapsed }
 
@@ -726,6 +746,88 @@ private struct SidebarGroupSection: View {
         .sheet(isPresented: $isEditing) {
             SidebarGroupEditor(group: group, store: store)
         }
+        .confirmationDialog(
+            closeConfirmationTitle,
+            isPresented: Binding(
+                get: { pendingClose != nil },
+                set: { if !$0 { pendingClose = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            closeConfirmationButtons
+        } message: {
+            Text(closeConfirmationMessage)
+        }
+    }
+
+    /// The destructive button repeats the menu item word for word, so the
+    /// reader confirms the sentence they picked.
+    ///
+    /// Cancel takes both the cancel role and the default action, which is the
+    /// one place this sheet departs from the file explorer's delete: that one
+    /// moves a file to the Trash and the Trash gives it back, while this kills
+    /// processes and nothing gives those back. Return must not be the key that
+    /// does it.
+    @ViewBuilder
+    private var closeConfirmationButtons: some View {
+        Button(deleteWithTerminalsTitle, role: .destructive) {
+            if let pendingClose {
+                deleteGroupAndCloseTerminals(pendingClose)
+            }
+            pendingClose = nil
+        }
+        Button("Cancel", role: .cancel) { pendingClose = nil }
+            .keyboardShortcut(.defaultAction)
+    }
+
+    /// The number every sentence about this is written around: the snapshot
+    /// once one exists, the rows on screen before that.
+    ///
+    /// Both spellings matter. The menu item is read before anything is
+    /// snapshotted and must name what is on screen; the button is read after,
+    /// and must name what the title above it just named — not a count that
+    /// moved because a terminal exited while the sheet was up.
+    private var closingTerminalCount: Int {
+        pendingClose?.tabs.count ?? tabs.count
+    }
+
+    /// "1 Terminal" / "4 Terminals", so the count reaches the reader in the
+    /// menu, in the title and on the button they press.
+    private var terminalCountPhrase: String {
+        closingTerminalCount == 1 ? "1 Terminal" : "\(closingTerminalCount) Terminals"
+    }
+
+    private var deleteWithTerminalsTitle: String {
+        "Delete Group and Close \(terminalCountPhrase)"
+    }
+
+    private var closeConfirmationTitle: String {
+        let count = closingTerminalCount
+        let terminals = count == 1 ? "its terminal" : "its \(count) terminals"
+        return "Delete \u{201C}\(group.name)\u{201D} and close \(terminals)?"
+    }
+
+    /// Written for a reader who is half paying attention: what goes, what it
+    /// costs, and that nothing brings it back.
+    ///
+    /// The running-process sentence borrows the wording the app already uses
+    /// when a single tab is closed on a live process, because it is the same
+    /// fact — this is only the batch spelling of it, as `Close Other Tabs`
+    /// is. There is no undo: the tab-restore each close registers brings back
+    /// a terminal in the same directory, never the process that was running
+    /// in it.
+    private var closeConfirmationMessage: String {
+        guard let pendingClose else { return "" }
+        let count = pendingClose.tabs.count
+        let terminals = count == 1 ? "its terminal" : "its \(count) terminals"
+        let base = "Deleting the group closes \(terminals). This cannot be undone."
+
+        guard pendingClose.runningProcesses > 0 else { return base }
+        let running = pendingClose.runningProcesses == 1
+            ? "One still has a running process, and that process will be killed."
+            : "\(pendingClose.runningProcesses) still have a running process, "
+                + "and those processes will be killed."
+        return "\(base) \(running)"
     }
 
     private var header: some View {
@@ -943,6 +1045,66 @@ private struct SidebarGroupSection: View {
         Button("Delete Group", role: .destructive) {
             store.deleteGroup(group.id)
         }
+
+        /// Hidden rather than disabled on an empty group: with no terminals
+        /// the two items would say the same thing, and the one a reader has
+        /// to think about should only be there when it means something.
+        if !tabs.isEmpty {
+            Button("\(deleteWithTerminalsTitle)\u{2026}", role: .destructive) {
+                pendingClose = PendingGroupClose(
+                    tabs: tabs,
+                    runningProcesses: runningProcessCount
+                )
+            }
+        }
+    }
+
+    /// How many of this header's terminals still have something running,
+    /// asked of the core the way every other batch close in the app asks it
+    /// (`TerminalController.closeOtherTabs`).
+    private var runningProcessCount: Int {
+        tabs.filter { tab in
+            guard let controller = tab.window?.windowController as? BaseTerminalController
+            else { return false }
+            return controller.surfaceTree.contains { $0.needsConfirmQuit }
+        }.count
+    }
+
+    /// Closes every terminal this header draws, then drops the group.
+    ///
+    /// Each tab leaves through `TerminalController.closeTabImmediately`, the
+    /// step `Close Other Tabs` and `Close Tabs to the Right` both end at, so a
+    /// tab that is the last one in its window still turns into a window close
+    /// and each one registers its own restore. The running-process question is
+    /// asked once, above, for the whole set — the shape every batch close in
+    /// this app already has. Per-tab sheets were the alternative and they are
+    /// worse here: a stack of four alerts on four tabs is not a safety net a
+    /// reader reads, and the count they agreed to would stop being the count
+    /// that goes.
+    ///
+    /// Only these surfaces are cleared from the store. A member of the same
+    /// group living in another window is not drawn here and is not closed, so
+    /// it keeps its name, icon and color and only loses the group.
+    private func deleteGroupAndCloseTerminals(_ pending: PendingGroupClose) {
+        let controllers = pending.tabs.compactMap {
+            $0.window?.windowController as? TerminalController
+        }
+        WindowBreadcrumbs.note(
+            "sidebar delete group with terminals: group=\(group.name) "
+            + "tabs=\(pending.tabs.count) controllers=\(controllers.count)")
+
+        store.deleteGroup(group.id, closingTabs: pending.tabs.compactMap(\.surfaceId))
+
+        /// Read before the first close, while there is still a window to read
+        /// it from, and grouped so one undo answers for the whole batch
+        /// instead of giving the tabs back one press at a time.
+        let undoManager = controllers.first?.undoManager
+        undoManager?.beginUndoGrouping()
+        for controller in controllers {
+            controller.closeTabImmediately(registerRedo: false)
+        }
+        undoManager?.setActionName("Close Terminals in Group")
+        undoManager?.endUndoGrouping()
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
