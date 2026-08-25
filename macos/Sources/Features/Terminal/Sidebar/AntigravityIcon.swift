@@ -12,17 +12,18 @@ import SwiftUI
 /// 24×24 box (measured: x 0…24, y 1…23.109), so it flattens to a legible
 /// glyph instead of the hairline the worktree artwork once shipped as.
 ///
-/// So the colours are put back on the *outside*: `.original` fills the
-/// silhouette with a gradient of the artwork's own five colours instead of
-/// one of them. `foregroundStyle` takes any `ShapeStyle`, and a template
-/// image tinted with a gradient is filled by it — which needs no second
-/// asset, stays resolution-independent, and reads as the multicolour mark it
-/// is rather than as a blue arch.
+/// So this mark ships **twice**, and it is the only one that does. The other
+/// three logos are one or two flat colours, which a silhouette plus a tint
+/// describes completely. This one is a continuous gradient that changes in
+/// two directions at once, and that is not a shape plus a colour — a
+/// linear-gradient fill of the silhouette was tried first and read as a
+/// different logo. Two assets here is not an exception for its own sake; it
+/// is the logo not fitting in one.
 ///
-/// It is an approximation and cannot be anything else: the original's colour
-/// comes from eleven blobs behind a Gaussian blur, and neither the blur nor
-/// the blobs survive an asset catalogue. What is faithful is the palette and
-/// the order the colours run in along the arch, read off the source file.
+/// Each answers for one case and cannot answer for the other. `.theme` wants
+/// one more grey icon in a row of grey icons, which only a template can be.
+/// `.original` wants the mark as Google draws it, which only the artwork can
+/// be.
 struct AntigravityIcon: View {
     /// Which tint the mark takes. The same two cases `ClaudeIcon` offers, for
     /// the same reason: a chrome row wants one more grey icon, and the
@@ -39,50 +40,25 @@ struct AntigravityIcon: View {
     var size: CGFloat = 12
     var tint: Tint = .theme
 
-    private static func swatch(_ hex: UInt32) -> Color {
-        Color(
-            .sRGB,
-            red: Double((hex >> 16) & 0xff) / 255,
-            green: Double((hex >> 8) & 0xff) / 255,
-            blue: Double(hex & 0xff) / 255)
-    }
-
-    /// The artwork's own five colours, in the order they run along the arch:
-    /// blue up the left leg, red over the peak, yellow and green across the
-    /// top, and the paler blue down the right. Taken from the source file
-    /// rather than sampled from a screenshot, so a redraw of the logo can be
-    /// diffed against it.
-    private static let brand = LinearGradient(
-        stops: [
-            .init(color: swatch(0x3186ff), location: 0.00),
-            .init(color: swatch(0xfc413d), location: 0.28),
-            .init(color: swatch(0xffe432), location: 0.52),
-            .init(color: swatch(0x00b95c), location: 0.74),
-            .init(color: swatch(0x749bff), location: 1.00),
-        ],
-        startPoint: .leading,
-        endPoint: .trailing)
-
-    /// The blue of the mark's largest blob, kept for the one place a single
-    /// colour is still the right answer: a gradient in a menu item's image is
-    /// a smear at 14pt.
-    static let skySwatch = swatch(0x3186ff)
-
-    private var style: AnyShapeStyle {
+    var body: some View {
         switch tint {
         case .original:
-            return AnyShapeStyle(Self.brand)
-        case .theme:
-            return AnyShapeStyle(.secondary)
-        }
-    }
+            /// Drawn as it is, so `renderingMode` is left alone: asking for
+            /// `.original` on an image that is already original is how a
+            /// future reader learns nothing, and asking for `.template` here
+            /// would throw away the only thing this asset has.
+            Image("AntigravityIconColor")
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
 
-    var body: some View {
-        Image("AntigravityIcon")
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: size, height: size)
-            .foregroundStyle(style)
+        case .theme:
+            Image("AntigravityIcon")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+                .foregroundStyle(.secondary)
+        }
     }
 }
