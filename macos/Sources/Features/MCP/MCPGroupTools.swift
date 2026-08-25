@@ -61,7 +61,6 @@ enum MCPGroupTools {
         ]
     }
 
-
     /// One group, as every tool here answers it.
     ///
     /// Written once because three tools answer with a group and a model that
