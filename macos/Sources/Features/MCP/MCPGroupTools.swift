@@ -61,6 +61,26 @@ enum MCPGroupTools {
         ]
     }
 
+    /// The group an argument names: its id, or its name.
+    ///
+    /// Both, because `create_terminal` took both from the start and this took
+    /// only an id — and a model that succeeded with a name in one tool will
+    /// try a name in the other. An app that accepts a name here and refuses it
+    /// there is teaching the model that it is inconsistent, and the model is
+    /// right.
+    ///
+    /// The id is tried first: a name is not unique across time — a group can
+    /// be renamed to what another one was called — while an id is the thing
+    /// this app handed out.
+    static func group(named asked: String, in store: SidebarGroupStore) -> SidebarGroup? {
+        if let id = UUID(uuidString: asked) {
+            return store.groups.first { $0.id == id }
+        }
+
+        let wanted = asked.trimmingCharacters(in: .whitespaces)
+        return store.groups.first { $0.name.caseInsensitiveCompare(wanted) == .orderedSame }
+    }
+
     /// One group, as every tool here answers it.
     ///
     /// Written once because three tools answer with a group and a model that
@@ -149,7 +169,7 @@ enum MCPGroupTools {
                 schema: MCPSchema.object(
                     [
                         "group": MCPSchema.string(
-                            "The group's id, as list_groups hands it out."),
+                            "The group, by the id list_groups hands out or by its name."),
                         "name": MCPSchema.string("A new name for the section."),
                         "description": MCPSchema.string(
                             "A new second line, or an empty string to remove it."),
@@ -166,16 +186,17 @@ enum MCPGroupTools {
                     required: ["group"])
             )
         ) { context, answer in
-            guard let id = context.surface("group") else {
+            guard let asked = context.string("group"), !asked.isEmpty else {
                 return answer(.refused(idRefusal(
                     context.string("group"), argument: "group", from: "list_groups")))
             }
 
-            guard store.groups.contains(where: { $0.id == id }) else {
+            guard let found = self.group(named: asked, in: store) else {
                 return answer(.refused(
-                    "Phantom has no group with id \(id.uuidString). Call list_groups for "
-                    + "the ones it has."))
+                    "Phantom has no group called “\(asked)”, by that id or that name. "
+                    + "Call list_groups for the ones it has."))
             }
+            let id = found.id
 
             let icon = context.string("icon")?.trimmingCharacters(in: .whitespaces)
             if let icon, !icon.isEmpty, let refusal = iconRefusal(icon) {
@@ -381,7 +402,7 @@ enum MCPGroupTools {
                         "terminal": MCPSchema.string(
                             "The tab's id, as list_terminals gives it."),
                         "group": MCPSchema.string(
-                            "The group's id, as list_groups or create_group gives it."),
+                            "The group, by the id list_groups gives it or by its name."),
                     ],
                     required: ["terminal", "group"])
             )
@@ -393,7 +414,7 @@ enum MCPGroupTools {
                     from: "list_terminals")))
             }
 
-            guard let group = context.string("group").flatMap(UUID.init(uuidString:)) else {
+            guard let asked = context.string("group"), !asked.isEmpty else {
                 return answer(.refused(idRefusal(
                     context.string("group"),
                     argument: "group",
@@ -407,11 +428,11 @@ enum MCPGroupTools {
                     + "for the ids that are open now."))
             }
 
-            guard let target = store.groups.first(where: { $0.id == group }) else {
+            guard let target = self.group(named: asked, in: store) else {
                 return answer(.refused(
-                    "Phantom has no group with the id \(group.uuidString). Call "
-                    + "list_groups for the groups that exist, or create_group to make "
-                    + "this one."))
+                    "Phantom has no group called “\(asked)”, by that id or that name. "
+                    + "Call list_groups for the groups that exist, or create_group to "
+                    + "make this one."))
             }
 
             let name = store.tabOverrides[surfaceID]?.name ?? tab.title

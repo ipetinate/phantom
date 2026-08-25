@@ -314,4 +314,32 @@ struct MCPGroupToolsTests {
         let required = tool.tool.schema.object?["required"]?.array
         #expect(required?.isEmpty == true)
     }
+
+    // MARK: Naming a group
+
+    /// One vocabulary across every tool that takes a group. `create_terminal`
+    /// took a name from the start and the group tools took only an id, and a
+    /// model that succeeds with a name in one will try a name in the other.
+    @Test func aGroupIsFoundByIdOrByName() {
+        let store = store()
+        let group = store.createGroup(name: "Aurora", icon: "brain", kind: .manual)
+
+        #expect(MCPGroupTools.group(named: group.id.uuidString, in: store)?.id == group.id)
+        #expect(MCPGroupTools.group(named: "Aurora", in: store)?.id == group.id)
+        #expect(MCPGroupTools.group(named: "aurora", in: store)?.id == group.id)
+        #expect(MCPGroupTools.group(named: "  Aurora  ", in: store)?.id == group.id)
+        #expect(MCPGroupTools.group(named: "Nope", in: store) == nil)
+    }
+
+    /// The id is tried first, because a name is not unique across time — a
+    /// group can be renamed to what another one was called — while an id is
+    /// the thing this app handed out.
+    @Test func anIdWinsOverANameThatLooksLikeOne() {
+        let store = store()
+        let first = store.createGroup(name: "One", icon: "folder", kind: .manual)
+        let second = store.createGroup(name: first.id.uuidString, icon: "folder", kind: .manual)
+
+        #expect(MCPGroupTools.group(named: first.id.uuidString, in: store)?.id == first.id)
+        #expect(MCPGroupTools.group(named: second.name, in: store)?.id == first.id)
+    }
 }
