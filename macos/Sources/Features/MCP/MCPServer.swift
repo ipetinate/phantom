@@ -110,7 +110,13 @@ final class MCPServer {
 
         let connection = MCPConnection(handle: handle) { [weak self] request in
             self?.service.answer(request) ?? .failure(.internalError("Phantom is not listening."))
+        } call: { [weak self] request, context, answer in
+            guard let self else {
+                return answer(.failure(.internalError("Phantom is not listening.")))
+            }
+            self.service.call(request, context: context, then: answer)
         } onClose: { [weak self] connection in
+            MCPPermissionStore.shared.forget(client: ObjectIdentifier(connection))
             self?.connections.removeValue(forKey: ObjectIdentifier(connection))
         }
 
@@ -128,6 +134,16 @@ final class MCPServer {
 final class MCPConnection {
     private let handle: Int32
     private let answer: (MCPMessage.Request) -> Result<JSONValue, MCPMessage.Failure>
+
+    /// Tools are answered on their own path because one of them may have to
+    /// put a question in front of the reader, and that takes as long as it
+    /// takes.
+    private let call: (
+        MCPMessage.Request,
+        (String, [String: JSONValue]) -> MCPToolContext,
+        @escaping (Result<JSONValue, MCPMessage.Failure>) -> Void
+    ) -> Void
+
     private let onClose: (MCPConnection) -> Void
 
     private let queue = DispatchQueue(label: "com.ipetinate.phantom.mcp.connection")
@@ -138,15 +154,26 @@ final class MCPConnection {
     /// that starts asking questions without identifying itself is refused,
     /// which is also what a client of the wrong version looks like.
     private var surface: UUID?
+
+    /// What the client called itself in the hello. Shown to the reader in the
+    /// permission sheet and trusted for nothing else.
+    private var clientName: String?
+
     private var isReady = false
 
     init(
         handle: Int32,
         answer: @escaping (MCPMessage.Request) -> Result<JSONValue, MCPMessage.Failure>,
+        call: @escaping (
+            MCPMessage.Request,
+            (String, [String: JSONValue]) -> MCPToolContext,
+            @escaping (Result<JSONValue, MCPMessage.Failure>) -> Void
+        ) -> Void,
         onClose: @escaping (MCPConnection) -> Void
     ) {
         self.handle = handle
         self.answer = answer
+        self.call = call
         self.onClose = onClose
     }
 
@@ -201,6 +228,29 @@ final class MCPConnection {
             /// client waiting on a response to something it never asked for.
             guard !request.isNotification else { return }
 
+            /// The one method that cannot be answered from a value, because
+            /// it may have to wait for the reader.
+            if request.method == "tools/call" {
+                let client = ObjectIdentifier(self)
+                let surface = self.surface
+                let name = self.clientName
+                call(request, { _, arguments in
+                    MCPToolContext(
+                        callerSurface: surface,
+                        clientName: name,
+                        client: client,
+                        arguments: arguments)
+                }, { [weak self] result in
+                    switch result {
+                    case .success(let value):
+                        self?.write(MCPMessage.response(id: request.id, result: value))
+                    case .failure(let failure):
+                        self?.write(MCPMessage.response(id: request.id, failure: failure))
+                    }
+                })
+                return
+            }
+
             switch answer(request) {
             case .success(let result):
                 write(MCPMessage.response(id: request.id, result: result))
@@ -224,6 +274,7 @@ final class MCPConnection {
         switch MCPHandshake.answer(to: hello, peerPID: Self.peerPID(handle)) {
         case .accepted(let surface):
             self.surface = surface
+            self.clientName = hello.client
             isReady = true
             WindowBreadcrumbs.note(
                 "mcp: client \(hello.client ?? "unknown") on "

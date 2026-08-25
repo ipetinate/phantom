@@ -22,19 +22,42 @@ struct MCPService {
     /// which is what the specification asks for.
     static let protocolVersion = "2025-06-18"
 
-    /// The tools on offer.
+    /// The tools on offer, assembled from the files that own them.
     ///
-    /// Empty in this first cut, deliberately. The transport, the identity of
-    /// the caller and the permission model land before anything can be read
-    /// or run — building the tools first and fitting consent around them
-    /// afterwards is how consent becomes decoration.
-    var tools: [MCPTool] = []
+    /// A list rather than a type hierarchy: a tool is declared beside the
+    /// thing it operates on, and adding one is a line here.
+    var handlers: [MCPToolHandler] = MCPToolRegistry.all
+
+    var tools: [MCPTool] { handlers.map(\.tool) }
 
     /// Read from the bundle rather than written down, for the reason
     /// `appDisplayName` is: a version spelled here would go stale the first
     /// time the real one moved.
     static var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+    }
+
+    /// Runs a tool, which is the one method that cannot answer immediately:
+    /// a tool may have to put a question in front of the reader first.
+    func call(
+        _ request: MCPMessage.Request,
+        context: (String, [String: JSONValue]) -> MCPToolContext,
+        then answer: @escaping (Result<JSONValue, MCPMessage.Failure>) -> Void
+    ) {
+        guard let name = request.params["name"]?.string else {
+            return answer(.failure(.invalidParams("A call must name a tool.")))
+        }
+
+        guard let handler = handlers.first(where: { $0.tool.name == name }) else {
+            return answer(.failure(.methodNotFound("Phantom has no tool called \(name).")))
+        }
+
+        var arguments: [String: JSONValue] = [:]
+        if case .object(let given)? = request.params["arguments"] { arguments = given }
+
+        handler.run(context(name, arguments)) { result in
+            answer(.success(result.value))
+        }
     }
 
     func answer(_ request: MCPMessage.Request) -> Result<JSONValue, MCPMessage.Failure> {
@@ -56,10 +79,9 @@ struct MCPService {
             return .success(.object(["tools": .array(tools.map(\.json))]))
 
         case "tools/call":
-            guard let name = request.params["name"]?.string else {
-                return .failure(.invalidParams("A call must name a tool."))
-            }
-            return .failure(.methodNotFound("Phantom has no tool called \(name)."))
+            /// Answered by `call`, not here: a tool may have to ask the reader
+            /// first, and this returns a value.
+            return .failure(.internalError("tools/call is answered asynchronously."))
 
         default:
             return .failure(.methodNotFound("Phantom does not answer \(request.method)."))
