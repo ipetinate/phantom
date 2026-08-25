@@ -87,15 +87,46 @@ struct MCPMessageTests {
         #expect(result.object?["protocolVersion"]?.string == MCPService.protocolVersion)
     }
 
-    /// Empty on purpose in this first cut: the transport, the caller's
-    /// identity and the permission model land before anything can be read or
-    /// run. Fitting consent around finished tools is how consent becomes
-    /// decoration.
-    @Test func thereAreNoToolsYet() throws {
+    /// Empty in the first cut — the transport, the caller's identity and the
+    /// permission model landed before anything could be read or run, because
+    /// fitting consent around finished tools is how consent becomes
+    /// decoration. Now that the tools exist, what is asserted is that
+    /// `tools/list` answers with the registry rather than with a list of its
+    /// own: a tool the registry holds and the listing drops is a tool no
+    /// client can call.
+    @Test func toolsListAnswersWithTheRegistry() throws {
         let request = MCPMessage.Request(id: .number(1), method: "tools/list", params: [:])
         let result = try MCPService().answer(request).get()
-        #expect(result.object?["tools"]?.array?.isEmpty == true)
+
+        let listed = result.object?["tools"]?.array?.compactMap { $0.object?["name"]?.string }
+        #expect(listed == MCPToolRegistry.all.map(\.tool.name))
     }
+
+    /// Every tool is announced with a name, a sentence for the model and a
+    /// schema. A tool missing any of the three is one a client cannot call:
+    /// the name is how it is reached, the description is what decides whether
+    /// it is reached at the right moment, and the schema is what its
+    /// arguments are validated against.
+    @Test func everyToolIsAnnouncedWithWhatAClientNeeds() throws {
+        let request = MCPMessage.Request(id: .number(1), method: "tools/list", params: [:])
+        let result = try MCPService().answer(request).get()
+        let tools = try #require(result.object?["tools"]?.array)
+
+        #expect(!tools.isEmpty)
+
+        for tool in tools {
+            let object = try #require(tool.object)
+            #expect(object["name"]?.string?.isEmpty == false)
+            #expect(object["description"]?.string?.isEmpty == false)
+            #expect(object["inputSchema"]?.object?["type"]?.string == "object")
+        }
+    }
+
+    /// Two tools with one name is a call that reaches whichever came first in
+    /// the registry, which is a coin toss wearing a list.
+    @Test func noTwoToolsShareAName() throws {
+        let names = MCPService().tools.map(\.name)
+        #expect(Set(names).count == names.count)    }
 
     @Test func anUnknownMethodIsRefusedByName() {
         let request = MCPMessage.Request(id: .number(1), method: "sorcery", params: [:])
@@ -107,13 +138,26 @@ struct MCPMessageTests {
         #expect(failure.message.contains("sorcery"))
     }
 
-    @Test func callingATooThatDoesNotExistSaysWhichOne() {
+    /// Asked of `call` rather than of `answer`. `answer` refuses every
+    /// `tools/call` alike — it returns a value, and a tool may have to wait
+    /// for the reader — so a name checked there is only ever the same sentence
+    /// about asynchrony, whether the tool exists or not.
+    @Test func callingAToolThatDoesNotExistSaysWhichOne() {
         let request = MCPMessage.Request(
-            id: .number(1), method: "tools/call", params: ["name": .string("read_output")])
-        guard case .failure(let failure) = MCPService().answer(request) else {
-            Issue.record("expected a refusal")
-            return
-        }
-        #expect(failure.message.contains("read_output"))
+            id: .number(1), method: "tools/call", params: ["name": .string("sorcery")])
+
+        var refusal: MCPMessage.Failure?
+        MCPService().call(request, context: { _, arguments in
+            MCPToolContext(
+                callerSurface: nil,
+                clientName: nil,
+                client: ObjectIdentifier(MCPPermissionStore.shared),
+                arguments: arguments)
+        }, then: { result in
+            if case .failure(let failure) = result { refusal = failure }
+        })
+
+        #expect(refusal?.code == -32601)
+        #expect(refusal?.message.contains("sorcery") == true)
     }
 }

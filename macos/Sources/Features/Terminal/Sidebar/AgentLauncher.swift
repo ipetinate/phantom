@@ -11,7 +11,16 @@ import AppKit
 enum AgentLauncher {
     static func start(_ agent: CodingAgent, in tab: SidebarTabModel) {
         guard let surface = surface(for: tab) else { return }
+        start(agent, in: surface)
+    }
 
+    /// The same start, for a caller holding the surface rather than the row.
+    ///
+    /// The MCP `create_terminal` tool is one: it has just made the tab and
+    /// there is no sidebar row standing for it yet. Split out rather than
+    /// copied, because the order of the two steps below is the whole rule and
+    /// a second spelling of it is a second place to get it wrong.
+    static func start(_ agent: CodingAgent, in surface: Ghostty.SurfaceView) {
         /// Recorded before the command is typed, for the reason
         /// `TabStateCenter.recordAgentStart` gives: we know which agent this is
         /// and the hook might never say so, and a tab with no record leaves a
