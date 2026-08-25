@@ -7,10 +7,24 @@ import Foundation
 /// and a double click — and a menu written out twice is a menu that drifts.
 /// Which commands exist, in what order, where a separator falls and which
 /// glyph each carries are answered once, here.
+///
+/// Reordering is a pair of commands rather than a drag inside the bar, and
+/// that is a concession to the gesture already there. Every tab in the bar is
+/// a drag *source* for moving between cells — `EditorTabDragSource` begins an
+/// AppKit session on `mouseDragged` — and the drop target that answers it is
+/// the whole cell, which reads the bar as a join and any drop on it as "move
+/// this tab into this cell" (`EditorDropZone.resolve`). A second target
+/// inside the bar would have to register the same private type and win the
+/// same drag, and the cross-cell gesture took three attempts to make behave.
+/// A menu item costs a click and breaks nothing.
 enum EditorTabCommand: String, Equatable, Hashable, CaseIterable {
     case close
     case closeOthers
     case closeAll
+    case pin
+    case unpin
+    case moveLeft
+    case moveRight
     case splitLeading
     case splitTrailing
     case splitTop
@@ -24,6 +38,10 @@ enum EditorTabCommand: String, Equatable, Hashable, CaseIterable {
         case .close: return "Close"
         case .closeOthers: return "Close Others"
         case .closeAll: return "Close All"
+        case .pin: return "Pin"
+        case .unpin: return "Unpin"
+        case .moveLeft: return "Move Left"
+        case .moveRight: return "Move Right"
         case .splitLeading: return "Split Left"
         case .splitTrailing: return "Split Right"
         case .splitTop: return "Split Up"
@@ -48,6 +66,13 @@ enum EditorTabCommand: String, Equatable, Hashable, CaseIterable {
         case .close: return "xmark"
         case .closeOthers: return "xmark.circle"
         case .closeAll: return "xmark.circle.fill"
+        case .pin: return "pin"
+        case .unpin: return "pin.slash"
+        /// Bare arrows, where the four splits carry boxed ones: reordering
+        /// slides the tab along a row and dividing hands it half a cell, and
+        /// at menu size the box is the only thing that says which is which.
+        case .moveLeft: return "arrow.backward"
+        case .moveRight: return "arrow.forward"
         case .splitLeading: return "arrow.left.square"
         case .splitTrailing: return "arrow.right.square"
         case .splitTop: return "arrow.up.square"
@@ -64,8 +89,9 @@ enum EditorTabCommand: String, Equatable, Hashable, CaseIterable {
     var group: Int {
         switch self {
         case .close, .closeOthers, .closeAll: return 0
-        case .splitLeading, .splitTrailing, .splitTop, .splitBottom, .moveToMainPane: return 1
-        case .revealInFinder, .copyPath: return 2
+        case .pin, .unpin, .moveLeft, .moveRight: return 1
+        case .splitLeading, .splitTrailing, .splitTop, .splitBottom, .moveToMainPane: return 2
+        case .revealInFinder, .copyPath: return 3
         }
     }
 
@@ -98,11 +124,29 @@ enum EditorTabCommand: String, Equatable, Hashable, CaseIterable {
         /// Whether this tab is somewhere other than the main pane, which is
         /// the only case where sending it there does anything.
         var canReturnToMainPane: Bool
+
+        /// Whether this tab is already pinned, which decides which half of
+        /// the pin pair the menu offers. Two commands rather than one that
+        /// changes its name: `title` and `icon` are read off the case alone,
+        /// and a case that had to be asked what it is called would have to be
+        /// handed the availability at both call sites and at the test.
+        var isPinned: Bool
+
+        /// Whether the tab has a neighbour to trade places with on that side,
+        /// **inside its own run** — see `EditorTabSet.canMove`. The pinned run
+        /// reorders among itself and the unpinned among itself, so at either
+        /// end of a run the item is left out rather than offered as a no-op.
+        var canMoveLeft: Bool
+        var canMoveRight: Bool
     }
 
     private func isOffered(_ availability: Availability) -> Bool {
         switch self {
         case .closeOthers: return availability.hasSiblings
+        case .pin: return !availability.isPinned
+        case .unpin: return availability.isPinned
+        case .moveLeft: return availability.canMoveLeft
+        case .moveRight: return availability.canMoveRight
         case .splitLeading, .splitTrailing, .splitTop, .splitBottom:
             return availability.canSplitOut
         case .moveToMainPane: return availability.canReturnToMainPane

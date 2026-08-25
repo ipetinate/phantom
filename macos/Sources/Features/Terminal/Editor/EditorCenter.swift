@@ -544,6 +544,18 @@ final class EditorCenter: ObservableObject {
         let holder = holder(of: item)
         let cell = holder.flatMap { tree.group($0) }
 
+        /// The terminal answers `false` to all three of the pin questions and
+        /// there is nothing to decide: it has no path, it is drawn first in
+        /// its cell by `EditorTabBar` whatever the files do, and its own menu
+        /// keeps only the splits anyway.
+        var path: String?
+        if case .file(let file) = item { path = file }
+        let tab = path.flatMap { cell?.tabs.tab(for: $0) }
+        let canMove: (Int) -> Bool = { offset in
+            guard let path, let cell else { return false }
+            return cell.tabs.canMove(path, by: offset)
+        }
+
         return EditorTabCommand.Availability(
             hasSiblings: (cell?.tabs.tabs.count ?? 0) > 1,
             canSplitOut: canSplitOut(item),
@@ -551,8 +563,29 @@ final class EditorCenter: ObservableObject {
             canReturnToMainPane: {
                 guard case .file = item, let main = mainPaneID else { return false }
                 return holder != main
-            }()
+            }(),
+            isPinned: tab?.isPinned ?? false,
+            canMoveLeft: canMove(-1),
+            canMoveRight: canMove(1)
         )
+    }
+
+    /// Pins a tab to the head of its bar, or lets a pinned one go.
+    ///
+    /// Routed to the cell that *holds* the file rather than to the cell in
+    /// focus, for the reason every other per-file change is — see
+    /// `mutateHolder`. Nothing here can empty a cell, so the tree's heal has
+    /// nothing to do and the grid keeps its shape.
+    func setPinned(_ isPinned: Bool, for path: String) {
+        mutateHolder(of: path) { $0.setPinned(isPinned, for: path) }
+    }
+
+    /// Moves a tab one place along its bar, within its own run.
+    ///
+    /// The menu's "Move Left" and "Move Right", and the only way to reorder
+    /// tabs — see `EditorTabCommand` for why this is not a drag.
+    func moveTab(_ path: String, by offset: Int) {
+        mutateHolder(of: path) { $0.move(path, by: offset) }
     }
 
     /// Divides the cell a tab is in and puts the tab in the new half — the

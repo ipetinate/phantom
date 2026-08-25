@@ -10,12 +10,18 @@ struct EditorTabCommandTests {
     private func availability(
         hasSiblings: Bool = true,
         canSplitOut: Bool = true,
-        canReturnToMainPane: Bool = true
+        canReturnToMainPane: Bool = true,
+        isPinned: Bool = false,
+        canMoveLeft: Bool = true,
+        canMoveRight: Bool = true
     ) -> EditorTabCommand.Availability {
         EditorTabCommand.Availability(
             hasSiblings: hasSiblings,
             canSplitOut: canSplitOut,
-            canReturnToMainPane: canReturnToMainPane)
+            canReturnToMainPane: canReturnToMainPane,
+            isPinned: isPinned,
+            canMoveLeft: canMoveLeft,
+            canMoveRight: canMoveRight)
     }
 
     @Test func everyCommandIsNamed() {
@@ -59,11 +65,37 @@ struct EditorTabCommandTests {
         #expect(!menu.contains(.command(.moveToMainPane)))
     }
 
-    @Test func aTabWithEverythingAvailableIsOfferedEverything() {
+    /// Everything except one half of the pin pair, which is the one thing in
+    /// this menu that is never offered whole: a tab is pinned or it is not.
+    @Test func aTabWithEverythingAvailableIsOfferedEverythingElse() {
         let menu = EditorTabCommand.menu(availability())
-        for command in EditorTabCommand.allCases {
+        for command in EditorTabCommand.allCases where command != .unpin {
             #expect(menu.contains(.command(command)), "\(command.title) is missing")
         }
+    }
+
+    @Test func onlyOneHalfOfThePinPairIsEverOffered() {
+        let unpinned = EditorTabCommand.menu(availability(isPinned: false))
+        #expect(unpinned.contains(.command(.pin)))
+        #expect(!unpinned.contains(.command(.unpin)))
+
+        let pinned = EditorTabCommand.menu(availability(isPinned: true))
+        #expect(pinned.contains(.command(.unpin)))
+        #expect(!pinned.contains(.command(.pin)))
+    }
+
+    /// At either end of its run a tab has nowhere to go on that side, and an
+    /// item that does nothing is worse than an absent one — the rule "Close
+    /// Others" already follows.
+    @Test func aTabAtTheEndOfItsRunIsNotOfferedThatDirection() {
+        let atTheHead = EditorTabCommand.menu(availability(canMoveLeft: false))
+        #expect(!atTheHead.contains(.command(.moveLeft)))
+        #expect(atTheHead.contains(.command(.moveRight)))
+
+        let alone = EditorTabCommand.menu(
+            availability(canMoveLeft: false, canMoveRight: false))
+        #expect(!alone.contains(.command(.moveLeft)))
+        #expect(!alone.contains(.command(.moveRight)))
     }
 
     /// The four splits carry the four edges, and each edge exactly once —
@@ -84,6 +116,15 @@ struct EditorTabCommandTests {
             availability(canSplitOut: false),
             availability(canReturnToMainPane: false),
             availability(hasSiblings: false, canSplitOut: false, canReturnToMainPane: false),
+            availability(isPinned: true),
+            availability(canMoveLeft: false, canMoveRight: false),
+            availability(
+                hasSiblings: false,
+                canSplitOut: false,
+                canReturnToMainPane: false,
+                isPinned: true,
+                canMoveLeft: false,
+                canMoveRight: false),
         ]
 
         for availability in cases {

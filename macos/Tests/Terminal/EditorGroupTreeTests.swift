@@ -259,6 +259,24 @@ struct EditorGroupTreeTests {
         #expect(tree.group(host)?.holds("/a.ts") == true)
     }
 
+    /// The pin belongs to the tab, so it crosses the grid with it — and lands
+    /// the tab at the head of the bar it arrives in. Moving used to close the
+    /// path here and open it there, which built a fresh tab at the far end
+    /// and dropped both the pin and the dirty dot.
+    @Test func aPinnedTabArrivesPinnedAndAtTheHead() {
+        var tree = singleCell()
+        let host = tree.groupIDs[0]
+        let files = group(["/a.ts", "/b.ts"])
+        tree.split(host, direction: .horizontal, inserting: files)
+        tree.update(files.id) { $0.tabs.setPinned(true, for: "/b.ts") }
+        tree.update(host) { $0.tabs.open("/kept.ts") }
+
+        tree.move("/b.ts", to: host)
+
+        #expect(tree.group(host)?.tabs.tabs.map(\.path) == ["/b.ts", "/kept.ts"])
+        #expect(tree.group(host)?.tabs.tab(for: "/b.ts")?.isPinned == true)
+    }
+
     // MARK: Focus and dividers
 
     @Test func theNeighbourIsTheCellAcrossTheSplit() {

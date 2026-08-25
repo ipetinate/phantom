@@ -266,6 +266,8 @@ private struct EditorTabItem: View {
             HStack(spacing: 5) {
                 FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
 
+                pinMark
+
                 Text(tab.name)
                     .font(palette.font(size: 11, weight: isSelected ? .semibold : .regular))
                     .lineLimit(1)
@@ -363,6 +365,12 @@ private struct EditorTabItem: View {
             content: HStack(spacing: 5) {
                 FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
 
+                /// The same mark the tab wears in the bar. What follows the
+                /// pointer has to *be* the tab, and a pinned tab that shed
+                /// its pin on the way to another cell would be saying the
+                /// pin does not travel — which is exactly what it does.
+                pinMark
+
                 Text(tab.name)
                     .font(palette.font(size: 11, weight: .semibold))
                     .lineLimit(1)
@@ -392,6 +400,24 @@ private struct EditorTabItem: View {
         return renderer.nsImage
     }
 
+    /// The pin mark, *beside* the file's own icon and never in place of it.
+    ///
+    /// The file icon is how a tab is found at a glance — the explorer, the
+    /// Git panel and this bar all draw the same one, which is the point of
+    /// sharing `FileIconView` — so a pin that took its slot would trade the
+    /// tab's identity for a fact the tab's position in the bar already
+    /// states. It goes at the leading edge, next to the icon, because that is
+    /// the end of the tab the eye is already at when it reads the run of
+    /// pinned tabs from the left.
+    @ViewBuilder
+    private var pinMark: some View {
+        if tab.isPinned {
+            Image(systemName: "pin.fill")
+                .font(.system(size: 8))
+                .foregroundStyle(.secondary)
+        }
+    }
+
     /// The worktree mark, for a tab whose file is from a checkout its
     /// terminal has left.
     ///
@@ -416,6 +442,12 @@ private struct EditorTabItem: View {
     /// A dot for unsaved changes that becomes the close button on hover —
     /// the VS Code behavior, which keeps one slot doing both jobs instead
     /// of widening every tab to fit two.
+    ///
+    /// A pinned tab keeps it. Hiding the button there is what some editors
+    /// do, and here it would take the dirty dot down with it — one slot,
+    /// two jobs — leaving a pinned tab with unsaved edits nothing to click
+    /// and making every tab change width the moment it is pinned. See
+    /// `EditorTab.isPinned` for the whole of that decision.
     @ViewBuilder
     private var closeControl: some View {
         if tab.isDirty && !isHovered {
