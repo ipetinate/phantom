@@ -47,11 +47,11 @@ struct MarkdownPreviewWidthTests {
 
     // MARK: - The measure
 
-    /// Where the number comes from: 72 characters of the preview's own font,
-    /// which is the middle of the 65-to-80 range prose is read at.
-    @Test func theMeasureHoldsAboutSeventyTwoCharacters() {
+    /// Where the number comes from: 86 characters of the preview's own font,
+    /// a little past the 65-to-80 range prose is read at.
+    @Test func theMeasureHoldsAboutEightySixCharacters() {
         let font = MarkdownStyle.fallback.bodyFont
-        let line = String(String(repeating: "abcdefghijklmnopqrstuvwxyz ", count: 4).prefix(72))
+        let line = String(String(repeating: "abcdefghijklmnopqrstuvwxyz ", count: 4).prefix(86))
         let width = (line as NSString).size(withAttributes: [.font: font]).width
         let measure = MarkdownStyle.measure(for: font)
 
