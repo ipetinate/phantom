@@ -24,6 +24,12 @@ final class MCPPermissionStore: ObservableObject {
         var client: String?
         var tabTitle: String?
 
+        /// What exactly is being asked for, when the capability alone does not
+        /// say it. A request to change a setting has to name the setting and
+        /// show the value: approving a change you cannot see is a signature on
+        /// a blank page, and it is the reason this field exists.
+        var detail: String?
+
         /// Called with what the reader chose, or nil when they refused.
         var answer: (MCPPermission.Scope?, _ always: Bool) -> Void
     }
@@ -63,6 +69,7 @@ final class MCPPermissionStore: ObservableObject {
         client: ObjectIdentifier,
         clientName: String?,
         tabTitle: String?,
+        detail: String? = nil,
         then answer: @escaping (Bool) -> Void
     ) {
         let held = grants + (once[client] ?? [])
@@ -81,7 +88,8 @@ final class MCPPermissionStore: ObservableObject {
         pending = Pending(
             request: request,
             client: clientName,
-            tabTitle: tabTitle
+            tabTitle: tabTitle,
+            detail: detail
         ) { [weak self] scope, always in
             guard let self else { return answer(false) }
             self.pending = nil

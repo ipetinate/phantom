@@ -83,6 +83,10 @@ final class LSPCenter: ObservableObject {
     }
 
     private var servers: [Key: LSPProcess] = [:]
+
+    /// Keys whose process was terminated on purpose, so their exit is not
+    /// reported as a crash. Emptied by the exit it is waiting for.
+    private var stopping: Set<Key> = []
     private var starting: Set<Key> = []
 
     /// What `initialize` answered with, so a feature can tell "the server
@@ -708,6 +712,86 @@ final class LSPCenter: ObservableObject {
     func log(forPath path: String) -> [String] {
         guard let key = speakingKey(forPath: path) else { return [] }
         return serverLogs[key] ?? []
+    }
+
+    /// Stops a server everywhere it is running, so the next request for a
+    /// file starts it fresh.
+    ///
+    /// This is the gesture the app had no way to make. The only teardown was
+    /// `handleExit`, which is reactive — the process died on its own — so
+    /// applying a changed command or changed `initializationOptions` meant
+    /// relaunching Phantom, which is what the override field's own footer told
+    /// the reader to do.
+    ///
+    /// Three kinds of state go, and each for its own reason. The **process**,
+    /// so a new one launches with the current configuration. The **remembered
+    /// failure**, because a server that failed to start once is otherwise
+    /// remembered as failed forever and the retry the reader just asked for
+    /// would answer from that memory. The **record of what was announced**,
+    /// because `didOpen` twice for one document is a protocol violation, and
+    /// that record is the only thing that makes re-announcing legal.
+    ///
+    /// Returns how many workspaces were stopped. Zero is a real answer and not
+    /// a failure: a server that was not running is, after this, a server that
+    /// will start clean.
+    ///
+    /// Re-announcing the open documents is deliberately **not** done here.
+    /// This type holds versions, not text, and the text belongs to the
+    /// editors — see ``LSPRestart``, which owns both halves of the gesture.
+    func restart(_ server: LSPServerDefinition) -> Int {
+        restart(commands: [Self.effectiveDefinition(server).command, server.command])
+    }
+
+    /// The same gesture, for callers that hold commands rather than a
+    /// definition — and the reason it takes a *set*.
+    ///
+    /// A key remembers the command its process was launched with. A reader who
+    /// just repointed the command field has a server running under the old one
+    /// and is about to get a new one under the new one, so restarting by the
+    /// new command alone would leave the old process alive and unreferenced.
+    /// Every command this server could be running under is stopped.
+    func restart(commands: Set<String>) -> Int {
+        let commands = commands.filter { !$0.isEmpty }
+        guard !commands.isEmpty else { return 0 }
+
+        let live = servers.keys.filter { commands.contains($0.command) }
+
+        for key in live {
+            stopping.insert(key)
+            servers[key]?.terminate()
+        }
+
+        for key in status.keys.filter({ commands.contains($0.command) })
+        where servers[key] == nil {
+            status.removeValue(forKey: key)
+            serverLogs.removeValue(forKey: key)
+        }
+
+        for path in announced.keys {
+            announced[path] = announced[path]?.filter { !commands.contains($0.command) }
+            if announced[path]?.isEmpty == true { announced.removeValue(forKey: path) }
+        }
+
+        return live.count
+    }
+
+    /// The recent stderr of every workspace this server is running in,
+    /// oldest first.
+    ///
+    /// The per-path reading above answers "why is *this file* unserved",
+    /// which is the question the banner asks. This one answers "why is this
+    /// *server* unwell", which is the question someone holding a list of
+    /// servers asks — and it cannot be reached by path, because a server
+    /// that failed to start for every workspace has no path speaking to it.
+    ///
+    /// Matched on the effective command, so a server the reader repointed
+    /// with an override still finds its own lines.
+    func log(for server: LSPServerDefinition) -> [String] {
+        let command = Self.effectiveDefinition(server).command
+        return serverLogs
+            .filter { $0.key.command == command }
+            .sorted { $0.key.root < $1.key.root }
+            .flatMap(\.value)
     }
 
     /// Whether the server running for this file's language advertised a
@@ -1636,7 +1720,11 @@ final class LSPCenter: ObservableObject {
         }
     }
 
-    private static func parseInitializationOptions(_ json: String) -> LSPOutcome<LSPValue> {
+    /// Not private, because a tool that writes this field has to accept
+    /// exactly what startup accepts. Validating against a second parser is how
+    /// a value gets stored that the app then refuses, leaving the reader with a
+    /// server that will not start and a setting that looked fine going in.
+    static func parseInitializationOptions(_ json: String) -> LSPOutcome<LSPValue> {
         guard let data = json.data(using: .utf8) else {
             return .failure("initializationOptions isn't valid text.")
         }
@@ -1659,7 +1747,9 @@ final class LSPCenter: ObservableObject {
                 case .log(let line):
                     await MainActor.run { self?.appendLog(line, for: key) }
                 case .exited(let exitStatus):
-                    await MainActor.run { self?.handleExit(exitStatus: exitStatus, key: key) }
+                    await MainActor.run {
+                        self?.handleExit(exitStatus: exitStatus, key: key, process: process)
+                    }
                 }
             }
         }
@@ -1779,11 +1869,29 @@ final class LSPCenter: ObservableObject {
 
     /// The process exited after having run — as opposed to `server(for:)`'s
     /// own `catch`, which is a server that never got this far at all.
-    private func handleExit(exitStatus: Int32?, key: Key) {
+    private func handleExit(exitStatus: Int32?, key: Key, process: LSPProcess) {
+        /// The exit of a process that is no longer the one under this key
+        /// changes nothing.
+        ///
+        /// A restart terminates a server and puts a fresh one under the same
+        /// key immediately; the old one's exit arrives afterwards, and without
+        /// this guard it would delete the bookkeeping of its replacement —
+        /// leaving a live server the app believes is not running.
+        guard servers[key] === process || servers[key] == nil else { return }
+
         servers.removeValue(forKey: key)
         serverCapabilities.removeValue(forKey: key)
         completionSupport.removeValue(forKey: key)
-        status[key] = .crashed(status: exitStatus)
+
+        /// A server the app stopped on purpose did not crash, and recording it
+        /// as crashed would leave the reader reading a fault that was their
+        /// own instruction. Forgetting the status is what lets the next
+        /// request start it clean.
+        if stopping.remove(key) != nil {
+            status.removeValue(forKey: key)
+        } else {
+            status[key] = .crashed(status: exitStatus)
+        }
 
         /// A dead server's problems are not the file's problems any more.
         /// This mattered little while one server owned a file — the

@@ -58,6 +58,8 @@ struct SettingsRootView: View {
 
     @State private var selection: SettingsSection = .general
 
+    @ObservedObject private var navigation = SettingsNavigation.shared
+
     var body: some View {
         NavigationSplitView {
             List(SettingsSection.allCases, selection: $selection) { section in
@@ -103,6 +105,19 @@ struct SettingsRootView: View {
                 WorktreesSettingsView()
             }
         }
+        /// Both moments a request can arrive in: before this view existed —
+        /// the first open of the window, where the caller published its
+        /// target and only then asked for the window — and while it is
+        /// already on screen. The section is read here; the row inside it is
+        /// left for the section's own view, which is the only thing that
+        /// knows how to select and reveal one.
+        .onAppear { showRequestedSection() }
+        .onChange(of: navigation.target) { _ in showRequestedSection() }
+    }
+
+    private func showRequestedSection() {
+        guard let section = navigation.target?.section else { return }
+        selection = section
     }
 }
 

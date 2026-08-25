@@ -445,7 +445,13 @@ enum MCPTerminalTools {
     /// "sempre" grant outlives the session that made it: anchored on a name, a
     /// renamed group would silently drop a grant, and a group renamed onto an
     /// old name would silently inherit one.
-    private static func allow(
+    /// The one consent path the tools share.
+    ///
+    /// Not private because the diagnostic tools gate on the same grant for
+    /// the same reason, and two spellings of "ask the reader for read" would
+    /// eventually differ in which tab they name — which is the one detail the
+    /// reader uses to decide.
+    static func allow(
         _ capability: MCPPermission.Capability,
         for tab: SidebarTabModel,
         id: UUID,

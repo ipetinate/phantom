@@ -10,5 +10,6 @@ import Foundation
 enum MCPToolRegistry {
     static var all: [MCPToolHandler] {
         MCPTerminalTools.all + MCPGroupTools.all + MCPEditorTools.all
+            + MCPDiagnosticTools.all + MCPLanguageServerTools.all
     }
 }

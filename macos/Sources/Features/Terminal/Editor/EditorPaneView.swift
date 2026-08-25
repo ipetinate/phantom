@@ -1335,10 +1335,19 @@ private struct DocumentView: View {
         case .notOurs:
             return false
 
-        case .failed, .answered(nil):
+        case .failed(let message):
+            /// Kept past the notice that is about to fade, because whoever
+            /// can fix this — the reader coming back, or an agent asked to —
+            /// arrives after it has.
+            FormatFailureStore.shared.record(message, for: path)
+            return true
+
+        case .answered(nil):
+            FormatFailureStore.shared.clear(path)
             return true
 
         case .answered(let edit?):
+            FormatFailureStore.shared.clear(path)
             /// The same guard the server path needs, for the same reason: the
             /// edit was measured against the text as it was when the run
             /// started, and the reader kept typing while a subprocess ran.
@@ -1489,8 +1498,13 @@ private struct DocumentView: View {
             Image(systemName: "info.circle")
                 .foregroundStyle(.secondary)
 
+            /// Selectable because the sentence is often the only place a
+            /// command the reader has to run appears — a missing plugin's
+            /// `npm i -D …` arrives inside the server's own failure reason,
+            /// where no Copy button can reach it.
             Text("\(server.displayName) \(status.summary) — language features may not work.")
                 .font(palette.font(size: 11))
+                .textSelection(.enabled)
 
             Spacer(minLength: 0)
 
@@ -1518,10 +1532,30 @@ private struct DocumentView: View {
                     .font(palette.font(size: 11))
                     .buttonStyle(.link)
             }
+
+            Button("Open Settings") { openServerSettings(server) }
+                .font(palette.font(size: 11))
+                .buttonStyle(.link)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(Color.secondary.opacity(0.12))
+    }
+
+    /// Settings, on this server's own row — every way out of the states
+    /// this banner reports is there: a different binary, different
+    /// arguments, or the approval a withheld server is waiting on.
+    ///
+    /// The row is named before the window is asked for, because the first
+    /// open is also the moment the settings views are built and they read
+    /// the request as they appear. The window is reached through the menu's
+    /// own action, which keeps the `Ghostty.App` it needs out of the editor.
+    private func openServerSettings(_ server: LSPServerDefinition) {
+        SettingsNavigation.shared.target = SettingsNavigation.Target(
+            section: .languageServers,
+            row: SettingsNavigation.languageRow(for: server)
+        )
+        _ = NSApp.sendAction(#selector(AppDelegate.openConfig(_:)), to: nil, from: nil)
     }
 
     /// Both halves of the question, so a change to either re-asks it.

@@ -43,10 +43,27 @@ enum MCPPermission {
         /// idle rule sits on top of the grant rather than instead of it.
         case run
 
+        /// Change how a language server starts.
+        ///
+        /// **Why a third capability, when the spec closed the list at two.**
+        /// The other tools that change something — opening a file, dividing a
+        /// pane — are ungated on an argument that does not hold here: they
+        /// disclose nothing, they are visible the instant they happen, and one
+        /// gesture undoes each. A server override is none of those. It lives in
+        /// Settings rather than on screen, it survives relaunching the app, and
+        /// undoing it means knowing what was there before.
+        ///
+        /// It is not folded into `run` either. A grant to type into a terminal
+        /// is a grant about *this* tab's shell; this reaches the app's own
+        /// configuration, for every project and every window. Folding them
+        /// would mean a reader who allowed one command allowed that too.
+        case configure
+
         var title: String {
             switch self {
             case .read: return "read this terminal"
             case .run: return "run commands in this terminal"
+            case .configure: return "change how a language server starts"
             }
         }
     }

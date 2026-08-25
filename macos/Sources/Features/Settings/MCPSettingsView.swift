@@ -16,6 +16,11 @@ enum MCPGrantPhrase {
         switch capability {
         case .read: return "Read scrollback"
         case .run: return "Run commands"
+
+        /// Named for what it touches rather than for the capability, because
+        /// this list is read months later: "Configure" alone would leave the
+        /// reader guessing what they once allowed to be configured.
+        case .configure: return "Change language server startup"
         }
     }
 

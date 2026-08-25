@@ -113,6 +113,13 @@ final class MCPPermissionPrompt {
             stakes = "Scrollback can hold keys, tokens and production output."
         case .run:
             stakes = "Commands run in an idle terminal, as if you had typed them."
+        case .configure:
+            /// Said outright because the reach below is about who may ask
+            /// again, not about what the change touches — and "This Tab" over
+            /// a setting that is app-wide would read as the opposite.
+            stakes = "This changes a setting in every project and every window, "
+                + "not only here, and it outlives quitting the app. "
+                + "You can see and undo it in Settings, under Languages."
         }
 
         return "\(stakes) Choose how far this reaches; it starts at the narrowest. "
@@ -244,7 +251,13 @@ final class MCPPermissionPrompt {
             client: pending.client,
             capability: pending.request.capability,
             tabTitle: pending.tabTitle)
-        alert.informativeText = informative(for: pending.request.capability)
+        /// The detail first, because it is the specific thing being decided
+        /// and the stakes below it are the same paragraph every time — a
+        /// reader who has seen the boilerplate twice stops reading it, and the
+        /// value they are approving must not be underneath what they skip.
+        alert.informativeText = [pending.detail, informative(for: pending.request.capability)]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
         alert.accessoryView = picker
 
         alert.addButton(withTitle: "Allow Once")
