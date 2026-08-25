@@ -244,11 +244,24 @@ class AppDelegate: NSObject,
         OpenCodeHooksInstaller.repairIfStale()
         AntigravityHooksInstaller.repairIfStale()
 
+        // The one object that puts the permission question on screen, and it
+        // starts before the listener does: a question raised with nobody
+        // watching is a `pending` nothing will ever answer, and the store
+        // refuses every later question while one is pending.
+        MCPPermissionPrompt.shared.start()
+
         // The MCP listener, beside the hooks because it is the same idea: a
         // rendezvous the agents running inside this app's terminals can find.
         // The socket is named after the bundle, so a debug build and a
         // release one running together each answer for themselves.
         MCPServer.shared.start()
+
+        // The MCP entry in each agent's own configuration, kept current the
+        // same way the hooks above are: repaired when it is behind this build,
+        // never installed uninvited. The command it registers is this bundle's
+        // own binary, so a Phantom that moved on disk leaves an entry pointing
+        // at nothing until this rewrites it.
+        MCPServerRegistration.repairAll()
 
         // Watching for the moments a window can become unreachable, before
         // any window exists to have them. Development builds only; see

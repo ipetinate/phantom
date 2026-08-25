@@ -17,6 +17,7 @@ struct SettingsRootView: View {
         case keyboardShortcuts
         case languageServers
         case agents
+        case mcp
         case worktrees
 
         var id: String { rawValue }
@@ -31,6 +32,7 @@ struct SettingsRootView: View {
             case .keyboardShortcuts: return "Keyboard Shortcuts"
             case .languageServers: return "Languages"
             case .agents: return "Agents"
+            case .mcp: return "MCP"
             case .worktrees: return "Worktrees"
             }
         }
@@ -49,6 +51,7 @@ struct SettingsRootView: View {
             case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
             case .agents: return "sparkles"
+            case .mcp: return "point.3.connected.trianglepath.dotted"
             }
         }
     }
@@ -94,6 +97,8 @@ struct SettingsRootView: View {
                 LanguageServersSettingsView()
             case .agents:
                 AgentsSettingsView()
+            case .mcp:
+                MCPSettingsView()
             case .worktrees:
                 WorktreesSettingsView()
             }
