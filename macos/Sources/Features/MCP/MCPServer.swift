@@ -27,8 +27,57 @@ final class MCPServer {
     /// Where it is listening, for the settings pane and for the breadcrumbs.
     private(set) var socketURL: URL?
 
+    /// Whether this process is hosting a test bundle rather than a reader.
+    ///
+    /// The environment variable is XCTest's own, set by the runner in the host
+    /// process before the bundle is injected.
+    static var isTesting: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["XCTestSessionIdentifier"] != nil
+    }
+
+    /// Whether something is accepting connections on this socket right now.
+    ///
+    /// A plain `connect`, because that is the only question with a true answer:
+    /// the file existing says nothing, and a pid file would be a second source
+    /// of truth to keep honest. Connected means somebody is there, so this
+    /// process must not take the path from them.
+    static func isAccepting(at url: URL) -> Bool {
+        let handle = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard handle >= 0 else { return false }
+        defer { close(handle) }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        _ = withUnsafeMutablePointer(to: &address.sun_path) { raw in
+            url.path.withCString { source in
+                strncpy(
+                    UnsafeMutableRawPointer(raw).assumingMemoryBound(to: CChar.self),
+                    source,
+                    MCPSocketPath.maximumLength)
+            }
+        }
+
+        let size = socklen_t(MemoryLayout<sockaddr_un>.size)
+        return withUnsafePointer(to: &address) { raw in
+            raw.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(handle, $0, size) }
+        } == 0
+    }
+
     func start() {
         guard listener < 0 else { return }
+
+        /// A test run must never own this. `xcodebuild test` hosts the test
+        /// bundle *inside the app*, so it is a second instance with the same
+        /// bundle id and therefore the same socket path — and it exits when the
+        /// suite ends. Left to start, it takes the socket from the copy the
+        /// reader is using and takes MCP down with it when it goes, which is
+        /// exactly what happened here: a green test run and an agent that could
+        /// no longer reach the app.
+        guard !Self.isTesting else {
+            WindowBreadcrumbs.note("mcp: not listening, this process is a test host")
+            return
+        }
 
         let url = MCPSocketPath.current
         guard MCPSocketPath.fits(url) else {
@@ -39,9 +88,21 @@ final class MCPServer {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-        /// A socket file left by a crash keeps `bind` from succeeding, and it
-        /// is never anything to preserve: nothing can be connected to it,
-        /// because the process that accepted on it is gone.
+        /// A socket file left by a crash keeps `bind` from succeeding, and
+        /// removing it is how the next launch gets to listen at all.
+        ///
+        /// But the old comment here claimed nothing could ever be connected to
+        /// it, "because the process that accepted on it is gone" — and that is
+        /// only true of a crash. A *second instance of this same app* has the
+        /// same bundle id and so the same path, and deleting the file out from
+        /// under a live listener leaves the first instance accepting on an
+        /// inode no path reaches any more: it looks healthy from inside and
+        /// refuses every connection from outside. So the file is probed first
+        /// and only removed when nothing answers.
+        if Self.isAccepting(at: url) {
+            WindowBreadcrumbs.note("mcp: another instance is already listening on \(url.path)")
+            return
+        }
         try? FileManager.default.removeItem(at: url)
 
         let handle = socket(AF_UNIX, SOCK_STREAM, 0)
