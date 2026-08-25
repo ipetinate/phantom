@@ -153,6 +153,7 @@ class BaseTerminalController: NSWindowController,
         let surfaceUUID = UUID()
         surfaceConfig.environmentVariables["GHOSTTY_TAB_STATE_FILE"] =
             TabStateCenter.stateFileURL(for: surfaceUUID).path
+        surfaceConfig.environmentVariables["PHANTOM_MCP_SOCKET"] = MCPSocketPath.current.path
         self.surfaceTree = tree ?? .init(
             view: Ghostty.SurfaceView(ghostty_app, baseConfig: surfaceConfig, uuid: surfaceUUID)
         )

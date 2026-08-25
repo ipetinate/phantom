@@ -1871,6 +1871,8 @@ extension Ghostty {
             if let uuid {
                 config.environmentVariables["GHOSTTY_TAB_STATE_FILE"] =
                     TabStateCenter.stateFileURL(for: uuid).path
+                config.environmentVariables["PHANTOM_MCP_SOCKET"] =
+                    MCPSocketPath.current.path
             }
 
             self.init(app, baseConfig: config, uuid: uuid)
