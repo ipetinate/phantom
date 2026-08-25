@@ -25,6 +25,11 @@ struct GitDiffPane: View {
     let scrollSync: ScrollSyncLink
     let syncSide: ScrollSyncSide
 
+    /// Called when a reader asks to see what a gap is hiding. Nil while the
+    /// whole file is already on screen, which is what takes the affordance
+    /// off a row that has nothing left to reveal.
+    var onExpandGap: (() -> Void)?
+
     /// Uniform, and deliberately not measured per row.
     ///
     /// Diff rows are single lines of monospaced text with no wrapping, so
@@ -123,8 +128,9 @@ struct GitDiffPane: View {
         }
     }
 
+    @ViewBuilder
     private func gapRow(_ header: GitDiffHunk.Header) -> some View {
-        HStack(spacing: 0) {
+        let label = HStack(spacing: 0) {
             Text(gapLabel(header))
                 .font(Font(font))
                 .foregroundStyle(Color(nsColor: palette.gapForeground))
@@ -132,6 +138,18 @@ struct GitDiffPane: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: palette.gapBackground))
+
+        if let onExpandGap {
+            /// The whole row, not a control inside it. The row is already the
+            /// thing that says lines are hidden here, so it is the thing to
+            /// click — and it is one line tall, which is not enough room for a
+            /// button beside a label.
+            Button(action: onExpandGap) { label }
+                .buttonStyle(.plain)
+                .help("Show the whole file")
+        } else {
+            label
+        }
     }
 
     /// Git's own `@@` line is the honest label here: it says exactly which

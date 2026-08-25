@@ -155,6 +155,15 @@ struct CodeTextView: NSViewRepresentable {
     /// the margin is supposed to keep up while they type.
     var diffBaseline: [String]?
 
+    /// The file on disk this buffer belongs to, for the things that ask git
+    /// about it. Nil for a buffer with no file behind it.
+    var documentPath: String?
+
+    /// Who last changed the line the caret is on, as one sentence, or nil for
+    /// a line nobody has committed. Drawn after the end of that line in the
+    /// theme's dimmest colour.
+    var blameGhost: String?
+
     /// ⌘-click, and the editor commands the host implements.
     var onJumpToDefinition: ((Int) -> Void)?
     var onRename: ((Int) -> Void)?
@@ -304,6 +313,19 @@ struct CodeTextView: NSViewRepresentable {
         band.isHidden = true
         scrollView.contentView.addSubview(band, positioned: .below, relativeTo: textView)
         context.coordinator.currentLineBand = band
+
+        /// The line's history, after the end of the line itself. A subview of
+        /// the text view rather than of the clip view, unlike the band: it has
+        /// to sit at the end of the *text*, which is a document coordinate,
+        /// and being in the document is also what scrolls it for free.
+        let blame = NSTextField(labelWithString: "")
+        blame.isHidden = true
+        blame.lineBreakMode = .byTruncatingTail
+        blame.isSelectable = false
+        /// Paint, not a control: a click here belongs to the text under it.
+        blame.refusesFirstResponder = true
+        textView.addSubview(blame)
+        context.coordinator.blameLabel = blame
 
         let container = NSView()
         container.addSubview(gutter)
@@ -476,6 +498,10 @@ struct CodeTextView: NSViewRepresentable {
         context.coordinator.scheduleConflictRefresh()
         context.coordinator.layoutConflictBars()
 
+        context.coordinator.documentPath = documentPath
+        context.coordinator.updateBlameGhost(
+            blameGhost, theme: theme, font: configuration.font)
+
         // After the text, so a jump into a file that is being opened in the
         // same breath lands on a document that already has its content.
         if let reveal { context.coordinator.reveal(reveal) }
@@ -522,6 +548,11 @@ struct CodeTextView: NSViewRepresentable {
         /// the text and the text lives in this view: a copy passed down from
         /// SwiftUI would be one update behind on the pass that matters, which
         /// is the one right after a resolution rewrites the document.
+        /// The path and the ghost label, for the line history in the margin
+        /// of the caret's own line.
+        var documentPath: String?
+        weak var blameLabel: NSTextField?
+
         private var conflicts: [EditorConflict] = []
         private var conflictBars: [EditorConflictBar] = []
         private var conflictTask: Task<Void, Never>?
@@ -1068,6 +1099,12 @@ struct CodeTextView: NSViewRepresentable {
             guard text != appliedConflictText else { return }
             appliedConflictText = text
 
+            /// An edit moves every line below it, so a cached blame answer
+            /// is now attached to the wrong line. Done here rather than on
+            /// the keystroke because it walks the cache, and the answer it
+            /// protects is only read when the caret settles.
+            if let documentPath { EditorBlameCenter.shared.invalidate(path: documentPath) }
+
             let found = EditorConflictParser.mayHoldConflict(text)
                 ? EditorConflictParser.conflicts(in: text)
                 : []
@@ -1087,6 +1124,65 @@ struct CodeTextView: NSViewRepresentable {
                 return bar
             }
             layoutConflictBars()
+        }
+
+        /// A line separator, as UTF-16 sees one. `\r\n` is two of these, which
+        /// is why the caller loops rather than stepping back once.
+        private func isNewline(_ unit: unichar) -> Bool {
+            unit == 0x000A || unit == 0x000D || unit == 0x2028 || unit == 0x2029
+        }
+
+        /// Draws the line's history after the end of the line, or takes it
+        /// down.
+        ///
+        /// Positioned from the caret's own geometry rather than from a layout
+        /// fragment, for the reason `updateCurrentLineBand` records: the two
+        /// can disagree, and the caret is the thing the reader sees.
+        func updateBlameGhost(_ text: String?, theme: CodeTheme, font: NSFont) {
+            guard let label = blameLabel, let textView else { return }
+
+            guard let text, !text.isEmpty else {
+                label.isHidden = true
+                return
+            }
+
+            let selection = textView.selectedRange()
+            guard selection.length == 0 else {
+                label.isHidden = true
+                return
+            }
+
+            let line = (textView.string as NSString)
+                .lineRange(for: NSRange(location: selection.location, length: 0))
+            /// The end of the text, not the end of the line range: the range
+            /// takes the newline with it, and measuring at the newline puts
+            /// the label at the start of the row below.
+            let full = textView.string as NSString
+            var end = line.location + line.length
+            while end > line.location, isNewline(full.character(at: end - 1)) {
+                end -= 1
+            }
+
+            guard let caret = Self.caretRectInView(of: textView, caret: end) else {
+                label.isHidden = true
+                return
+            }
+
+            label.stringValue = text
+            label.font = .systemFont(ofSize: max(9, font.pointSize - 2))
+            label.textColor = theme.lineNumber.withAlphaComponent(0.75)
+            label.sizeToFit()
+
+            let gap: CGFloat = 24
+            let x = caret.maxX + gap
+            let available = max(0, textView.bounds.width - x - 12)
+            label.isHidden = available < 40
+            label.frame = NSRect(
+                x: x,
+                y: caret.minY + ((caret.height - label.frame.height) / 2).rounded(),
+                width: min(label.frame.width, available),
+                height: label.frame.height
+            )
         }
 
         /// Puts each bar at the trailing edge of its own `<<<<<<<` line.
@@ -1459,6 +1555,15 @@ struct CodeTextView: NSViewRepresentable {
             gutter?.setCurrentLine(currentLineNumber(in: textView))
             updateCurrentLineBand()
             highlightBracketMatch()
+
+            /// Asked on every caret move, and cheap on all but the first: the
+            /// centre answers a repeated question from its cache and only
+            /// spawns `git blame` for a line it has not seen.
+            EditorBlameCenter.shared.request(
+                path: documentPath,
+                line: textView.selectedRange().length == 0
+                    ? currentLineNumber(in: textView)
+                    : nil)
         }
 
         /// Moves the band to the line the insertion point is on.

@@ -332,6 +332,10 @@ private struct DocumentView: View {
     /// baseline and the marks appear a moment later.
     @ObservedObject private var baseline: EditorGitBaseline = .shared
 
+    /// Who last changed the line the caret is on. Observed so the sentence
+    /// appears when `git blame` answers, which is after the caret moved.
+    @ObservedObject private var blame: EditorBlameCenter = .shared
+
     /// The working directory of the terminal this pane belongs to, or nil
     /// while it has not reported one. A plain value rather than the
     /// observable it came from: what this view does with it is compare it
@@ -772,6 +776,8 @@ private struct DocumentView: View {
             reveal: revealRange,
             gutterMark: gutterMark,
             diffBaseline: baseline.baseline(for: document.url.path),
+            documentPath: document.url.path,
+            blameGhost: blame.current?.ghostText,
             onJumpToDefinition: { offset in jump(from: offset) },
             onRename: { offset in
                 newName = EditorPaneView.identifier(at: offset, in: document.currentText)

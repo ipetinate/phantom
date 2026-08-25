@@ -20,6 +20,23 @@ struct GitDiffView<Accessory: View>: View {
 
     @State private var outcome: GitDiffOutcome?
 
+    /// Whether the unchanged parts of the file are on screen too.
+    ///
+    /// Not a rendering choice: git decides what to print, so showing the rest
+    /// means asking it again with enough context to cover any file. Kept per
+    /// view rather than remembered, because it answers a question about the
+    /// diff being looked at now — a reader who expanded one file was asking
+    /// about that file.
+    @State private var showsWholeFile = false
+
+    /// Enough context to reach the top and bottom of anything. Git clamps it
+    /// to the file, so a number larger than any real file is the whole file
+    /// without having to count its lines first.
+    ///
+    /// Computed rather than stored because this type is generic over its
+    /// accessory, and a generic type cannot carry a static stored property.
+    private static var wholeFileContext: Int { 1_000_000 }
+
     /// Changes exactly when the diff on screen has gone stale.
     ///
     /// Deliberately **not** the document's edit revision: that moves on
@@ -38,7 +55,7 @@ struct GitDiffView<Accessory: View>: View {
 
     var body: some View {
         content
-            .task(id: reloadKey) { await load() }
+            .task(id: "\(reloadKey)\u{1}\(showsWholeFile)") { await load() }
     }
 
     @ViewBuilder
@@ -95,7 +112,8 @@ struct GitDiffView<Accessory: View>: View {
                 palette: palette,
                 font: font,
                 scrollSync: model.scrollSync,
-                syncSide: .first
+                syncSide: .first,
+                onExpandGap: showsWholeFile ? nil : { showsWholeFile = true }
             )
         } second: {
             GitDiffPane(
@@ -105,10 +123,27 @@ struct GitDiffView<Accessory: View>: View {
                 palette: palette,
                 font: font,
                 scrollSync: model.scrollSync,
-                syncSide: .second
+                syncSide: .second,
+                onExpandGap: showsWholeFile ? nil : { showsWholeFile = true }
             )
         } accessory: {
-            accessory()
+            HStack(spacing: 6) {
+                /// The way back. Clicking a gap is how the whole file is
+                /// asked for, and a gap that has been expanded is no longer
+                /// on screen to be clicked again — so without this the only
+                /// way back to the changes alone is to close the tab.
+                Button {
+                    showsWholeFile.toggle()
+                } label: {
+                    Image(systemName: showsWholeFile
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right")
+                }
+                .buttonStyle(.plain)
+                .help(showsWholeFile ? "Show changes only" : "Show the whole file")
+
+                accessory()
+            }
         }
         .onAppear { linkPanes() }
         /// Turned off on the way out because the model — and so the link —
@@ -165,8 +200,9 @@ struct GitDiffView<Accessory: View>: View {
 
         /// Off the main actor because it spawns `git` and waits on it. The
         /// loader is `nonisolated` for exactly this call.
+        let context = showsWholeFile ? Self.wholeFileContext : GitDiffLoader.defaultContext
         let result = await Task.detached(priority: .userInitiated) {
-            GitDiffLoader.load(change, side: side, in: root)
+            GitDiffLoader.load(change, side: side, in: root, context: context)
         }.value
 
         outcome = result
