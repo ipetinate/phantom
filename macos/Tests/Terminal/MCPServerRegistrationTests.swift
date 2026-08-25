@@ -651,4 +651,58 @@ struct CodexMCPInstallerTests {
     @Test func anEmptyBundleIDFallsBackToThePlainName() {
         #expect(MCPServerCommand.name(forBundleID: "") == "phantom")
     }
+
+    // MARK: Kimi and Pi
+
+    /// Kimi's file is the same shape as Claude Code's and holds nothing else,
+    /// which is the whole reason its installer is the shortest here: no login
+    /// session, no model setting, no permission mode in the blast radius.
+    @Test func kimiTakesACommandAndArgumentsInItsOwnFile() throws {
+        let entry = try #require(KimiMCPInstaller.entry)
+
+        #expect(entry["command"] as? String == MCPServerCommand.executablePath)
+        #expect(entry["args"] as? [String] == ["+mcp-server"])
+        #expect(KimiMCPInstaller.configURL.path.hasSuffix("/mcp.json"))
+        #expect(KimiMCPInstaller.key == "mcpServers")
+    }
+
+    /// Not in `config.toml`. Kimi documents MCP as living in its own file, and
+    /// writing the TOML instead would put an entry where nothing reads it while
+    /// risking the settings that *are* in there.
+    @Test func kimiDoesNotWriteTheTomlConfig() {
+        #expect(!KimiMCPInstaller.configURL.path.hasSuffix("config.toml"))
+    }
+
+    /// `type` is omitted on purpose: Kimi documents an entry with a `command`
+    /// as being stdio, so a key its documentation never mentions is a key it
+    /// might reject.
+    @Test func kimiWritesNoTypeKey() throws {
+        let entry = try #require(KimiMCPInstaller.entry)
+
+        #expect(entry["type"] == nil)
+    }
+
+    @Test func piWritesWhereItsExtensionReads() throws {
+        let entry = try #require(PiMCPInstaller.entry)
+
+        #expect(entry["command"] as? String == MCPServerCommand.executablePath)
+        #expect(PiMCPInstaller.configURL.path.hasSuffix("/.pi/agent/mcp.json"))
+        #expect(PiMCPInstaller.key == "mcpServers")
+    }
+
+    /// The registry's own note has to say Pi is conditional, because a reader
+    /// who registers it and sees nothing appear would otherwise have no way to
+    /// find out why.
+    @Test func theFooterSaysPiNeedsAnExtension() {
+        #expect(MCPServerRegistration.footer.contains("Pi has no MCP client of its own"))
+    }
+
+    /// Both entries name this bundle rather than a written-down path, which is
+    /// what makes them repairable when the app moves.
+    @Test func bothPointAtThisCopyOfPhantom() throws {
+        let path = try #require(MCPServerCommand.executablePath)
+
+        #expect(KimiMCPInstaller.entry?["command"] as? String == path)
+        #expect(PiMCPInstaller.entry?["command"] as? String == path)
+    }
 }

@@ -55,6 +55,20 @@ enum MCPServerRegistration {
                 remove: { AntigravityMCPInstaller.remove() },
                 repairIfStale: { AntigravityMCPInstaller.repairIfStale() },
                 lastError: { AntigravityMCPInstaller.lastError }),
+            Agent(
+                id: .kimi,
+                isRegistered: { KimiMCPInstaller.isRegistered },
+                register: { KimiMCPInstaller.register() },
+                remove: { KimiMCPInstaller.remove() },
+                repairIfStale: { KimiMCPInstaller.repairIfStale() },
+                lastError: { KimiMCPInstaller.lastError }),
+            Agent(
+                id: .pi,
+                isRegistered: { PiMCPInstaller.isRegistered },
+                register: { PiMCPInstaller.register() },
+                remove: { PiMCPInstaller.remove() },
+                repairIfStale: { PiMCPInstaller.repairIfStale() },
+                lastError: { PiMCPInstaller.lastError }),
         ]
     }
 
@@ -66,19 +80,13 @@ enum MCPServerRegistration {
     /// fails the suite until somebody decides which side it belongs on. That is
     /// the point — the decision is cheap, the silence is not.
     ///
-    /// **Kimi and Pi.** Both were added as agents on the strength of documented
-    /// launch and resume flags, and neither has a *verified* MCP configuration
-    /// surface. Kimi keeps its settings in TOML at `~/.kimi-code/config.toml`
-    /// and its own documentation steers the reader to configure MCP by talking
-    /// to the agent rather than by editing a file, so the file's shape for an
-    /// MCP entry is not established. Pi's extension system is TypeScript
-    /// modules rather than declarative configuration, which is a different
-    /// shape from every installer here.
-    ///
-    /// Writing into either on a guess is the one thing an installer must never
-    /// do: these files belong to other programs, and a malformed entry is a
-    /// failure the reader sees in that program with nothing pointing back here.
-    static let withoutInstaller: Set<CodingAgent> = [.kimi, .pi]
+    /// Empty, and kept rather than deleted. It held Kimi and Pi for exactly as
+    /// long as it took to establish where each of them keeps MCP declarations —
+    /// Kimi in its own `mcp.json` rather than in `config.toml`, Pi in a file
+    /// read by an extension rather than by Pi itself — and the mechanism is
+    /// what made that a decision somebody had to make instead of a gap nobody
+    /// noticed. The next agent gets the same treatment.
+    static let withoutInstaller: Set<CodingAgent> = []
 
     /// Who is registered right now, read off disk each time.
     ///
@@ -103,5 +111,5 @@ enum MCPServerRegistration {
         for agent in agents { _ = agent.repairIfStale() }
     }
 
-    static let footer = "Writes Phantom's MCP server into each agent's own configuration, merging rather than replacing it. The entry points at this copy of Phantom, so it is rewritten when the app moves. Claude Code and Antigravity take it as a command and its arguments, Codex as a TOML table, OpenCode as a single command array \u{2014} each shape from that agent's own documentation."
+    static let footer = "Writes Phantom's MCP server into each agent's own configuration, merging rather than replacing it. The entry points at this copy of Phantom, so it is rewritten when the app moves. Claude Code, Antigravity and Kimi Code take it as a command and its arguments, Codex as a TOML table, OpenCode as a single command array \u{2014} each shape from that agent's own documentation. Pi has no MCP client of its own: the file is written where the community extension for it reads, so the entry is live only once that extension is installed."
 }
