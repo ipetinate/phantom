@@ -16,9 +16,38 @@ import Foundation
 @MainActor
 enum MCPServerCommand {
     /// The name each agent lists the server under. The reader sees this in
-    /// their agent's own output, so it is the app's name and not an internal
-    /// one — the same name `MCPService.serverName` answers `initialize` with.
-    static let name = MCPService.serverName
+    /// their agent's own output, so it starts from the app's name rather than
+    /// an internal one — the same name `MCPService.serverName` answers
+    /// `initialize` with.
+    ///
+    /// **Suffixed per build, and that is the whole point.** A debug build and a
+    /// release build have different bundle ids and so different sockets — which
+    /// is one of the reasons a socket was chosen over a port — but they used to
+    /// write the *same* entry name into the same user-scope configuration,
+    /// each pointing at its own bundle. With both installed, whichever launched
+    /// last repaired the shared entry to itself, so the agent silently followed
+    /// the build the reader happened to open most recently. Nothing about that
+    /// looks like a fault: the server connects, answers, and lists tools for
+    /// the wrong set of windows.
+    ///
+    /// The suffix comes off the bundle id, so the rule matches the socket's
+    /// exactly rather than being a second convention that agrees today:
+    /// `com.ipetinate.phantom` stays `phantom`, `com.ipetinate.phantom.debug`
+    /// becomes `phantom-debug`.
+    static var name: String {
+        let id = Bundle.main.bundleIdentifier ?? ""
+        return name(forBundleID: id)
+    }
+
+    /// The rule itself, without a bundle, so it can be asserted.
+    static func name(forBundleID id: String) -> String {
+        let base = MCPService.serverName
+        guard let variant = id.split(separator: ".").last,
+              !variant.isEmpty,
+              variant.lowercased() != base
+        else { return base }
+        return "\(base)-\(variant.lowercased())"
+    }
 
     /// The CLI action. Written here as the single spelling of it, so the four
     /// installers cannot come to disagree about the word.

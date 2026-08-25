@@ -15,6 +15,11 @@ struct MCPService {
     /// What the app calls itself to a client. The name reaches the reader in
     /// their agent's own listing of servers, so it is the app's name and not
     /// an internal one.
+    ///
+    /// The base of it. What a client is actually answered with is
+    /// ``MCPServerCommand/name``, which adds the build variant — the two have
+    /// to agree, because a reader chasing a server in their agent's output must
+    /// find the same word in the listing and in the handshake.
     static let serverName = "phantom"
 
     /// The revision of MCP this speaks. Sent back in `initialize`; a client
@@ -67,7 +72,7 @@ struct MCPService {
                 "protocolVersion": .string(Self.protocolVersion),
                 "capabilities": .object(["tools": .object(["listChanged": .bool(true)])]),
                 "serverInfo": .object([
-                    "name": .string(Self.serverName),
+                    "name": .string(MCPServerCommand.name),
                     "version": .string(Self.appVersion),
                 ]),
             ]))

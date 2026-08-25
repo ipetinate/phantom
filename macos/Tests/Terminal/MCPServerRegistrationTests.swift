@@ -341,11 +341,16 @@ struct MCPServerRegistrationTests {
         }
     }
 
-    /// One name across all four, and the one the agent's own listing shows the
-    /// reader. It is also what `initialize` answers with, so a reader chasing a
-    /// server in their agent's output finds the same word in both places.
+    /// One name across all four installers, and the same word the handshake
+    /// answers with — so a reader chasing a server in their agent's output
+    /// finds it spelled identically in the listing and in `initialize`.
+    ///
+    /// No longer the bare `MCPService.serverName`, which is the *base* of it:
+    /// the entry carries the build variant so two installed builds cannot
+    /// overwrite each other's registration. The invariant that matters is that
+    /// the two places agree, and that is what is asserted.
     @Test func theServerIsCalledTheSameThingEverywhere() {
-        #expect(MCPServerCommand.name == MCPService.serverName)
+        #expect(MCPServerCommand.name.hasPrefix(MCPService.serverName))
         #expect(MCPServerCommand.action == "+mcp-server")
         #expect(MCPServerCommand.arguments == ["+mcp-server"])
     }
@@ -591,5 +596,41 @@ struct CodexMCPInstallerTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("phantom-codex-\(UUID().uuidString).toml")
         #expect(CodexMCPInstaller.read(at: url) == "")
+    }
+
+    // MARK: One entry name per build
+
+    /// The release build keeps the plain name, which is what the reader sees
+    /// in their agent's own output.
+    @Test func theReleaseBuildIsCalledPhantom() {
+        #expect(MCPServerCommand.name(forBundleID: "com.ipetinate.phantom") == "phantom")
+    }
+
+    /// The bug this exists for. Two builds have different bundle ids and so
+    /// different sockets, but they used to write one shared entry name into one
+    /// shared configuration, each pointing at its own bundle — so whichever
+    /// launched last repaired it to itself and the agent quietly followed the
+    /// wrong build. It never looks like a fault: the server connects, answers,
+    /// and lists tools for another set of windows.
+    @Test func aDebugBuildDoesNotTakeTheReleaseBuildsName() {
+        let release = MCPServerCommand.name(forBundleID: "com.ipetinate.phantom")
+        let debug = MCPServerCommand.name(forBundleID: "com.ipetinate.phantom.debug")
+
+        #expect(debug == "phantom-debug")
+        #expect(debug != release)
+    }
+
+    /// Any variant, not a list of the two that exist today.
+    @Test func anyBundleVariantGetsItsOwnName() {
+        #expect(MCPServerCommand.name(forBundleID: "com.ipetinate.phantom.beta")
+            == "phantom-beta")
+        #expect(MCPServerCommand.name(forBundleID: "com.ipetinate.phantom.Debug")
+            == "phantom-debug")
+    }
+
+    /// A bundle with no id at all still gets a usable name rather than a
+    /// trailing dash.
+    @Test func anEmptyBundleIDFallsBackToThePlainName() {
+        #expect(MCPServerCommand.name(forBundleID: "") == "phantom")
     }
 }
