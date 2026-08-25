@@ -63,10 +63,12 @@ enum MCPEditorTools {
         agent: @escaping (UUID?) -> CodingAgent? = MCPEditorTools.agent(inTab:)
     ) -> [MCPToolHandler] {
         [
+            listPanes(editor),
             openFile(editor),
             openFileInSplit(editor),
             focusTab(editor),
             revealLine(editor, agent),
+            closeTab(editor),
         ]
     }
 
@@ -130,6 +132,128 @@ enum MCPEditorTools {
 
     // MARK: The tools
 
+    /// The cells of the grid, so an agent can name one it already made.
+    ///
+    /// The gap this closes: every other tool here addresses either "the cell
+    /// with focus" or "a brand new cell", so an agent that split the editor
+    /// had no way to refer back to the half it just created. Its only verb was
+    /// *add*, and a reader who asked for two files side by side got a third
+    /// pane for the second file. Naming a cell is what turns `open_file` into
+    /// the merge gesture.
+    private static func listPanes(_ editor: @escaping (UUID?) -> EditorCenter?) -> MCPToolHandler {
+        MCPToolHandler(
+            tool: MCPTool(
+                name: "list_panes",
+                description: """
+                    List the cells of this window's editor: each one's id, the files it \
+                    holds, and which of them it is showing. Use it before open_file \
+                    whenever the reader already has a cell the file belongs in — open_file \
+                    takes a “pane” id from here, and that is the whole difference between \
+                    reusing a cell and dividing the editor again. Call it afresh after any \
+                    split or close: a cell that runs out of files closes itself.
+                    """,
+                schema: MCPSchema.object([:]))
+        ) { context, answer in
+            guard let center = editor(context.callerSurface) else {
+                return answer(.refused(noEditor(for: "list_panes")))
+            }
+
+            let panes = center.tree.groups.map { group in
+                JSONValue.object([
+                    "id": .string(group.id.uuidString),
+                    "focused": .bool(group.id == center.activeGroupID),
+                    "hosts_terminal": .bool(group.hostsTerminal),
+                    "showing": showing(group),
+                    "files": .array(group.tabs.tabs.map { tab in
+                        .object([
+                            "path": .string(tab.path),
+                            "name": .string(tab.name),
+                            "dirty": .bool(isDirty(tab.path, in: center)),
+                            "pinned": .bool(tab.isPinned),
+                            "selected": .bool(group.tabs.selectedPath == tab.path),
+                        ])
+                    }),
+                ])
+            }
+
+            answer(.json(.object([
+                "panes": .array(panes),
+                "count": .number(Double(panes.count)),
+            ])))
+        }
+    }
+
+    /// What a cell is showing: a file's path, or the terminal.
+    ///
+    /// The terminal is a tab like any other in this model, and exactly one
+    /// cell holds it, so a cell showing it has no selected *file*. Answering
+    /// null there would read as "showing nothing", which is a different fact.
+    private static func showing(_ group: EditorGroup) -> JSONValue {
+        if group.tabs.showsTerminal { return .string("terminal") }
+        return group.tabs.selectedPath.map { .string($0) } ?? .null
+    }
+
+    /// Whether a file has edits that are not on disk.
+    ///
+    /// Asked of `documents` rather than of the tab's own flag, because that is
+    /// the map `requestClose` consults before it puts a question to the
+    /// reader. A tool that refused on one source while the tab bar drew the
+    /// other would be a tool that disagrees with the dot the reader is looking
+    /// at. A media file has no document and no edits.
+    private static func isDirty(_ path: String, in center: EditorCenter) -> Bool {
+        center.documents[path]?.isDirty == true
+    }
+
+    /// A cell id as the caller spelled it, or nil for one that is not there.
+    ///
+    /// An id and never a position. A cell's place in the grid changes whenever
+    /// any other cell opens or closes, so "the second pane" names a different
+    /// cell a moment later — and an agent acting on a stale index would put
+    /// the reader's file in a pane they never pointed at. An id survives a tab
+    /// moving between cells and dies with the cell itself, which is the only
+    /// lifetime worth handing to a caller that thinks between calls.
+    private static func pane(_ named: String, in center: EditorCenter) -> EditorGroup.ID? {
+        guard let id = UUID(uuidString: named), center.tree.group(id) != nil else { return nil }
+        return id
+    }
+
+    /// What an unknown cell id says.
+    ///
+    /// It lists the cells that do exist, because the likeliest reason an id is
+    /// unknown is that its cell closed itself when its last file went — and an
+    /// agent told only "no such pane" would ask for the same one again.
+    static func paneRefusal(_ named: String, in center: EditorCenter, for tool: String) -> String {
+        let cells = center.tree.groups
+        let ids = cells.map(\.id.uuidString).joined(separator: ", ")
+        return "“\(named)” is not a cell in this window's editor, so \(tool) has nowhere "
+            + "to put anything. A cell closes itself when its last file closes. There "
+            + "\(cells.count == 1 ? "is 1 cell" : "are \(cells.count) cells") right now: "
+            + "\(ids). Call list_panes for what each one holds."
+    }
+
+    /// What `open_file` says it did, which is not always what it was asked.
+    ///
+    /// Reopening never duplicates: a file already open in one cell is selected
+    /// where it sits rather than moved, so a `pane` naming a different cell
+    /// does not get the file. Reporting the requested cell there would have
+    /// the agent build its next call on a layout nobody has — the same lie the
+    /// split's message already refuses to tell.
+    private static func openMessage(
+        _ path: String,
+        wasOpen: Bool,
+        requested: EditorGroup.ID?,
+        holder: EditorGroup.ID?
+    ) -> String {
+        if let requested, let holder, requested != holder {
+            return "\(path) was already open in another cell, so that is where it stayed "
+                + "and its tab is now the one in front there. A file is never open in two "
+                + "cells at once; close it first if it has to move."
+        }
+        if wasOpen { return "\(path) was already open; its tab is now the one in front." }
+        if requested != nil { return "Opened \(path) in the cell you named." }
+        return "Opened \(path) in this window's editor."
+    }
+
     private static func openFile(_ editor: @escaping (UUID?) -> EditorCenter?) -> MCPToolHandler {
         MCPToolHandler(
             tool: MCPTool(
@@ -138,9 +262,9 @@ enum MCPEditorTools {
                     Open a file in the editor of the window this agent is running in. \
                     Use it to put a file in front of the reader: after you change it, \
                     before you explain it, or when you name it in an answer. \
-                    It opens in the pane cell that has focus and types nothing into any \
-                    shell. Reading is not what this is for — it answers with a \
-                    confirmation, never with the file's text.
+                    It opens in the cell that has focus, or in the cell you name with \
+                    “pane”, and types nothing into any shell. Reading is not what this \
+                    is for — it answers with a confirmation, never with the file's text.
                     """,
                 schema: MCPSchema.object(
                     [
@@ -148,12 +272,25 @@ enum MCPEditorTools {
                             "Absolute path to the file. A leading ~ is expanded; "
                             + "a relative path is refused, because this app cannot know "
                             + "which directory you meant."),
+                        "pane": MCPSchema.string(
+                            "Id of the cell to open it in, from list_panes. Omit it to "
+                            + "use the cell that has focus. Name one to put a second file "
+                            + "beside the first instead of dividing the editor again."),
                     ],
                     required: ["path"])
             )
         ) { context, answer in
             guard let center = editor(context.callerSurface) else {
                 return answer(.refused(noEditor(for: "open_file")))
+            }
+
+            var requested: EditorGroup.ID?
+            if let named = context.string("pane") {
+                guard let id = pane(named, in: center) else {
+                    return answer(.refused(paneRefusal(named, in: center, for: "open_file")))
+                }
+                center.focus(id)
+                requested = id
             }
 
             switch file(context.string("path"), for: "open_file") {
@@ -164,10 +301,13 @@ enum MCPEditorTools {
                 guard center.open(url) else {
                     return answer(.refused(openFailure(center, url: url)))
                 }
-                answer(.text(
-                    wasOpen
-                        ? "\(url.path) was already open; its tab is now the one in front."
-                        : "Opened \(url.path) in this window's editor."))
+
+                let holder = center.tree.groupHolding(url.path)
+                answer(.json(.object([
+                    "pane": holder.map { .string($0.uuidString) } ?? .null,
+                    "message": .string(openMessage(
+                        url.path, wasOpen: wasOpen, requested: requested, holder: holder)),
+                ])))
             }
         }
     }
@@ -229,13 +369,21 @@ enum MCPEditorTools {
                 /// started. That is the layout the reader gets, so it is what
                 /// the answer says — reporting a split that is not on screen
                 /// would have the agent describe a pane nobody has.
-                answer(.text(
-                    center.tree.groups.count > cells
-                        ? "Opened \(url.path) in a new cell, \(direction.rawValue) "
-                        + "of the one that had focus."
-                        : "Opened \(url.path). The pane was not divided: the cell it "
-                        + "opened in had nothing else to keep, and an empty half "
-                        + "closes itself."))
+                let divided = center.tree.groups.count > cells
+                let holder = center.tree.groupHolding(url.path)
+                answer(.json(.object([
+                    "pane": holder.map { .string($0.uuidString) } ?? .null,
+                    "divided": .bool(divided),
+                    "message": .string(
+                        divided
+                            ? "Opened \(url.path) in a new cell, \(direction.rawValue) of "
+                            + "the one that had focus. Pass this “pane” id to open_file to "
+                            + "put the next file in that same cell, instead of dividing "
+                            + "the editor again."
+                            : "Opened \(url.path). The pane was not divided: the cell it "
+                            + "opened in had nothing else to keep, and an empty half "
+                            + "closes itself."),
+                ])))
             }
         }
     }
@@ -271,6 +419,71 @@ enum MCPEditorTools {
 
             center.select(path)
             answer(.text("Selected \(path) in this window's editor."))
+        }
+    }
+
+    /// Closing one tab, which is also how two cells become one.
+    ///
+    /// The only tool here that takes something off the reader's screen, and it
+    /// exists because the agent could previously only add: asked to show two
+    /// files side by side and then to tidy up, it had no verb for the second
+    /// half and told the reader to drag a tab by hand. A cell whose last file
+    /// closes is removed by the tree, so this is the merge gesture as well as
+    /// the close one.
+    ///
+    /// **Unsaved edits are refused, not saved and not discarded.** Either
+    /// choice would be the agent deciding what happens to work the reader
+    /// typed and has not committed to disk. `requestClose` puts that question
+    /// to a person for a reason, and a tool that answered it for them would be
+    /// the one irreversible thing in this file. This is the same shape as
+    /// `run_command` refusing a busy terminal.
+    private static func closeTab(_ editor: @escaping (UUID?) -> EditorCenter?) -> MCPToolHandler {
+        MCPToolHandler(
+            tool: MCPTool(
+                name: "close_tab",
+                description: """
+                    Close an open file's tab in this window's editor. Use it to undo your \
+                    own clutter — a file you opened to check one thing, or a cell you \
+                    split out and no longer need. Closing the last file in a cell closes \
+                    that cell too, so this is also how you put two panes back into one. \
+                    It refuses a file with unsaved edits rather than deciding for the \
+                    reader, and it cannot close the terminal.
+                    """,
+                schema: MCPSchema.object(
+                    ["path": MCPSchema.string("Absolute path of the open file to close.")],
+                    required: ["path"])
+            )
+        ) { context, answer in
+            guard let center = editor(context.callerSurface) else {
+                return answer(.refused(noEditor(for: "close_tab")))
+            }
+
+            guard let path = absolutePath(context.string("path")) else {
+                return answer(.refused(pathRefusal(context.string("path"), for: "close_tab")))
+            }
+
+            guard center.isOpen(path) else {
+                return answer(.refused(
+                    "\(path) is not open in this window's editor, so there is no tab to "
+                    + "close. Call list_panes for what is open."))
+            }
+
+            guard !isDirty(path, in: center) else {
+                return answer(.refused(
+                    "\(path) has edits that are not saved, so it stays open. What happens "
+                    + "to unsaved work is the reader's call: they close it with the tab's "
+                    + "× or ⌘W, which asks them first. Nothing here saves or discards it "
+                    + "for them."))
+            }
+
+            let cells = center.tree.groups.count
+            center.close(path)
+
+            answer(.text(
+                center.tree.groups.count < cells
+                    ? "Closed \(path). It was the last file in its cell, so that cell "
+                    + "closed with it and the editor is one pane simpler."
+                    : "Closed \(path)."))
         }
     }
 

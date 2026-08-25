@@ -54,16 +54,35 @@ struct MCPEditorToolsTests {
         return reason
     }
 
+    /// The sentence a tool answered with, wherever it put it.
+    ///
+    /// Two tools now answer with an object rather than a string, because they
+    /// hand back the id of the cell the file landed in — a caller that had to
+    /// scrape that id out of prose would be a caller we broke on the next
+    /// rewording. The sentence still has to read well, so it lives under
+    /// `message` and every assertion about wording keeps working.
     private func text(_ result: MCPToolResult?) -> String? {
-        guard case .text(let value)? = result else { return nil }
-        return value
+        switch result {
+        case .text(let value): return value
+        case .json(let value): return value.object?["message"]?.string
+        default: return nil
+        }
+    }
+
+    /// The cell id a tool reports having used.
+    private func pane(_ result: MCPToolResult?) -> String? {
+        guard case .json(let value)? = result else { return nil }
+        return value.object?["pane"]?.string
     }
 
     // MARK: What is on offer
 
-    @Test func theToolsAreTheFourTheEditorOffers() {
+    @Test func theToolsAreTheSixTheEditorOffers() {
         let names = tools(EditorCenter()).map(\.tool.name)
-        #expect(names == ["open_file", "open_file_in_split", "focus_tab", "reveal_line"])
+        #expect(names == [
+            "list_panes", "open_file", "open_file_in_split",
+            "focus_tab", "reveal_line", "close_tab",
+        ])
     }
 
     /// The description is the only thing deciding whether a tool is reached
@@ -87,6 +106,13 @@ struct MCPEditorToolsTests {
         #expect(required["open_file_in_split"] == [.string("path"), .string("direction")])
         #expect(required["focus_tab"] == [.string("path")])
         #expect(required["reveal_line"] == [.string("path"), .string("line")])
+        #expect(required["close_tab"] == [.string("path")])
+
+        /// A cell is optional everywhere it is accepted: every one of these
+        /// tools worked before ids existed, and an argument that suddenly
+        /// became mandatory would break every caller written against them.
+        #expect(required["list_panes"] == nil || required["list_panes"] == [])
+        #expect(required["open_file"]?.contains(.string("pane")) != true)
     }
 
     /// Left, right, up and down are what a person writes in a prompt; the
@@ -194,6 +220,119 @@ struct MCPEditorToolsTests {
         let reason = refusal(run(tool("open_file", center), [:], client: center))
 
         #expect(reason?.contains("“path”") == true)
+    }
+
+    // MARK: Naming a cell
+
+    /// The bug this whole group of tools was added for, as a test.
+    ///
+    /// An agent asked to show two files side by side used to split for the
+    /// first and split again for the second, because "the cell I just made"
+    /// was not something it could say. Two files, two calls, and the reader
+    /// got three panes and a request to drag a tab by hand.
+    @Test func aSecondFileJoinsTheCellTheFirstOneMade() {
+        let center = EditorCenter()
+        let first = file()
+        let second = file()
+        defer { remove(first, second) }
+
+        let split = run(
+            tool("open_file_in_split", center),
+            ["path": .string(first), "direction": .string("right")],
+            client: center)
+        let cell = pane(split)
+        #expect(cell != nil)
+        #expect(center.tree.groups.count == 2)
+
+        _ = run(
+            tool("open_file", center),
+            ["path": .string(second), "pane": .string(cell!)],
+            client: center)
+
+        #expect(center.tree.groups.count == 2)
+        #expect(center.tree.groupHolding(second)?.uuidString == cell)
+    }
+
+    @Test func listPanesNamesTheCellWithFocus() {
+        let center = EditorCenter()
+        let path = file()
+        defer { remove(path) }
+        _ = run(
+            tool("open_file_in_split", center),
+            ["path": .string(path), "direction": .string("right")],
+            client: center)
+
+        let result = run(tool("list_panes", center), [:], client: center)
+
+        guard case .json(let value)? = result else { return #expect(Bool(false)) }
+        let panes = value.object?["panes"]?.array ?? []
+        #expect(panes.count == 2)
+        let focused = panes.filter { $0.object?["focused"]?.bool == true }
+        #expect(focused.count == 1)
+        #expect(focused.first?.object?["id"]?.string == center.activeGroupID.uuidString)
+    }
+
+    /// A cell that closed itself is the likeliest id an agent still holds, so
+    /// the refusal has to be the one that teaches rather than the one that
+    /// repeats.
+    @Test func openFileRefusesACellThatIsNotThere() {
+        let center = EditorCenter()
+        let path = file()
+        defer { remove(path) }
+
+        let reason = refusal(run(
+            tool("open_file", center),
+            ["path": .string(path), "pane": .string(UUID().uuidString)],
+            client: center))
+
+        #expect(reason?.contains("list_panes") == true)
+        #expect(center.isOpen(path) == false)
+    }
+
+    // MARK: close_tab
+
+    /// Closing the last file in a cell is how two panes become one, which is
+    /// the gesture the reader had to perform by hand.
+    @Test func closingTheLastFileInACellClosesTheCell() {
+        let center = EditorCenter()
+        let path = file()
+        defer { remove(path) }
+        _ = run(
+            tool("open_file_in_split", center),
+            ["path": .string(path), "direction": .string("right")],
+            client: center)
+        #expect(center.tree.groups.count == 2)
+
+        let answer = text(run(tool("close_tab", center), ["path": .string(path)], client: center))
+
+        #expect(center.tree.groups.count == 1)
+        #expect(center.isOpen(path) == false)
+        #expect(answer?.contains("cell") == true)
+    }
+
+    /// Neither saved nor discarded: what happens to work the reader typed is
+    /// not the agent's call.
+    @Test func closeTabRefusesAFileWithUnsavedEdits() {
+        let center = EditorCenter()
+        let path = file()
+        defer { remove(path) }
+        _ = center.open(URL(fileURLWithPath: path))
+        center.documents[path]?.edited("edited, never saved\n")
+
+        let reason = refusal(run(tool("close_tab", center), ["path": .string(path)], client: center))
+
+        #expect(reason?.contains("not saved") == true)
+        #expect(center.isOpen(path))
+    }
+
+    @Test func closeTabRefusesAFileThatIsNotOpen() {
+        let center = EditorCenter()
+        let path = file()
+        defer { remove(path) }
+
+        let reason = refusal(run(tool("close_tab", center), ["path": .string(path)], client: center))
+
+        #expect(reason?.contains("not open") == true)
     }
 
     // MARK: open_file_in_split
