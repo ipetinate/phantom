@@ -52,10 +52,52 @@ enum MCPGroupTools {
         store: SidebarGroupStore,
         terminal: @escaping (UUID) -> Terminal?
     ) -> [MCPToolHandler] {
-        [createGroup(store), moveToGroup(store, terminal)]
+        [listGroups(store), createGroup(store), moveToGroup(store, terminal)]
     }
 
     // MARK: The tools
+
+    /// The groups, and which terminals are filed under each.
+    ///
+    /// Asks nothing of the reader, for the reason `list_terminals` does not:
+    /// this is the app's own structure — the sections of a sidebar — and not
+    /// anyone's output. It is also the tool every refusal in this file points
+    /// at, so a model that used the wrong id has somewhere to look.
+    private static func listGroups(_ store: SidebarGroupStore) -> MCPToolHandler {
+        MCPToolHandler(
+            tool: MCPTool(
+                name: "list_groups",
+                description: """
+                    List the reader's sidebar groups: the named sections their terminals \
+                    are filed under. Each answers with its id, which is what \
+                    move_to_group and create_terminal take, and with the terminals \
+                    currently in it. Use it before filing a terminal, and whenever a \
+                    group id you were given is refused.
+                    """,
+                schema: MCPSchema.object([:])),
+            run: { _, answer in
+                let groups = store.groups.map { group in
+                    JSONValue.object([
+                        "id": .string(group.id.uuidString),
+                        "name": .string(group.name),
+                        "icon": .string(group.icon),
+                        "project_root": group.projectRoot.map { .string($0) } ?? .null,
+                        "terminals": .array(
+                            MCPWindows.surfaces()
+                                .filter {
+                                    store.resolveGroup(surfaceId: $0.id, pwd: $0.pwd)?.id
+                                        == group.id
+                                }
+                                .map { .string($0.id.uuidString) }),
+                    ])
+                }
+
+                answer(.json(.object([
+                    "groups": .array(groups),
+                    "count": .number(Double(groups.count)),
+                ])))
+            })
+    }
 
     private static func createGroup(_ store: SidebarGroupStore) -> MCPToolHandler {
         MCPToolHandler(

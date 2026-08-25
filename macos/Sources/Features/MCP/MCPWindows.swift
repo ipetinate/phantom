@@ -32,6 +32,27 @@ enum MCPWindows {
     /// Nil is what a closed tab looks like, and what a tab of another Phantom
     /// build looks like. Both are refusals rather than no-ops: an id that
     /// names nothing is a mistake the caller can fix.
+    /// Every terminal open in the app, once each.
+    ///
+    /// Walked from the windows rather than from a registry, because there is
+    /// none: a window's controller owns its surfaces and nothing owns the
+    /// windows but AppKit. Deduplicated by id, since a tab group hands the
+    /// same surfaces to each of its siblings.
+    static func surfaces() -> [Ghostty.SurfaceView] {
+        var seen: Set<UUID> = []
+        var found: [Ghostty.SurfaceView] = []
+
+        for window in NSApp.windows {
+            guard let controller = window.windowController as? TerminalController else { continue }
+            for surface in controller.surfaceTree {
+                guard seen.insert(surface.id).inserted else { continue }
+                found.append(surface)
+            }
+        }
+
+        return found
+    }
+
     static func surface(_ id: UUID) -> Ghostty.SurfaceView? {
         for controller in TerminalController.all {
             if let surface = controller.surfaceTree.first(where: { $0.id == id }) {

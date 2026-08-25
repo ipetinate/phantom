@@ -71,11 +71,12 @@ struct MCPGroupToolsTests {
 
     // MARK: What is on offer
 
-    /// `list_groups` is not here: it is a listing of tabs, and it belongs
-    /// with the terminals.
-    @Test func theToolsAreTheTwoThatChangeAGroup() {
+    /// Listing lives here after all. It was left to the terminals at first,
+    /// on the grounds that it lists tabs — and it was written by nobody,
+    /// while every refusal in this file already pointed a model at it.
+    @Test func theToolsAreListingAndTheTwoThatChangeAGroup() {
         let names = tools(store()).map(\.tool.name)
-        #expect(names == ["create_group", "move_to_group"])
+        #expect(names == ["list_groups", "create_group", "move_to_group"])
     }
 
     @Test func everyDescriptionSaysWhenToReachForIt() {
@@ -283,5 +284,26 @@ struct MCPGroupToolsTests {
         let reason = refusal(run(tool("move_to_group", store), [:], client: store))
 
         #expect(reason?.contains("“terminal”") == true)
+    }
+
+    // MARK: Listing
+
+    /// The tool every refusal in this file points at. A model given a group
+    /// id that no longer exists is told to look here, so "here" has to exist.
+    @Test func listGroupsIsOffered() {
+        let names = MCPGroupTools.all(store: store(), terminal: { _ in nil })
+            .map(\.tool.name)
+        #expect(names.contains("list_groups"))
+    }
+
+    /// It asks for nothing, so a model cannot be refused for calling it
+    /// without arguments — which is the only way it is ever called.
+    @Test func listGroupsTakesNoArguments() throws {
+        let tool = try #require(
+            MCPGroupTools.all(store: store(), terminal: { _ in nil })
+                .first { $0.tool.name == "list_groups" })
+
+        let required = tool.tool.schema.object?["required"]?.array
+        #expect(required?.isEmpty == true)
     }
 }
