@@ -129,77 +129,47 @@ private struct EditorGridCell: View {
                 )
                 .background(coat)
                 surface
-                    .overlay { catcher(in: geometry.size) }
             }
-            /// Behind the cell's content, which is where the terminal's own
-            /// splits put theirs — see `TerminalSplitTreeView`.
+            /// One drop region, over the whole cell, and only while a tab is
+            /// in flight.
             ///
-            /// It was an overlay for one build, to get the region out from
-            /// under the editor's text view, and that was the wrong fix twice
-            /// over: a clear layer with a shape takes every click under it, so
-            /// it swallowed the tabs' own gestures and the tabs stopped being
-            /// draggable at all. And the region was never the problem — the
-            /// operation mask was. A drag begun by `.onDrag` allows a copy
-            /// only, so a cell proposing a move was refused, and what the
-            /// breadcrumbs recorded as enter-and-leave was that refusal. The
-            /// session is AppKit's now and answers `.move`, which is the
-            /// arrangement the terminal's splits have always used with the
-            /// region in the background.
-            .background {
-                Color.clear
-                    .onDrop(
-                        of: [EditorTabDrag.type],
-                        delegate: EditorCellDropDelegate(
-                            size: geometry.size,
-                            barHeight: barHeight,
-                            state: drop,
-                            perform: { item, zone in
-                                center.drop(item, on: group.id, zone: zone)
-                            },
-                            label: cellLabel
+            /// There were two for one build — one behind the content and one
+            /// over the surface — and they disagreed. The background one
+            /// measured the pointer in cell coordinates with a bar to
+            /// subtract; the catcher measured it in surface coordinates with
+            /// no bar. The same position produced `center` from one and `top`
+            /// from the other, a drag crossing between them flickered, and the
+            /// drop landed on whichever had spoken last: a few seconds of
+            /// aiming split the pane into cells the reader never asked for.
+            ///
+            /// Behind the content it could not be reached at all over the
+            /// terminal, which is a Metal view and wins the pointer. Over the
+            /// content it takes every click under it — that is how the tabs
+            /// lost their own gestures once. Both problems go away if it is
+            /// over the content *and* only exists during a drag: there are no
+            /// clicks to steal while the pointer is holding a tab, and the
+            /// session says exactly when that is.
+            .overlay {
+                if dragSession.item != nil {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onDrop(
+                            of: [EditorTabDrag.type],
+                            delegate: EditorCellDropDelegate(
+                                size: geometry.size,
+                                barHeight: barHeight,
+                                state: drop,
+                                perform: { item, zone in
+                                    center.drop(item, on: group.id, zone: zone)
+                                },
+                                label: cellLabel
+                            )
                         )
-                    )
+                }
             }
             .overlay(alignment: .topLeading) {
                 EditorCellDropHighlight(state: drop, size: geometry.size)
             }
-        }
-    }
-
-    /// A drop region over the surface, present only while a tab is in flight.
-    ///
-    /// The region in the cell's background is enough almost everywhere, and
-    /// for the terminal it is not: a Metal-backed `NSView` is a real subview
-    /// above it, and a drag over the shell never reached the cell underneath.
-    /// The editor's text view lets it through; the terminal does not.
-    ///
-    /// Above the surface and *only during a drag*, which is what makes it
-    /// safe. A clear layer with a shape takes every click under it — that is
-    /// how an earlier version of this cost the tabs their own gestures — and
-    /// there are no clicks to take while the pointer is holding a tab.
-    ///
-    /// Over the surface rather than the whole cell, so the tab bar keeps its
-    /// own gestures either way, and the geometry is the surface's: the bar is
-    /// not under this layer, so it has no height to subtract.
-    @ViewBuilder
-    private func catcher(in cell: CGSize) -> some View {
-        if dragSession.item != nil {
-            Color.clear
-                .contentShape(Rectangle())
-                .onDrop(
-                    of: [EditorTabDrag.type],
-                    delegate: EditorCellDropDelegate(
-                        size: CGSize(
-                            width: cell.width,
-                            height: max(cell.height - barHeight, 0)),
-                        barHeight: 0,
-                        state: drop,
-                        perform: { item, zone in
-                            center.drop(item, on: group.id, zone: zone)
-                        },
-                        label: cellLabel
-                    )
-                )
         }
     }
 
@@ -398,41 +368,9 @@ private final class TerminalHostView: NSView {
         /// with nothing to draw into, which is a transparent pane showing the
         /// desktop through the window, and it came back only when switching
         /// tabs built the host again with a size already known.
-        let target = frameForTerminal()
-        guard terminal.frame != target else { return }
-        terminal.frame = target
+        guard terminal.frame != bounds else { return }
+        terminal.frame = bounds
     }
-
-    /// The terminal's frame, snapped to whole device pixels.
-    ///
-    /// SwiftUI hands this host a fractional size whenever the pane's own
-    /// arithmetic lands between pixels — a divider ratio, an odd window
-    /// height — and the terminal renders through a Metal layer. A layer whose
-    /// edges fall between device pixels has its edge row and column resampled
-    /// on every composite, which is what a full-screen TUI shows as its edges
-    /// breaking into blocks while it redraws and settling when it stops.
-    ///
-    /// `backingAlignedRect` asks the view, which asks its window, which knows
-    /// the scale of the display it is on — so this stays right when the window
-    /// is dragged between a Retina display and one that is not.
-    private func frameForTerminal() -> NSRect {
-        let aligned = backingAlignedRect(bounds, options: [.alignAllEdgesNearest])
-
-        /// Noted once per size, and only in a development build: whether the
-        /// bounds arrive fractional at all is the fact this fix rests on, and
-        /// it is not something a test can see.
-        if aligned != bounds, lastNotedBounds != bounds {
-            lastNotedBounds = bounds
-            WindowBreadcrumbs.note(
-                "terminal frame: bounds \(bounds.size) snapped to \(aligned.size)")
-        }
-
-        return aligned
-    }
-
-    /// The last size a breadcrumb was written for, so a resize that reports
-    /// the same size a hundred times writes one line.
-    private var lastNotedBounds: NSRect?
 
     func adopt() {
         guard let terminal, terminal.superview !== self else { return }
