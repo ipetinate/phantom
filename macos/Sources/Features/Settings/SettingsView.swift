@@ -415,6 +415,8 @@ struct AgentsSettingsView: View {
     @State private var codexInstalled = CodexHooksInstaller.isInstalled
     @State private var openCodeInstalled = OpenCodeHooksInstaller.isInstalled
     @State private var antigravityInstalled = AntigravityHooksInstaller.isInstalled
+    @State private var kimiInstalled = KimiHooksInstaller.isInstalled
+    @State private var piInstalled = PiHooksInstaller.isInstalled
     @State private var feedback: String?
 
     @AppStorage("AgentNotificationsEnabled") private var agentNotifications = true
@@ -472,6 +474,8 @@ struct AgentsSettingsView: View {
                     install: {
                         let ok = AntigravityHooksInstaller.install()
                         antigravityInstalled = AntigravityHooksInstaller.isInstalled
+            kimiInstalled = KimiHooksInstaller.isInstalled
+            piInstalled = PiHooksInstaller.isInstalled
                         feedback = ok && antigravityInstalled ? "Antigravity hooks installed ✓" : "Antigravity install failed: \(AntigravityHooksInstaller.lastError ?? "status did not update")"
                     },
                     uninstall: {
@@ -480,11 +484,51 @@ struct AgentsSettingsView: View {
                         feedback = ok && !antigravityInstalled ? "Antigravity hooks removed" : "Antigravity removal failed"
                     }
                 )
+                agentHookRow(
+                    title: "Kimi Code",
+                    icon: AnyView(KimiIcon(size: 14, tint: .original)),
+                    installed: kimiInstalled,
+                    install: {
+                        let ok = KimiHooksInstaller.install()
+                        kimiInstalled = KimiHooksInstaller.isInstalled
+                        feedback = ok && kimiInstalled ? "Kimi hooks installed ✓" : "Kimi install failed: \(KimiHooksInstaller.lastError ?? "status did not update")"
+                    },
+                    uninstall: {
+                        let ok = KimiHooksInstaller.uninstall()
+                        kimiInstalled = KimiHooksInstaller.isInstalled
+                        feedback = ok && !kimiInstalled ? "Kimi hooks removed" : "Kimi removal failed"
+                    }
+                )
                 if let feedback { Text(feedback).font(.caption).foregroundStyle(feedback.contains("failed") ? .red : .secondary) }
             } header: {
                 Text("Hooks")
             } footer: {
-                Text("Installs Phantom hooks for each agent while preserving existing configuration. Hooks update the tab activity indicator when an agent is working, waiting, or done. Antigravity reports only working and done: its hook system has no event for a permission prompt that Phantom can answer without also approving the tool call.")
+                Text("Installs Phantom hooks for each agent while preserving existing configuration. Hooks update the tab activity indicator when an agent is working, waiting, or done. Antigravity reports only working and done: its hook system has no event for a permission prompt that Phantom can answer without also approving the tool call. Kimi reports all of them, from its own documented event list.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                agentHookRow(
+                    title: "Pi",
+                    icon: AnyView(PiIcon(size: 14, tint: .original)),
+                    installed: piInstalled,
+                    install: {
+                        let ok = PiHooksInstaller.install()
+                        piInstalled = PiHooksInstaller.isInstalled
+                        feedback = ok && piInstalled ? "Pi extension installed ✓" : "Pi install failed: \(PiHooksInstaller.lastError ?? "status did not update")"
+                    },
+                    uninstall: {
+                        let ok = PiHooksInstaller.uninstall()
+                        piInstalled = PiHooksInstaller.isInstalled
+                        feedback = ok && !piInstalled ? "Pi extension removed" : "Pi removal failed"
+                    }
+                )
+                CopyableValueRow(title: "Installed at", value: PiHooksInstaller.extensionURL.path)
+            } header: {
+                Text("Pi Extension")
+            } footer: {
+                Text("Pi has no hooks file to add to. It loads TypeScript extensions, so Phantom ships one and writes it to the folder above, where Pi discovers it on its own — there is no package to install and nothing of yours to merge into. It subscribes to \(PiHooksInstaller.events.joined(separator: ", ")).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

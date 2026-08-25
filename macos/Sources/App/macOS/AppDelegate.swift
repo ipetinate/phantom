@@ -243,6 +243,8 @@ class AppDelegate: NSObject,
         CodexHooksInstaller.repairIfStale()
         OpenCodeHooksInstaller.repairIfStale()
         AntigravityHooksInstaller.repairIfStale()
+        KimiHooksInstaller.repairIfStale()
+        PiHooksInstaller.repairIfStale()
 
         // The one object that puts the permission question on screen, and it
         // starts before the listener does: a question raised with nobody
