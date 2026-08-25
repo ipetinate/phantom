@@ -244,6 +244,12 @@ class AppDelegate: NSObject,
         OpenCodeHooksInstaller.repairIfStale()
         AntigravityHooksInstaller.repairIfStale()
 
+        // The MCP listener, beside the hooks because it is the same idea: a
+        // rendezvous the agents running inside this app's terminals can find.
+        // The socket is named after the bundle, so a debug build and a
+        // release one running together each answer for themselves.
+        MCPServer.shared.start()
+
         // Watching for the moments a window can become unreachable, before
         // any window exists to have them. Development builds only; see
         // `WindowBreadcrumbs` for the incident this observes for.
@@ -513,6 +519,10 @@ class AppDelegate: NSObject,
 
     func applicationWillTerminate(_ notification: Notification) {
         WindowBreadcrumbs.note("willTerminate: the app is going down through AppKit")
+
+        // The socket file outlives the process that bound it, and a stale one
+        // is a path a client connects to and waits on forever.
+        MCPServer.shared.stop()
 
         // We have no notifications we want to persist after death,
         // so remove them all now. In the future we may want to be
