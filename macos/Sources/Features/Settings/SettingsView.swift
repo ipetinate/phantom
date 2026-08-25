@@ -528,7 +528,7 @@ struct AgentsSettingsView: View {
             } header: {
                 Text("Pi Extension")
             } footer: {
-                Text("Pi has no hooks file to add to. It loads TypeScript extensions, so Phantom ships one and writes it to the folder above, where Pi discovers it on its own — there is no package to install and nothing of yours to merge into. It subscribes to \(PiHooksInstaller.events.joined(separator: ", ")).")
+                Text("Pi has no hooks file to add to. It loads TypeScript extensions, so Phantom ships one and writes it to the folder above, where Pi discovers it on its own — there is no package to install and nothing of yours to merge into. It subscribes to \(PiHooksInstaller.events.joined(separator: ", ")). Like Antigravity it reports working and done but never waiting, and for a different reason: Pi has no permission event to subscribe to at all. Its core does not prompt \u{2014} a confirmation comes from an extension that asks for one itself, so there is nothing here to observe.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

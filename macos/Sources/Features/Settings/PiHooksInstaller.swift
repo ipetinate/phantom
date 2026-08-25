@@ -38,6 +38,13 @@ enum PiHooksInstaller {
 
     /// The events this subscribes to, for the settings pane to name. Kept
     /// beside the source below so the two cannot drift.
+    ///
+    /// No permission event, and none is missing: Pi's core does not prompt.
+    /// A confirmation in Pi comes from an extension calling `ctx.ui.confirm`
+    /// inside its own `tool_call` handler, so an agent waiting on one is a
+    /// state only that extension knows about. Adding a `tool_call` handler
+    /// here to find out would mean this extension gating tool calls, which is
+    /// a different job from reporting what the tab is doing.
     static let events = [
         "session_start", "agent_start", "tool_execution_start",
         "agent_end", "session_shutdown",
