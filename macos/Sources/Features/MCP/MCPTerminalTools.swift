@@ -16,7 +16,101 @@ import Foundation
 @MainActor
 enum MCPTerminalTools {
     static var all: [MCPToolHandler] {
-        [listTerminals, readOutput, createTerminal, runCommand, focusTerminal]
+        [listTerminals, readOutput, createTerminal, runCommand, focusTerminal, updateTerminal]
+    }
+
+    // MARK: Appearance
+
+    /// Renames a tab, or changes the icon and colour the reader marked it
+    /// with.
+    ///
+    /// **No permission, deliberately**, and the reasoning is the editor's
+    /// rather than the shell's: nothing is read and nothing is typed. What
+    /// changes is a label in the reader's own sidebar — visible the moment it
+    /// happens, undone with the tab's own menu, and carrying none of their
+    /// output anywhere.
+    ///
+    /// An empty string clears, rather than being refused. Removing a mark is
+    /// as much a thing to ask for as setting one — it is what the reader asked
+    /// for the first time this tool did not exist — and "" is the only way to
+    /// say it in a schema whose fields are all optional.
+    private static var updateTerminal: MCPToolHandler {
+        MCPToolHandler(
+            tool: MCPTool(
+                name: "update_terminal",
+                description: """
+                    Change how a terminal is labelled in the sidebar: its name, its icon, \
+                    or the colour marking it. Only what you pass changes. Pass an empty \
+                    string to remove a name or an icon, and “none” for the colour to \
+                    remove that. Use it to mark the terminals of one piece of work so the \
+                    reader can tell them apart at a glance, or to tidy a mark they asked \
+                    you to remove. Nothing is typed into the terminal and nothing it has \
+                    printed is read.
+                    """,
+                schema: MCPSchema.object(
+                    [
+                        "terminal": MCPSchema.string(
+                            "The terminal's id, as list_terminals hands it out."),
+                        "name": MCPSchema.string(
+                            "What the row is called. An empty string goes back to the "
+                            + "title the shell sets."),
+                        "icon": MCPSchema.string(
+                            "An SF Symbol name, a single emoji, or “agent:” and an "
+                            + "agent's name. An empty string removes the icon."),
+                        "color": MCPSchema.enumeration(
+                            "A colour from list_theme_colors. “none” removes it.",
+                            MCPColors.names),
+                    ],
+                    required: ["terminal"])
+            )
+        ) { context, answer in
+            guard let id = context.surface("terminal") else {
+                return answer(.refused(MCPTerminalRefusal.missingTerminal("update_terminal")))
+            }
+
+            guard let tab = snapshots().first(where: { $0.id == id }) else {
+                return answer(.refused(MCPTerminalRefusal.noSuchTerminal(id)))
+            }
+
+            let store = SidebarGroupStore.shared
+            var override = store.tabOverrides[id] ?? SidebarGroupStore.TabOverride()
+
+            if let name = context.string("name") {
+                override.name = name.isEmpty ? nil : name
+            }
+
+            if let icon = context.string("icon") {
+                if icon.isEmpty {
+                    override.icon = nil
+                } else if let refusal = MCPGroupTools.iconRefusal(icon) {
+                    return answer(.refused(refusal))
+                } else {
+                    override.icon = icon
+                }
+            }
+
+            if let asked = context.string("color") {
+                guard let colour = MCPColors.named(asked) else {
+                    return answer(.refused(MCPColors.refusal(asked)))
+                }
+                override.color = colour == .none ? nil : colour
+
+                /// A hex colour wins over a named one — see `TabOverride` —
+                /// so a colour asked for by name has to clear the hex, or the
+                /// reader's swatch would not change and nothing would say why.
+                override.colorHex = nil
+            }
+
+            store.setTabOverride(surfaceId: id, override)
+
+            answer(.json(.object([
+                "terminal": .string(id.uuidString),
+                "name": override.name.map { .string($0) } ?? .null,
+                "icon": override.icon.map { .string($0) } ?? .null,
+                "color": .string((override.color ?? .none).localizedName.lowercased()),
+                "title": .string(tab.title),
+            ])))
+        }
     }
 
     // MARK: Reading

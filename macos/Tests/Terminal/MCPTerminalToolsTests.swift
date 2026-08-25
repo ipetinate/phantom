@@ -50,10 +50,11 @@ struct MCPTerminalToolsTests {
 
     // MARK: The tools on offer
 
-    @Test func theFiveToolsAreOffered() {
+    @Test func theToolsOnOfferAreTheOnesDocumented() {
         let names = MCPTerminalTools.all.map(\.tool.name)
         #expect(names == [
-            "list_terminals", "read_output", "create_terminal", "run_command", "focus_terminal",
+            "list_terminals", "read_output", "create_terminal", "run_command",
+            "focus_terminal", "update_terminal",
         ])
     }
 

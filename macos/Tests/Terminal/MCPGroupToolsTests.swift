@@ -76,13 +76,21 @@ struct MCPGroupToolsTests {
     /// while every refusal in this file already pointed a model at it.
     @Test func theToolsAreListingAndTheTwoThatChangeAGroup() {
         let names = tools(store()).map(\.tool.name)
-        #expect(names == ["list_groups", "create_group", "move_to_group"])
+        #expect(names == [
+            "list_groups", "list_theme_colors", "create_group", "update_group",
+            "move_to_group",
+        ])
     }
 
     @Test func everyDescriptionSaysWhenToReachForIt() {
         for handler in tools(store()) {
             let text = handler.tool.description
-            #expect(text.contains("Use it"), "\(handler.tool.name) never says when to use it")
+            /// "Use it" was the only phrasing when this rule was written, and
+            /// "Call it when…" says the same thing — so the check widened
+            /// rather than the description bending to fit the check.
+            #expect(
+                text.contains("Use it") || text.contains("Call it"),
+                "\(handler.tool.name) never says when to use it")
         }
     }
 

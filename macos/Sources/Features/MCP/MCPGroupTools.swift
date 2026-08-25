@@ -52,7 +52,178 @@ enum MCPGroupTools {
         store: SidebarGroupStore,
         terminal: @escaping (UUID) -> Terminal?
     ) -> [MCPToolHandler] {
-        [listGroups(store), createGroup(store), moveToGroup(store, terminal)]
+        [
+            listGroups(store),
+            listThemeColors(),
+            createGroup(store),
+            updateGroup(store),
+            moveToGroup(store, terminal),
+        ]
+    }
+
+
+    /// One group, as every tool here answers it.
+    ///
+    /// Written once because three tools answer with a group and a model that
+    /// learned the shape from one must not be surprised by another.
+    static func describe(_ group: SidebarGroup) -> JSONValue {
+        .object([
+            "id": .string(group.id.uuidString),
+            "name": .string(group.name),
+            "description": group.details.map { .string($0) } ?? .null,
+            "icon": .string(group.icon),
+            "color": .string(group.color.localizedName.lowercased()),
+            "project_root": group.projectRoot.map { .string($0) } ?? .null,
+        ])
+    }
+
+    /// The palette, so a model asked for "magenta" can pick the nearest thing
+    /// that exists instead of guessing at a name.
+    ///
+    /// Answers both halves: the named colours a group or a tab can be set to,
+    /// and the current theme's own sixteen, which is what the reader sees in
+    /// the app's picker. Asks nothing — a theme's colours are not anybody's
+    /// output.
+    private static func listThemeColors() -> MCPToolHandler {
+        MCPToolHandler(
+            tool: MCPTool(
+                name: "list_theme_colors",
+                description: """
+                    List the colours a group or a terminal can be set to, each with its \
+                    hex value, plus the colours of the theme the reader is using. Call it \
+                    when you have been asked for a colour by name — “magenta”, “the same \
+                    as the prompt” — so you can pick the nearest one that exists rather \
+                    than guessing at a name that will be refused.
+                    """,
+                schema: MCPSchema.object([:])),
+            run: { _, answer in
+                let named = TerminalTabColor.allCases.map { colour -> JSONValue in
+                    .object([
+                        "name": .string(colour.localizedName.lowercased()),
+                        "hex": colour.displayColor.map { .string(MCPColors.hex(of: $0)) } ?? .null,
+                    ])
+                }
+
+                let theme = ThemePalette.shared.colors.enumerated().map { index, colour in
+                    JSONValue.object([
+                        "index": .number(Double(index)),
+                        "hex": .string(MCPColors.hex(of: colour)),
+                    ])
+                }
+
+                answer(.json(.object([
+                    "colors": .array(named),
+                    "theme_colors": .array(theme),
+                ])))
+            })
+    }
+
+    /// A colour as `#rrggbb`, converted through sRGB because a theme's
+    /// colours arrive in whatever space the palette was parsed in, and
+    /// `redComponent` traps on a colour that has none.
+    static func hex(of colour: NSColor) -> String {
+        guard let rgb = colour.usingColorSpace(.sRGB) else { return "#000000" }
+        return String(
+            format: "#%02x%02x%02x",
+            Int((rgb.redComponent * 255).rounded()),
+            Int((rgb.greenComponent * 255).rounded()),
+            Int((rgb.blueComponent * 255).rounded()))
+    }
+
+    /// Changes a group that already exists.
+    ///
+    /// Every field is optional and only what is given changes: a model that
+    /// wanted to add a description must not have to resend the icon it does
+    /// not know. An empty string is how a description is *cleared*, which is
+    /// different from leaving it out.
+    private static func updateGroup(_ store: SidebarGroupStore) -> MCPToolHandler {
+        MCPToolHandler(
+            tool: MCPTool(
+                name: "update_group",
+                description: """
+                    Change a sidebar group that already exists: its name, description, \
+                    icon, colour, or the project folder it claims terminals from. Only \
+                    what you pass changes. Use it to finish a group you created without \
+                    every detail, or when the reader asks for a different name or colour. \
+                    Pass an empty string for “description” to remove one.
+                    """,
+                schema: MCPSchema.object(
+                    [
+                        "group": MCPSchema.string(
+                            "The group's id, as list_groups hands it out."),
+                        "name": MCPSchema.string("A new name for the section."),
+                        "description": MCPSchema.string(
+                            "A new second line, or an empty string to remove it."),
+                        "icon": MCPSchema.string(
+                            "An SF Symbol name, a single emoji, or “agent:” and an "
+                            + "agent's name."),
+                        "color": MCPSchema.enumeration(
+                            "A colour from list_theme_colors. “none” removes it.",
+                            MCPColors.names),
+                        "project_root": MCPSchema.string(
+                            "Absolute path of the folder this group claims terminals "
+                            + "from."),
+                    ],
+                    required: ["group"])
+            )
+        ) { context, answer in
+            guard let id = context.surface("group") else {
+                return answer(.refused(idRefusal(
+                    context.string("group"), argument: "group", from: "list_groups")))
+            }
+
+            guard store.groups.contains(where: { $0.id == id }) else {
+                return answer(.refused(
+                    "Phantom has no group with id \(id.uuidString). Call list_groups for "
+                    + "the ones it has."))
+            }
+
+            let icon = context.string("icon")?.trimmingCharacters(in: .whitespaces)
+            if let icon, !icon.isEmpty, let refusal = iconRefusal(icon) {
+                return answer(.refused(refusal))
+            }
+
+            var colour: TerminalTabColor?
+            if let asked = context.string("color"), !asked.isEmpty {
+                guard let found = MCPColors.named(asked) else {
+                    return answer(.refused(MCPColors.refusal(asked)))
+                }
+                colour = found
+            }
+
+            var kind: SidebarGroup.Kind?
+            if let asked = context.string("project_root"), !asked.isEmpty {
+                switch root(asked) {
+                case .refused(let refusal):
+                    return answer(.refused(refusal))
+                case .path(let path):
+                    kind = .project(root: path)
+                }
+            }
+
+            let name = context.string("name")?.trimmingCharacters(in: .whitespaces)
+            if let name, name.isEmpty {
+                return answer(.refused(
+                    "A group cannot be renamed to nothing. Leave “name” out to keep the "
+                    + "one it has."))
+            }
+
+            let details = context.string("description")
+
+            store.update(id) { group in
+                if let name, !name.isEmpty { group.name = name }
+                if let details { group.details = details.isEmpty ? nil : details }
+                if let icon, !icon.isEmpty { group.icon = icon }
+                if let colour { group.color = colour }
+                if let kind { group.kind = kind }
+            }
+
+            guard let updated = store.groups.first(where: { $0.id == id }) else {
+                return answer(.refused("The group went away while it was being changed."))
+            }
+
+            answer(.json(describe(updated)))
+        }
     }
 
     // MARK: The tools
@@ -119,6 +290,13 @@ enum MCPGroupTools {
                         "icon": MCPSchema.string(
                             "An SF Symbol name, a single emoji, or “agent:” and one of "
                             + "\(agents) for that agent's mark. Defaults to “folder”."),
+                        "description": MCPSchema.string(
+                            "A second line under the name, for what the work is. Leave "
+                            + "it out for a group whose name says enough."),
+                        "color": MCPSchema.enumeration(
+                            "The group's colour. Call list_theme_colors to see them "
+                            + "with their hex values, and pick the nearest to what the "
+                            + "reader asked for.", MCPColors.names),
                         "project_root": MCPSchema.string(
                             "Absolute path of the project folder, if this group is a "
                             + "project. Every terminal whose working directory is inside "
@@ -157,17 +335,30 @@ enum MCPGroupTools {
                 }
             }
 
+            var chosen = TerminalTabColor.none
+            if let asked = context.string("color"), !asked.isEmpty {
+                guard let found = MCPColors.named(asked) else {
+                    return answer(.refused(MCPColors.refusal(asked)))
+                }
+                chosen = found
+            }
+
             let group = store.createGroup(
                 name: name,
                 icon: icon.isEmpty ? defaultIcon : icon,
                 kind: kind)
 
-            answer(.json(.object([
-                "id": .string(group.id.uuidString),
-                "name": .string(group.name),
-                "icon": .string(group.icon),
-                "project_root": group.projectRoot.map { .string($0) } ?? .null,
-            ])))
+            let details = context.string("description")?
+                .trimmingCharacters(in: .whitespaces)
+
+            if chosen != .none || (details?.isEmpty == false) {
+                store.update(group.id) { group in
+                    if chosen != .none { group.color = chosen }
+                    if let details, !details.isEmpty { group.details = details }
+                }
+            }
+
+            answer(.json(describe(store.groups.first { $0.id == group.id } ?? group)))
         }
     }
 
