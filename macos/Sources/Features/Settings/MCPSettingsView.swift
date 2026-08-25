@@ -226,14 +226,8 @@ struct MCPSettingsView: View {
 
     /// The same marks the hooks pane uses, so an agent is recognisable in both
     /// places without reading the label.
-    @ViewBuilder
     private static func icon(for agent: CodingAgent) -> some View {
-        switch agent {
-        case .claude: ClaudeIcon(size: 14, tint: .original)
-        case .codex: CodexIcon(size: 14, originalColors: true)
-        case .opencode: OpenCodeIcon(size: 14, originalColors: true)
-        case .antigravity: AntigravityIcon(size: 14, tint: .original)
-        }
+        AgentBrandMark(agent: agent, size: 14)
     }
 
     private func apply(_ agent: MCPServerRegistration.Agent, removing: Bool) {

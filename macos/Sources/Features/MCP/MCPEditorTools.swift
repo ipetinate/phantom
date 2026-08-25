@@ -35,6 +35,17 @@ import Foundation
 /// own, and stealing focus from whatever app the reader is in is not part of
 /// showing them a line — `focus_terminal` is the tool that raises a window,
 /// and it is the terminals' to offer.
+///
+/// ## The mark `reveal_line` leaves
+///
+/// A revealed line also gets the calling agent's own mark in the gutter, so a
+/// reader coming back to the window can see which line was pointed at and who
+/// pointed. Which agent is established the same way the window is — from the
+/// caller's tab, by the app — and never from what the client called itself.
+/// See ``agent(inTab:)``.
+///
+/// It is a decoration and is treated as one: everything about it can fail
+/// quietly, and none of it can turn a reveal into a refusal.
 @MainActor
 enum MCPEditorTools {
     static var all: [MCPToolHandler] { all(editor: MCPWindows.editor(for:)) }
@@ -43,14 +54,52 @@ enum MCPEditorTools {
     ///
     /// The seam every test uses: an `EditorCenter` needs no window, so handing
     /// one in covers each tool end to end — the arguments, the refusals and
-    /// the layout that comes out the other side.
-    static func all(editor: @escaping (UUID?) -> EditorCenter?) -> [MCPToolHandler] {
+    /// the layout that comes out the other side. `agent` is the second seam,
+    /// for the same reason: which agent a tab is running is a fact about a
+    /// directory of state files, and the mark it decides is worth asserting
+    /// without one.
+    static func all(
+        editor: @escaping (UUID?) -> EditorCenter?,
+        agent: @escaping (UUID?) -> CodingAgent? = MCPEditorTools.agent(inTab:)
+    ) -> [MCPToolHandler] {
         [
             openFile(editor),
             openFileInSplit(editor),
             focusTab(editor),
-            revealLine(editor),
+            revealLine(editor, agent),
         ]
+    }
+
+    /// Which agent is calling, as the app knows it rather than as the caller
+    /// says it.
+    ///
+    /// `MCPToolContext.clientName` is right there and is deliberately not read.
+    /// It is the client's own word for itself, and a mark in the margin naming
+    /// the wrong agent is worse than no mark: the whole point of the mark is
+    /// that two agents working in one window stay told apart.
+    ///
+    /// `TabStateCenter.shared.records` is the honest answer, and it is asked
+    /// directly. It is the parsed contents of the tab-state file the *surface*
+    /// exported and the agent's own hook wrote its `agent=` line into, keyed by
+    /// the very surface id the handshake established — so it is one lookup from
+    /// what a tool already holds. `AgentTabRecord.liveAgent` is the reading of
+    /// it that the restore and the sidebar's plan tag already share, ended
+    /// sessions and all; answering the question a fourth way would let the four
+    /// disagree.
+    ///
+    /// `SidebarTabModel.liveAgent` holds the same fact and is not used, because
+    /// it is a copy of it: `SidebarTabManager` pushes
+    /// `records[surfaceId]?.liveAgent` into the row on each refresh, so it is
+    /// this value one publish later, it exists only while the window has a
+    /// sidebar, and reaching it means scanning every window's rows for an id
+    /// that is already in hand. `AgentAttach.targets` asks the same question of
+    /// the same map, for the same reason.
+    ///
+    /// Nil for a tab with no agent in it, which draws no mark and refuses
+    /// nothing.
+    static func agent(inTab surface: UUID?) -> CodingAgent? {
+        guard let surface else { return nil }
+        return TabStateCenter.shared.records[surface]?.liveAgent
     }
 
     // MARK: The vocabulary
@@ -225,12 +274,16 @@ enum MCPEditorTools {
         }
     }
 
-    private static func revealLine(_ editor: @escaping (UUID?) -> EditorCenter?) -> MCPToolHandler {
+    private static func revealLine(
+        _ editor: @escaping (UUID?) -> EditorCenter?,
+        _ agent: @escaping (UUID?) -> CodingAgent?
+    ) -> MCPToolHandler {
         MCPToolHandler(
             tool: MCPTool(
                 name: "reveal_line",
                 description: """
-                    Put the caret on a line of an open file and scroll the editor to it. \
+                    Put the caret on a line of an open file and scroll the editor to it, \
+                    and leave your own mark in the gutter beside that line. \
                     This is how you show code instead of describing it: the definition \
                     you found, the call site you are about to change, the line a stack \
                     trace names. Reach for it whenever an answer would otherwise quote a \
@@ -279,10 +332,17 @@ enum MCPEditorTools {
 
             /// The editor's own way in, the one the Git panel, the search
             /// results and go-to-definition all use. A caret moved any other
-            /// way would be a second path to keep in step with this one.
+            /// way would be a second path to keep in step with this one — and
+            /// the mark rides the same call for the same reason, rather than
+            /// being a second write that could land without the reveal.
+            ///
+            /// The agent is resolved here and not checked: nil is a tab running
+            /// no agent Phantom knows of, and it means a reveal with no mark
+            /// on it. A missing mark must never cost the reader the jump.
             guard center.open(
                 URL(fileURLWithPath: path),
-                reveal: LSPRange(start: position, end: position))
+                reveal: LSPRange(start: position, end: position),
+                markedBy: agent(context.callerSurface))
             else {
                 return answer(.refused(
                     openFailure(center, url: URL(fileURLWithPath: path))))

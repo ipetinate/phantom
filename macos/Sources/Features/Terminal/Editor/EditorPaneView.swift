@@ -763,6 +763,7 @@ private struct DocumentView: View {
             completionOffersDocumentation: { item in offersDocumentation(item) },
             completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
             reveal: revealRange,
+            gutterMark: gutterMark,
             onJumpToDefinition: { offset in jump(from: offset) },
             onRename: { offset in
                 newName = EditorPaneView.identifier(at: offset, in: document.currentText)
@@ -896,6 +897,26 @@ private struct DocumentView: View {
               let range = LSPTextCoordinates.range(of: reveal.range, in: document.currentText as NSString)
         else { return nil }
         return (id: reveal.id, range: range)
+    }
+
+    /// The line an agent pointed at, turned into something the gutter can draw.
+    ///
+    /// This is where the mark stops being an agent and becomes pixels, because
+    /// this is the last place that knows both: the document holds which agent,
+    /// and the configuration holds the font the mark has to be sized against.
+    /// The engine gets neither.
+    ///
+    /// Read on every body evaluation and costing one dictionary lookup after
+    /// the first, because `EditorAgentMarkImages` renders once per agent and
+    /// size. Nil when there is nothing to show *or* nothing to show it with: a
+    /// mark that could not be rendered is a mark not drawn, never a reveal that
+    /// failed.
+    private var gutterMark: CodeGutterView.Mark? {
+        guard let mark = document.agentMark else { return nil }
+        let size = CodeGutterView.markSize(for: configuration.font)
+        guard let image = EditorAgentMarkImages.shared.image(for: mark.agent, size: size)
+        else { return nil }
+        return CodeGutterView.Mark(line: mark.line, image: image)
     }
 
     private var renameSheet: some View {

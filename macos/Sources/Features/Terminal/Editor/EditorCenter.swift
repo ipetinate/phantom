@@ -362,10 +362,16 @@ final class EditorCenter: ObservableObject {
     ///   Applied to a document that is already open too: clicking the same
     ///   file in the Git panel again is a request to see the changes, not a
     ///   request to focus a tab that happens to exist.
+    ///
+    /// - Parameter markedBy: the agent that asked, when one did. It hangs that
+    ///   agent's mark in the gutter beside the revealed line — see
+    ///   ``EditorDocument/agentMark``. Nil for every gesture a person makes,
+    ///   which is all of them but `reveal_line`.
     @discardableResult
     func open(
         _ url: URL,
         reveal: LSPRange? = nil,
+        markedBy agent: CodingAgent? = nil,
         showing: EditorPresentation? = nil,
         reviewBase: String? = nil
     ) -> Bool {
@@ -383,7 +389,7 @@ final class EditorCenter: ObservableObject {
         }
 
         if let existing = documents[path] {
-            if let reveal { existing.reveal = (id: UUID().uuidString, range: reveal) }
+            if let reveal { apply(reveal, markedBy: agent, to: existing) }
             if let showing { existing.presentation = showing }
 
             /// Written on every open, including with nil, so a file opened
@@ -433,11 +439,29 @@ final class EditorCenter: ObservableObject {
                         self.setDirty(document.isDirty, for: path)
                     }
                 }
-            if let reveal { document.reveal = (id: UUID().uuidString, range: reveal) }
+            if let reveal { apply(reveal, markedBy: agent, to: document) }
             place(path)
             lastSelectedFile = path
             return true
         }
+    }
+
+    /// Sends a document to a range, and hangs an agent's mark on it when an
+    /// agent is what asked.
+    ///
+    /// One function for both halves of `open`, so a file that was already open
+    /// and one that was not cannot come to disagree about whether a mark
+    /// accompanies a reveal. The line is read out of the range rather than
+    /// passed beside it: a mark and a caret on two different lines is the one
+    /// thing this feature must not be able to express, and taking one number
+    /// from one place is what makes it unable to.
+    ///
+    /// A nil `agent` leaves an existing mark alone rather than clearing it. A
+    /// reader jumping to a definition has not made the agent's line wrong; only
+    /// an edit does that, and the document clears it there.
+    private func apply(_ reveal: LSPRange, markedBy agent: CodingAgent?, to document: EditorDocument) {
+        document.reveal = (id: UUID().uuidString, range: reveal)
+        if let agent { document.mark(agent, atLine: reveal.start.line + 1) }
     }
 
     /// Opens a media file: a tab, a viewer, and none of the machinery a text

@@ -47,6 +47,47 @@ final class EditorDocument: ObservableObject, Identifiable {
     /// asking for the same place twice still moves the view.
     @Published var reveal: (id: String, range: LSPRange)?
 
+    /// The line an agent pointed at through `reveal_line`, and which agent.
+    ///
+    /// ## Why it lives here
+    ///
+    /// The question ``EditorUndoCenter`` answers about itself, asked again and
+    /// answered differently: what must the thing outlive? An undo stack has to
+    /// survive closing a file and coming back to it, so it could not live on a
+    /// document and went to a store of its own. A mark has to survive a scroll
+    /// and a tab switch and nothing more — closing the tab is the reader
+    /// putting the reading down — and the document is the smallest thing in the
+    /// editor that survives exactly that much. The text view does not: the pane
+    /// is tagged with the document's id, so changing tabs destroys and rebuilds
+    /// it. And because `EditorCenter.documents` is per window, a mark is per
+    /// window too, which is what `reveal_line` means: the agent moved *its own*
+    /// window's editor, not whatever else is open on the same file.
+    ///
+    /// ## One per file, and the newest wins
+    ///
+    /// One, because the mark answers "where has the agent just sent me" — and a
+    /// file collecting them answers a different, worse question, where the mark
+    /// from ten minutes ago is indistinguishable from the one placed a second
+    /// ago and there is no gesture that clears either. So a second reveal
+    /// replaces the first, in the same file, whichever agent asked. Two agents
+    /// pointing at two *different* files still leave two marks: there is a
+    /// document each, and neither is stale.
+    ///
+    /// ## When it goes
+    ///
+    /// On any change to the text, at the two functions that are the only ways
+    /// the text can change — ``edited(_:)`` and ``replaceText(_:named:undoable:)``.
+    /// A mark on line 39 after three lines were inserted above it points at the
+    /// wrong code, which is worse than no mark at all, and the wrong-line case
+    /// is made impossible rather than unlikely by not trying to follow the line:
+    /// the mark is dropped, whatever was edited and wherever. That covers the
+    /// keystroke, the formatter, the rename, the revert, and the `git checkout`
+    /// in the terminal next door that reloads a clean buffer.
+    ///
+    /// Saving does not clear it, and that is not an omission: ``save()`` writes
+    /// the buffer out and moves no line in it.
+    @Published private(set) var agentMark: EditorAgentMark?
+
     /// How this document is currently being shown — source, preview, diff,
     /// or a split of two of them.
     ///
@@ -124,6 +165,20 @@ final class EditorDocument: ObservableObject, Identifiable {
         liveText = text
         let changed = text != diskText
         if isDirty != changed { isDirty = changed }
+
+        /// One keystroke is enough. This is the typing path, so the guard is
+        /// what keeps it to an optional comparison — the write, and the publish
+        /// it costs, happen once for the first character after a mark and never
+        /// again until another one is placed.
+        if agentMark != nil { agentMark = nil }
+    }
+
+    /// Records that `agent` pointed at `line`, replacing whatever was marked
+    /// before. Written only through ``EditorCenter/open(_:reveal:markedBy:showing:reviewBase:)``,
+    /// which is what reads the line out of the range being revealed.
+    func mark(_ agent: CodingAgent, atLine line: Int) {
+        let mark = EditorAgentMark(agent: agent, line: line)
+        if agentMark != mark { agentMark = mark }
     }
 
     /// What the last replacement was, for the Edit menu to name.
@@ -153,6 +208,11 @@ final class EditorDocument: ObservableObject, Identifiable {
         revision += 1
         let changed = replacement != diskText
         if isDirty != changed { isDirty = changed }
+
+        /// The other half of the rule in ``agentMark``. A formatter, a rename
+        /// and a reload all arrive here, and every one of them can move the line
+        /// a mark names.
+        if agentMark != nil { agentMark = nil }
     }
 
     @discardableResult
@@ -239,6 +299,10 @@ final class EditorDocument: ObservableObject, Identifiable {
         copy.isDirty = isDirty
         copy.hasConflict = hasConflict
         copy.loadError = loadError
+        /// Carried, because a rename moves the file and not a line in it. The
+        /// undo history travels the same way, for the same reason — see
+        /// ``EditorUndoCenter/repath(from:to:)``.
+        copy.agentMark = agentMark
         return copy
     }
 

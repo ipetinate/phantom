@@ -13,6 +13,12 @@ import AppKit
 /// It is drawn as one view rather than a label per line, which is the only
 /// shape that survives a large file — a hundred thousand subviews is a
 /// hundred thousand things to lay out, and forty of them are visible.
+///
+/// It also carries one ``Mark``, at the leading edge of a single line: the
+/// margin is where "this line, this one" belongs, and it is the only place in
+/// the editor that can say it without covering the code. The column that mark
+/// sits in is reserved on every file whether or not anything is in it, because
+/// this view's width is where the text starts.
 final class CodeGutterView: NSView {
     var theme: CodeTheme {
         didSet { needsDisplay = true }
@@ -41,6 +47,23 @@ final class CodeGutterView: NSView {
     private(set) var preferredWidth: CGFloat = 40
 
     var onWidthChange: ((CGFloat) -> Void)?
+
+    /// A mark in the margin of one line, drawn at the leading edge.
+    ///
+    /// Pixels and a number, and nothing that knows what an agent is:
+    /// everything under `Engine/` stays ignorant of the app, and an `NSImage`
+    /// is also the only shape that keeps ``draw(_:)`` free of work — see
+    /// `EditorAgentMarkImages`, which renders and caches it.
+    ///
+    /// `Equatable` by image identity, which is exactly right here: the cache
+    /// hands back the same object for the same agent and size, so an unchanged
+    /// mark compares equal and ``setMark(_:)`` costs nothing.
+    struct Mark: Equatable {
+        let line: Int
+        let image: NSImage
+    }
+
+    private var mark: Mark?
 
     init(textView: NSTextView, scrollView: NSScrollView, theme: CodeTheme, font: NSFont) {
         self.theme = theme
@@ -86,6 +109,22 @@ final class CodeGutterView: NSView {
         needsDisplay = true
     }
 
+    /// Hangs a mark on one line, or takes the last one down.
+    ///
+    /// The width is deliberately not touched: the column the mark sits in is
+    /// reserved whether or not there is anything in it. See
+    /// ``markColumnWidth(for:)``.
+    ///
+    /// A reader who has turned the line numbers off has turned this off with
+    /// them — the whole view is hidden and its width is zero. That is the right
+    /// answer rather than a gap: a mark with no number beside it names a line
+    /// the reader cannot read back.
+    func setMark(_ mark: Mark?) {
+        guard mark != self.mark else { return }
+        self.mark = mark
+        needsDisplay = true
+    }
+
     func reload() {
         invalidateWidth()
         needsDisplay = true
@@ -96,12 +135,73 @@ final class CodeGutterView: NSView {
         let lines = max(1, textView.string.reduce(into: 1) { count, character in
             if character == "\n" { count += 1 }
         })
-        let sample = String(repeating: "8", count: max(3, String(lines).count)) as NSString
-        let width = ceil(sample.size(withAttributes: [.font: font]).width) + 16
+        let width = Self.width(forLineCount: lines, font: font)
 
         guard width != preferredWidth else { return }
         preferredWidth = width
         onWidthChange?(width)
+    }
+
+    // MARK: The mark column
+
+    /// How much room the widest number leaves to its right.
+    static let numberTrailingInset: CGFloat = 8
+
+    /// Where the mark starts, and how much clear space follows it before the
+    /// numbers may begin.
+    static let markLeadingInset: CGFloat = 3
+    private static let markTrailingGap: CGFloat = 3
+
+    /// How tall and wide a mark is drawn, given the gutter's font.
+    ///
+    /// Tied to the font rather than fixed, because the font is what sets the
+    /// row height, and a mark that does not follow it is wrong at both ends of
+    /// the range: lost in the tall rows of a large editor font, and taller than
+    /// the row it belongs to in a small one. Nine-tenths of the point size keeps
+    /// it a shade shorter than the digits beside it. The clamp is what stops the
+    /// extremes of the font-size setting from carrying that ratio somewhere
+    /// silly.
+    ///
+    /// The one number both halves of this feature have to agree on: the app
+    /// renders the bitmap at this size and the gutter draws it at this size,
+    /// and they agree because they both ask here.
+    static func markSize(for font: NSFont) -> CGFloat {
+        min(14, max(9, (font.pointSize * 0.9).rounded()))
+    }
+
+    /// The leading column a mark lives in, reserved whether or not one is set.
+    ///
+    /// Unconditional, and that is the decision rather than an oversight. A
+    /// column that appeared with the first mark would change this view's width,
+    /// and this view's width is where the text begins — so the whole document
+    /// would reflow the moment an agent pointed at a line in it, which is a
+    /// worse thing to do to a reader than to spend the room. The room is
+    /// ``markSize(for:)`` minus 2pt of the padding that was already here: 9pt
+    /// at the default 12pt editor font.
+    static func markColumnWidth(for font: NSFont) -> CGFloat {
+        markLeadingInset + markSize(for: font) + markTrailingGap
+    }
+
+    /// The width the numbers and the mark column need together.
+    ///
+    /// Static and pure, so the property that matters can be checked rather than
+    /// merely read: it does not take a mark, so no mark can move it.
+    static func width(forLineCount lines: Int, font: NSFont) -> CGFloat {
+        let digits = String(max(1, lines)).count
+        let sample = String(repeating: "8", count: max(3, digits)) as NSString
+        return ceil(sample.size(withAttributes: [.font: font]).width)
+            + markColumnWidth(for: font)
+            + numberTrailingInset
+    }
+
+    /// Where a mark goes inside the row it belongs to, centred on it.
+    static func markRect(in row: NSRect, size: CGFloat) -> NSRect {
+        NSRect(
+            x: markLeadingInset,
+            y: row.minY + ((row.height - size) / 2).rounded(),
+            width: size,
+            height: size
+        )
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -123,6 +223,12 @@ final class CodeGutterView: NSView {
         let visible = scrollView.contentView.bounds
         let inset = textView.textContainerInset.height
         let text = textView.string as NSString
+
+        /// Measured once for the pass rather than per row. It is two
+        /// multiplications, but this runs on every scroll notification and the
+        /// rule for this view is that nothing per-row does arithmetic it can be
+        /// handed instead.
+        let markSize = Self.markSize(for: font)
 
         var lineNumber = 1
 
@@ -160,7 +266,7 @@ final class CodeGutterView: NSView {
                 y: top,
                 width: bounds.width,
                 height: split.numbered
-            ), plain: attributes, current: currentAttributes)
+            ), plain: attributes, current: currentAttributes, markSize: markSize)
 
             if let extra {
                 draw(number: lineNumber + lines, in: NSRect(
@@ -168,7 +274,7 @@ final class CodeGutterView: NSView {
                     y: top + split.extraOffset,
                     width: bounds.width,
                     height: extra.typographicBounds.height
-                ), plain: attributes, current: currentAttributes)
+                ), plain: attributes, current: currentAttributes, markSize: markSize)
             }
 
             lineNumber += lines
@@ -176,23 +282,34 @@ final class CodeGutterView: NSView {
         }
     }
 
-    /// Draws one number centred in the row it belongs to.
+    /// Draws one number centred in the row it belongs to, and the mark beside
+    /// it when this is the marked line.
+    ///
+    /// The two cannot overlap, and it is arithmetic rather than luck: the
+    /// widest number a file can hold starts at exactly
+    /// ``markColumnWidth(for:)`` — the width formula puts it there — and the
+    /// mark ends ``markTrailingGap`` short of that. A narrower number starts
+    /// further right still.
     private func draw(
         number: Int,
         in row: NSRect,
         plain: [NSAttributedString.Key: Any],
-        current: [NSAttributedString.Key: Any]
+        current: [NSAttributedString.Key: Any],
+        markSize: CGFloat
     ) {
         let label = String(number) as NSString
         let attributes = number == currentLine ? current : plain
         let size = label.size(withAttributes: attributes)
         label.draw(
             at: NSPoint(
-                x: bounds.width - size.width - 8,
+                x: bounds.width - size.width - Self.numberTrailingInset,
                 y: row.minY + (row.height - size.height) / 2
             ),
             withAttributes: attributes
         )
+
+        guard let mark, mark.line == number else { return }
+        mark.image.draw(in: Self.markRect(in: row, size: markSize))
     }
 
     /// The empty line TextKit appends to a document that ends in a newline,

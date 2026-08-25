@@ -398,9 +398,41 @@ private final class TerminalHostView: NSView {
         /// with nothing to draw into, which is a transparent pane showing the
         /// desktop through the window, and it came back only when switching
         /// tabs built the host again with a size already known.
-        guard terminal.frame != bounds else { return }
-        terminal.frame = bounds
+        let target = frameForTerminal()
+        guard terminal.frame != target else { return }
+        terminal.frame = target
     }
+
+    /// The terminal's frame, snapped to whole device pixels.
+    ///
+    /// SwiftUI hands this host a fractional size whenever the pane's own
+    /// arithmetic lands between pixels — a divider ratio, an odd window
+    /// height — and the terminal renders through a Metal layer. A layer whose
+    /// edges fall between device pixels has its edge row and column resampled
+    /// on every composite, which is what a full-screen TUI shows as its edges
+    /// breaking into blocks while it redraws and settling when it stops.
+    ///
+    /// `backingAlignedRect` asks the view, which asks its window, which knows
+    /// the scale of the display it is on — so this stays right when the window
+    /// is dragged between a Retina display and one that is not.
+    private func frameForTerminal() -> NSRect {
+        let aligned = backingAlignedRect(bounds, options: [.alignAllEdgesNearest])
+
+        /// Noted once per size, and only in a development build: whether the
+        /// bounds arrive fractional at all is the fact this fix rests on, and
+        /// it is not something a test can see.
+        if aligned != bounds, lastNotedBounds != bounds {
+            lastNotedBounds = bounds
+            WindowBreadcrumbs.note(
+                "terminal frame: bounds \(bounds.size) snapped to \(aligned.size)")
+        }
+
+        return aligned
+    }
+
+    /// The last size a breadcrumb was written for, so a resize that reports
+    /// the same size a hundred times writes one line.
+    private var lastNotedBounds: NSRect?
 
     func adopt() {
         guard let terminal, terminal.superview !== self else { return }

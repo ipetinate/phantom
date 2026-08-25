@@ -166,14 +166,8 @@ struct SidebarGroupIcon: View {
     /// colour is three grey shapes that look alike. It is the same call the
     /// Settings rows already make, where each agent's toggle carries its mark
     /// in colour.
-    @ViewBuilder
     private func agentMark(_ agent: CodingAgent) -> some View {
-        switch agent {
-        case .claude: ClaudeIcon(size: size, tint: .original)
-        case .codex: CodexIcon(size: size, originalColors: true)
-        case .opencode: OpenCodeIcon(size: size, originalColors: true)
-        case .antigravity: AntigravityIcon(size: size, tint: .original)
-        }
+        AgentBrandMark(agent: agent, size: size)
     }
 }
 

@@ -137,6 +137,15 @@ struct CodeTextView: NSViewRepresentable {
     /// nothing.
     var reveal: (id: String, range: NSRange)?
 
+    /// A mark for the gutter to hang on one line, as pixels and a number.
+    ///
+    /// Beside `reveal` rather than derived from it, because the two are set by
+    /// different things: a reveal is any jump the app makes, and a mark is only
+    /// ever an agent's. Handed in already rendered, which is how the engine
+    /// stays ignorant of agents *and* how the gutter's draw stays free of
+    /// image work — see ``CodeGutterView/Mark``.
+    var gutterMark: CodeGutterView.Mark?
+
     /// ⌘-click, and the editor commands the host implements.
     var onJumpToDefinition: ((Int) -> Void)?
     var onRename: ((Int) -> Void)?
@@ -343,6 +352,7 @@ struct CodeTextView: NSViewRepresentable {
 
         context.coordinator.textView = textView
         context.coordinator.gutter = gutter
+        gutter.setMark(gutterMark)
 
         // The gutter and the minimap already listen to this; the coordinator
         // needs it too, to colour a large document as it is scrolled into.
@@ -429,6 +439,11 @@ struct CodeTextView: NSViewRepresentable {
         context.coordinator.hostEditName = replacementName
         context.coordinator.hostEditIsUndoable = replacementIsUndoable
         context.coordinator.applyIfNewRevision(text: text, revision: textRevision)
+
+        /// After the text too, and for the same reason as the jump below: the
+        /// line a mark names has to be a line the gutter has laid out. Applied
+        /// unconditionally, because nil is how a mark is taken down.
+        context.coordinator.gutter?.setMark(gutterMark)
 
         // After the text, so a jump into a file that is being opened in the
         // same breath lands on a document that already has its content.
