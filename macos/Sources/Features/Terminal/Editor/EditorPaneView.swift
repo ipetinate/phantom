@@ -325,6 +325,13 @@ private struct DocumentView: View {
     let configuration: CodeEditorConfiguration
     @ObservedObject var lsp: LSPCenter
 
+    /// The committed text the margin's `+` and `-` are measured against.
+    ///
+    /// Observed rather than fetched here: the answer arrives from a
+    /// subprocess, so the first pass over a freshly opened file has no
+    /// baseline and the marks appear a moment later.
+    @ObservedObject private var baseline: EditorGitBaseline = .shared
+
     /// The working directory of the terminal this pane belongs to, or nil
     /// while it has not reported one. A plain value rather than the
     /// observable it came from: what this view does with it is compare it
@@ -764,6 +771,7 @@ private struct DocumentView: View {
             completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
             reveal: revealRange,
             gutterMark: gutterMark,
+            diffBaseline: baseline.baseline(for: document.url.path),
             onJumpToDefinition: { offset in jump(from: offset) },
             onRename: { offset in
                 newName = EditorPaneView.identifier(at: offset, in: document.currentText)
@@ -834,6 +842,11 @@ private struct DocumentView: View {
             if let root = EditorChangeLookup.repositoryRoot(forPath: document.url.path) {
                 git.requestStatus(root: root)
             }
+
+            /// What the margin compares against. Asked for here rather than
+            /// on every update: the store answers once per path and ignores
+            /// the rest, but a call per keystroke is a call per keystroke.
+            baseline.request(path: document.url.path)
 
             resolveDivergence()
         }

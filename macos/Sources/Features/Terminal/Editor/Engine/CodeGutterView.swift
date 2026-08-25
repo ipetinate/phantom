@@ -65,6 +65,45 @@ final class CodeGutterView: NSView {
 
     private var mark: Mark?
 
+    /// What happened to a line since the version this file is being compared
+    /// against — `+` for one that entered, `-` for a place lines left from.
+    ///
+    /// One case and not three. A *changed* line is a line that entered: what
+    /// sits in the file now is the new text, and marking it as anything else
+    /// would have the margin describe a line the reader cannot see. So `-`
+    /// means only what it says — a run was deleted here and nothing replaced
+    /// it — and where a change replaced lines in place, `+` wins.
+    enum DiffMark: Equatable {
+        case added
+        case removed
+
+        var glyph: String {
+            switch self {
+            case .added: return "+"
+            case .removed: return "\u{2212}"
+            }
+        }
+    }
+
+    /// Keyed by one-based line number, the way the numbers beside them are
+    /// counted and the way every other part of this editor counts lines.
+    private var diffMarks: [Int: DiffMark] = [:]
+
+    /// Where the `+` and `-` take their colour from.
+    ///
+    /// The diff pane's own palette rather than two greens that drift apart:
+    /// it is derived from the theme, so a light theme gets the darker pair
+    /// without this view knowing how that works.
+    var diffPalette: GitDiffPalette? {
+        didSet { needsDisplay = true }
+    }
+
+    func setDiffMarks(_ marks: [Int: DiffMark]) {
+        guard marks != diffMarks else { return }
+        diffMarks = marks
+        needsDisplay = true
+    }
+
     init(textView: NSTextView, scrollView: NSScrollView, theme: CodeTheme, font: NSFont) {
         self.theme = theme
         self.font = font
@@ -182,15 +221,38 @@ final class CodeGutterView: NSView {
         markLeadingInset + markSize(for: font) + markTrailingGap
     }
 
-    /// The width the numbers and the mark column need together.
+    /// The column the `+` and `-` live in, between the numbers and the text.
+    ///
+    /// Reserved unconditionally, for the same reason the mark column is and
+    /// with more at stake: this width is where the text begins, so a column
+    /// that appeared when a file first differed from `HEAD` would reflow the
+    /// whole document on the reader's first keystroke in it — every time, in
+    /// every file they edit.
+    ///
+    /// The glyphs are drawn at the same size as the numbers, so the column is
+    /// the width of the wider of the two plus a gap. Measured rather than
+    /// guessed, because a `-` in a proportional interface font is nothing like
+    /// a `+`, and the reader can change this font.
+    static func diffColumnWidth(for font: NSFont) -> CGFloat {
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let plus = ("+" as NSString).size(withAttributes: attributes).width
+        let minus = ("\u{2212}" as NSString).size(withAttributes: attributes).width
+        return ceil(max(plus, minus)) + diffTrailingGap
+    }
+
+    private static let diffTrailingGap: CGFloat = 4
+
+    /// The width the numbers, the mark column and the diff column need
+    /// together.
     ///
     /// Static and pure, so the property that matters can be checked rather than
-    /// merely read: it does not take a mark, so no mark can move it.
+    /// merely read: it takes neither a mark nor a diff, so neither can move it.
     static func width(forLineCount lines: Int, font: NSFont) -> CGFloat {
         let digits = String(max(1, lines)).count
         let sample = String(repeating: "8", count: max(3, digits)) as NSString
         return ceil(sample.size(withAttributes: [.font: font]).width)
             + markColumnWidth(for: font)
+            + diffColumnWidth(for: font)
             + numberTrailingInset
     }
 
@@ -300,16 +362,55 @@ final class CodeGutterView: NSView {
         let label = String(number) as NSString
         let attributes = number == currentLine ? current : plain
         let size = label.size(withAttributes: attributes)
+
+        /// The numbers end where the diff column begins, rather than at the
+        /// view's trailing edge. Without the shift they would be drawn over
+        /// the `+`, which is the failure this column's reserved width exists
+        /// to prevent.
+        let numbersEnd = bounds.width - Self.numberTrailingInset
+            - Self.diffColumnWidth(for: font)
         label.draw(
             at: NSPoint(
-                x: bounds.width - size.width - Self.numberTrailingInset,
+                x: numbersEnd - size.width,
                 y: row.minY + (row.height - size.height) / 2
             ),
             withAttributes: attributes
         )
 
+        draw(diffMarks[number], in: row, after: numbersEnd)
+
         guard let mark, mark.line == number else { return }
         mark.image.draw(in: Self.markRect(in: row, size: markSize))
+    }
+
+    /// One `+` or `-`, in the column the numbers leave for it.
+    ///
+    /// Nothing at all for an unchanged line, which is almost every line of
+    /// almost every file: the column stays empty rather than carrying a
+    /// placeholder, so the eye finds the changes by their being the only
+    /// things there.
+    private func draw(_ diffMark: DiffMark?, in row: NSRect, after numbersEnd: CGFloat) {
+        guard let diffMark, let palette = diffPalette else { return }
+
+        let color: NSColor
+        switch diffMark {
+        case .added: color = palette.addedEmphasis
+        case .removed: color = palette.removedEmphasis
+        }
+
+        let glyph = diffMark.glyph as NSString
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+        ]
+        let size = glyph.size(withAttributes: attributes)
+        glyph.draw(
+            at: NSPoint(
+                x: numbersEnd + Self.diffTrailingGap,
+                y: row.minY + (row.height - size.height) / 2
+            ),
+            withAttributes: attributes
+        )
     }
 
     /// The empty line TextKit appends to a document that ends in a newline,
