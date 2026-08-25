@@ -1004,7 +1004,12 @@ palette: Palette = .{},
 /// widgets to show through which isn't generally desirable.
 ///
 /// On macOS, changing this configuration requires restarting Ghostty completely.
-@"background-opacity": f64 = 1.0,
+///
+/// Phantom ships 0.85 rather than upstream's 1.0. The window is meant to sit
+/// over what the reader is working on, and a terminal that hides it entirely is
+/// a terminal they keep moving. Paired with `background-blur = 50`, which is
+/// what keeps text legible over a busy desktop at this opacity.
+@"background-opacity": f64 = 0.85,
 
 /// Applies background opacity to cells with an explicit background color
 /// set.
@@ -1050,7 +1055,19 @@ palette: Palette = .{},
 ///
 /// On X11, blur can only be enabled when using the KWin compositor
 /// as a part of KDE Plasma.
-@"background-blur": BackgroundBlur = .false,
+///
+/// Phantom ships 50 rather than upstream's `false`, because it ships
+/// `background-opacity = 0.85` and unblurred transparency puts whatever is
+/// behind the window into the middle of the text.
+///
+/// 50 rather than the 20 this documentation calls a good looking blur: 20 is
+/// the cheaper number and it is left to the reader to choose, because at this
+/// opacity it lets too much of a busy desktop through to read comfortably. It
+/// is also not the 80 this ended up at by hand — that is four times the
+/// documented default, and the warning above about performance and strange
+/// rendering at high intensities is a real one. 50 is the middle that stays
+/// legible.
+@"background-blur": BackgroundBlur = .{ .radius = 50 },
 
 /// The opacity level (opposite of transparency) of an unfocused split.
 /// Unfocused splits by default are slightly faded out to make it easier to see
