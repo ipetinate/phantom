@@ -330,9 +330,27 @@ struct MCPServerRegistrationTests {
 
     // MARK: - The four together
 
+    /// Every agent the app knows is accounted for — either it has an
+    /// installer or it is on the list of ones that deliberately do not.
+    ///
+    /// The invariant is coverage, not equality. Equality was the old spelling
+    /// and it broke the moment an agent arrived whose MCP configuration
+    /// surface is not documented; the useful guarantee is that nobody can add
+    /// an agent and leave the question unanswered, which this still enforces.
     @Test func everyAgentIsOffered() {
-        let listed = MCPServerRegistration.agents.map(\.id)
-        #expect(Set(listed) == Set(CodingAgent.allCases))
+        let listed = Set(MCPServerRegistration.agents.map(\.id))
+
+        #expect(listed.union(MCPServerRegistration.withoutInstaller)
+            == Set(CodingAgent.allCases))
+    }
+
+    /// An agent cannot be both offered and excused. Without this, adding one
+    /// to the excused set while it still has an installer would pass the test
+    /// above and quietly misdescribe what the app does.
+    @Test func noAgentIsBothOfferedAndExcused() {
+        let listed = Set(MCPServerRegistration.agents.map(\.id))
+
+        #expect(listed.isDisjoint(with: MCPServerRegistration.withoutInstaller))
     }
 
     @Test func everyAgentIsNamedTheWayTheHooksPaneNamesIt() {

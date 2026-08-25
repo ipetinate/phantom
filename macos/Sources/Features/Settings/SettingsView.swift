@@ -218,6 +218,8 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarTabShowCodex") private var tabShowCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarTabShowOpenCode") private var tabShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarTabShowAntigravity") private var tabShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage("SidebarTabShowKimi") private var tabShowKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage("SidebarTabShowPi") private var tabShowPi = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarTabAlwaysShowActions") private var tabAlwaysShowActions = false
 
     @AppStorage("SidebarGroupShowPullRequests") private var groupShowPullRequests = true
@@ -225,6 +227,8 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarGroupShowAntigravity") private var groupShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage("SidebarGroupShowKimi") private var groupShowKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage("SidebarGroupShowPi") private var groupShowPi = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarGroupShowNewTerminal") private var groupShowNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var groupShowWorktree = true
     @AppStorage("SidebarGroupShowCount") private var groupShowCount = true
@@ -235,6 +239,8 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarShowCodex") private var chromeShowCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarShowOpenCode") private var chromeShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarShowAntigravity") private var chromeShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage("SidebarShowKimi") private var chromeShowKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage("SidebarShowPi") private var chromeShowPi = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarChromeAlwaysShowActions") private var chromeAlwaysShowActions = false
 
     @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
@@ -284,6 +290,9 @@ struct SidebarSettingsView: View {
                         .init(id: "opencode", title: "OpenCode", isOn: $chromeShowOpenCode),
                         .init(id: "antigravity", title: "Antigravity",
                               isOn: $chromeShowAntigravity),
+                        .init(id: "kimi", title: "Kimi Code", short: "Kimi",
+                              isOn: $chromeShowKimi),
+                        .init(id: "pi", title: "Pi", isOn: $chromeShowPi),
                     ],
                     emptyLabel: "Hidden")
 
@@ -325,6 +334,9 @@ struct SidebarSettingsView: View {
                         .init(id: "opencode", title: "OpenCode", isOn: $tabShowOpenCode),
                         .init(id: "antigravity", title: "Antigravity",
                               isOn: $tabShowAntigravity),
+                        .init(id: "kimi", title: "Kimi Code", short: "Kimi",
+                              isOn: $tabShowKimi),
+                        .init(id: "pi", title: "Pi", isOn: $tabShowPi),
                     ],
                     emptyLabel: "Hidden")
 
@@ -353,6 +365,9 @@ struct SidebarSettingsView: View {
                         .init(id: "opencode", title: "OpenCode", isOn: $groupShowOpenCode),
                         .init(id: "antigravity", title: "Antigravity",
                               isOn: $groupShowAntigravity),
+                        .init(id: "kimi", title: "Kimi Code", short: "Kimi",
+                              isOn: $groupShowKimi),
+                        .init(id: "pi", title: "Pi", isOn: $groupShowPi),
                     ],
                     emptyLabel: "Hidden")
 

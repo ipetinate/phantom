@@ -58,6 +58,28 @@ enum MCPServerRegistration {
         ]
     }
 
+    /// Agents this app knows but does not register itself with, and why.
+    ///
+    /// Declared rather than implied by omission, because omission is exactly
+    /// how an agent gets forgotten: `everyAgentIsOffered` asserts that this set
+    /// and ``agents`` together account for every `CodingAgent`, so a new one
+    /// fails the suite until somebody decides which side it belongs on. That is
+    /// the point — the decision is cheap, the silence is not.
+    ///
+    /// **Kimi and Pi.** Both were added as agents on the strength of documented
+    /// launch and resume flags, and neither has a *verified* MCP configuration
+    /// surface. Kimi keeps its settings in TOML at `~/.kimi-code/config.toml`
+    /// and its own documentation steers the reader to configure MCP by talking
+    /// to the agent rather than by editing a file, so the file's shape for an
+    /// MCP entry is not established. Pi's extension system is TypeScript
+    /// modules rather than declarative configuration, which is a different
+    /// shape from every installer here.
+    ///
+    /// Writing into either on a guess is the one thing an installer must never
+    /// do: these files belong to other programs, and a malformed entry is a
+    /// failure the reader sees in that program with nothing pointing back here.
+    static let withoutInstaller: Set<CodingAgent> = [.kimi, .pi]
+
     /// Who is registered right now, read off disk each time.
     ///
     /// Not cached, for the reason `AgentsSettingsView` rechecks on every

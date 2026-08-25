@@ -39,6 +39,8 @@ final class SidebarLayoutModel: ObservableObject {
     /// Creates a new terminal tab that immediately starts an Antigravity
     /// session.
     var onNewAntigravityTab: () -> Void = {}
+    var onNewKimiTab: () -> Void = {}
+    var onNewPiTab: () -> Void = {}
 
     /// Opens a terminal — or a terminal already running an agent — with its
     /// cwd inside a chosen worktree. Wired by the controller like the

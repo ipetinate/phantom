@@ -26,10 +26,15 @@ struct EditorAgentMark: Equatable {
 /// flattened to the secondary label colour are four grey shapes that look
 /// alike.
 ///
-/// Claude's and Antigravity's artwork is template-only, so those two carry the
-/// one swatch their icon declares; Codex and OpenCode carry the colours in
+/// Claude's, Antigravity's and Kimi's artwork is template-only, so those carry
+/// the one swatch their icon declares; Codex and OpenCode carry the colours in
 /// their own assets, which for Codex is the whole blue-violet gradient rather
 /// than a flat stop taken out of it.
+///
+/// Pi is the exception to the sentence above and cannot be helped: its artwork
+/// is white, so there is no brand colour to be recognised by. It takes the
+/// primary label colour, which at least inverts with the appearance instead of
+/// disappearing into it.
 struct AgentBrandMark: View {
     let agent: CodingAgent
     var size: CGFloat = 12
@@ -40,6 +45,8 @@ struct AgentBrandMark: View {
         case .codex: CodexIcon(size: size, originalColors: true)
         case .opencode: OpenCodeIcon(size: size, originalColors: true)
         case .antigravity: AntigravityIcon(size: size, tint: .original)
+        case .kimi: KimiIcon(size: size, tint: .original)
+        case .pi: PiIcon(size: size, tint: .original)
         }
     }
 }
