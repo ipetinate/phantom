@@ -214,6 +214,14 @@ class AppDelegate: NSObject,
             "ApplePressAndHoldEnabled": false,
         ])
 
+        /// Shorten the wait before a tooltip appears. Outside the
+        /// `MCPServer.isTesting` guard below: that guard exists for the calls
+        /// that write into the reader's own files, and this one writes nothing
+        /// — it sets a number on an AppKit object that dies with the process.
+        /// A test host wants it too, because running it is what proves the
+        /// private API it resolves has not gone away.
+        ToolTipDelay.applyInitialDelay()
+
         // Put the chosen app icon back on. The override is in-memory only
         // (`NSApp.applicationIconImage`), so every launch starts from the
         // compiled-in icon until this runs.
