@@ -25,16 +25,20 @@ enum EditorDiffMarks {
     /// Marks keyed by one-based line number in `current`, which is what the
     /// reader is looking at and how the numbers beside them are counted.
     ///
-    /// Three rules, and each is a decision:
+    /// The rule is the reader's own: `+` is new, `-` is what is leaving or
+    /// being altered.
     ///
-    /// A line that is only in `current` is `+`. A run only in `base` is `-`,
-    /// reported against the line that now sits where it was, because a deleted
-    /// line has no line of its own to be marked on and that is where a reader
-    /// looks to find what used to be there.
+    /// A line that is only in `current`, replacing nothing, is `+`. A run only
+    /// in `base` is `-`, reported against the line that now sits where it was,
+    /// because a deleted line has no line of its own to be marked on and that
+    /// is where a reader looks to find what used to be there.
     ///
     /// A *changed* line — a removal and an insertion in the same place — is
-    /// `+` alone. What sits in the file now is the new text, so a `-` beside
-    /// it would describe a line that is not on screen.
+    /// `-`, because something left it. That is a deliberate reading and not
+    /// the only possible one: the text sitting there now is the new text, so
+    /// `+` would also be defensible. It is `-` because the question the margin
+    /// answers is "what did I disturb here", and a line whose old content is
+    /// gone was disturbed.
     static func marks(
         current: [String],
         base: [String]
@@ -57,10 +61,10 @@ enum EditorDiffMarks {
 
             switch (isRemoved, isInserted) {
             case (true, true):
-                /// A change. The insertion accounts for it, and clearing the
-                /// flag is what stops the line *after* a change from also
-                /// being blamed for the removal.
-                marks[currentIndex + 1] = .added
+                /// A change: something left this line. Clearing the flag is
+                /// what stops the line *after* a change from also being
+                /// blamed for the removal.
+                marks[currentIndex + 1] = .removed
                 deletionPending = false
                 baseIndex += 1
                 currentIndex += 1

@@ -20,15 +20,6 @@ struct GitDiffView<Accessory: View>: View {
 
     @State private var outcome: GitDiffOutcome?
 
-    /// Whether the unchanged parts of the file are on screen too.
-    ///
-    /// Not a rendering choice: git decides what to print, so showing the rest
-    /// means asking it again with enough context to cover any file. Kept per
-    /// view rather than remembered, because it answers a question about the
-    /// diff being looked at now — a reader who expanded one file was asking
-    /// about that file.
-    @State private var showsWholeFile = false
-
     /// Enough context to reach the top and bottom of anything. Git clamps it
     /// to the file, so a number larger than any real file is the whole file
     /// without having to count its lines first.
@@ -47,6 +38,20 @@ struct GitDiffView<Accessory: View>: View {
     /// unsaved buffer describes the file on disk, which is what `git diff`
     /// means anyway.
     let reloadKey: String
+
+    /// Whether the unchanged parts of the file are on screen too.
+    ///
+    /// Not a rendering choice: git decides what to print, so showing the rest
+    /// means asking it again with enough context to cover any file.
+    ///
+    /// Bound rather than owned, because the control for it belongs in the
+    /// host's own row of actions beside the presentation and split toggles —
+    /// a second control floating next to that row reads as something else's.
+    /// The host keeps the state; this view keeps the meaning.
+    ///
+    /// Declared after `reloadKey` so the call site reads in the order Swift
+    /// requires of a memberwise initialiser.
+    @Binding var showsWholeFile: Bool
 
     /// The host's own controls, handed to the split so they sit beside its
     /// direction toggle instead of on top of it. Both want the same corner,
@@ -127,23 +132,7 @@ struct GitDiffView<Accessory: View>: View {
                 onExpandGap: showsWholeFile ? nil : { showsWholeFile = true }
             )
         } accessory: {
-            HStack(spacing: 6) {
-                /// The way back. Clicking a gap is how the whole file is
-                /// asked for, and a gap that has been expanded is no longer
-                /// on screen to be clicked again — so without this the only
-                /// way back to the changes alone is to close the tab.
-                Button {
-                    showsWholeFile.toggle()
-                } label: {
-                    Image(systemName: showsWholeFile
-                        ? "arrow.down.right.and.arrow.up.left"
-                        : "arrow.up.left.and.arrow.down.right")
-                }
-                .buttonStyle(.plain)
-                .help(showsWholeFile ? "Show changes only" : "Show the whole file")
-
-                accessory()
-            }
+            accessory()
         }
         .onAppear { linkPanes() }
         /// Turned off on the way out because the model — and so the link —

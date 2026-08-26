@@ -29,17 +29,22 @@ struct EditorDiffMarksTests {
         #expect(marks(["a", "c"], was: ["a", "b", "c"]) == [2: .removed])
     }
 
-    /// The rule that keeps the margin describing lines the reader can see: a
-    /// changed line is the new text, so it is `+` and never also `-`.
-    @Test func aChangedLineIsAddedRatherThanBoth() {
-        #expect(marks(["a", "changed", "c"], was: ["a", "b", "c"]) == [2: .added])
+    /// `+` is new and `-` is what left or was altered, which makes a changed
+    /// line `-`: its old content is gone.
+    @Test func aChangedLineIsMarkedAsAltered() {
+        #expect(marks(["a", "changed", "c"], was: ["a", "b", "c"]) == [2: .removed])
+    }
+
+    /// A line that replaces nothing is new, and stays `+`.
+    @Test func aLineThatReplacesNothingIsNew() {
+        #expect(marks(["a", "b", "new"], was: ["a", "b"]) == [3: .added])
     }
 
     /// The line after a change must not inherit the removal.
     @Test func theLineAfterAChangeIsLeftAlone() {
         let result = marks(["a", "changed", "c", "d"], was: ["a", "b", "c", "d"])
 
-        #expect(result == [2: .added])
+        #expect(result == [2: .removed])
         #expect(result[3] == nil)
     }
 
@@ -59,12 +64,13 @@ struct EditorDiffMarksTests {
         #expect(marks([], was: ["a", "b"]).isEmpty)
     }
 
-    /// Additions win where both would land, whichever side is longer.
-    @Test func anAdditionBesideADeletionStaysAnAddition() {
+    /// A replaced run is altered rather than new, line for line, and the
+    /// line after it is left alone.
+    @Test func aReplacedRunIsAlteredThroughout() {
         let result = marks(["a", "x", "y", "d"], was: ["a", "b", "c", "d"])
 
-        #expect(result[2] == .added)
-        #expect(result[3] == .added)
+        #expect(result[2] == .removed)
+        #expect(result[3] == .removed)
         #expect(result[4] == nil)
     }
 
@@ -84,7 +90,7 @@ struct EditorDiffMarksTests {
         var changed = atLimit
         changed[0] = "changed"
 
-        #expect(EditorDiffMarks.marks(current: changed, base: atLimit) == [1: .added])
+        #expect(EditorDiffMarks.marks(current: changed, base: atLimit) == [1: .removed])
     }
 
     // MARK: Splitting

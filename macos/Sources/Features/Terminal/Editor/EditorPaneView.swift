@@ -336,6 +336,14 @@ private struct DocumentView: View {
     /// appears when `git blame` answers, which is after the caret moved.
     @ObservedObject private var blame: EditorBlameCenter = .shared
 
+    /// Whether the diff pane is showing the unchanged parts of the file too.
+    ///
+    /// Here rather than in `GitDiffView` so its control can sit in the row of
+    /// actions this view already draws, beside the presentation and split
+    /// toggles. Per tab, and not remembered: it answers a question about the
+    /// diff being looked at now.
+    @State private var diffShowsWholeFile = false
+
     /// The working directory of the terminal this pane belongs to, or nil
     /// while it has not reported one. A plain value rather than the
     /// observable it came from: what this view does with it is compare it
@@ -604,10 +612,38 @@ private struct DocumentView: View {
             extra: {
                 HStack(spacing: 1) {
                     if showsRenderedMarkdown { MarkdownWidthToggle() }
+                    if showsDiff { wholeFileToggle }
                     SplitDirectionToggle(model: splitModel)
                 }
             }
         )
+    }
+
+    /// The way back from an expanded diff.
+    ///
+    /// It has to exist rather than leaving the gap rows to do both jobs:
+    /// clicking a gap is how the whole file is asked for, and once the gaps
+    /// are gone there is no gap row left to click again.
+    private var wholeFileToggle: some View {
+        Button {
+            diffShowsWholeFile.toggle()
+        } label: {
+            Image(systemName: diffShowsWholeFile
+                ? "arrow.down.right.and.arrow.up.left"
+                : "arrow.up.left.and.arrow.down.right")
+        }
+        .buttonStyle(.plain)
+        .help(diffShowsWholeFile ? "Show changes only" : "Show the whole file")
+    }
+
+    /// Whether a diff is on screen for that toggle to act on — on its own or
+    /// as the second pane of a split.
+    private var showsDiff: Bool {
+        switch presentationOptions.nearest(to: document.presentation) {
+        case .diff: true
+        case .split: presentationOptions.splitPartner == .diff
+        case .source, .preview, .image, .table: false
+        }
     }
 
     /// Whether prose is on screen for the column control to act on. False for
@@ -657,6 +693,7 @@ private struct DocumentView: View {
                 font: configuration.font,
                 model: splitModel,
                 reloadKey: "\(context.change.index)\(context.change.worktree)\(document.isDirty)",
+                showsWholeFile: $diffShowsWholeFile,
                 accessory: { presentationControlWithSplitToggle }
             )
         } else {
