@@ -49,71 +49,32 @@ struct GitReviewCard: View {
         .task(id: root) { center.load(root: root) }
     }
 
+    /// Three groups with a rule between them, in a card the width of a
+    /// sidebar.
+    ///
+    /// The same discipline as the panel's header and for the same reason: a
+    /// flat stack of seven rows has no shape, so the eye reads it top to
+    /// bottom every time instead of jumping to the part it wanted. Grouped by
+    /// the question each answers — what this is, where it goes and how big,
+    /// who did it — a reader looking for the conflict line finds it without
+    /// reading the rest.
+    ///
+    /// Tighter than the panel's version because the room is a third of it: no
+    /// icons beside the facts, and the counts share a line.
     @ViewBuilder
     private func content(_ context: GitReviewContext) -> some View {
-        if let request = context.pullRequest {
-            pullRequest(request)
-        } else {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                Text(context.branch)
-                    .font(palette.font(size: 11, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-            }
-        }
+        identity(context)
 
-        /// Where it is going, and why that is the target. The provenance is
-        /// what tells a reader whether they are looking at what a pull request
-        /// will merge or at a default somebody never chose.
-        HStack(spacing: 4) {
-            Text("\u{2192} \(context.target.ref)")
-                .font(palette.font(size: 10))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+        rule
 
-            Text("(\(context.target.provenance))")
-                .font(palette.font(size: 9))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-
-            Spacer(minLength: 0)
-        }
-
-        HStack(spacing: 5) {
-            Text(count(context.commitCount, "commit"))
-                .font(palette.font(size: 9))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-
-            Text(count(context.fileCount, "file"))
-                .font(palette.font(size: 9))
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-
-            Text(verbatim: "+\(context.addedLines)")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.green)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-
-            Text(verbatim: "\u{2212}\(context.removedLines)")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.red)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-
-            Spacer(minLength: 0)
-        }
-
+        route(context)
+        size(context)
         conflictLine(context.conflicts)
+
+        if context.pullRequest != nil || !context.authors.isEmpty {
+            rule
+            people(context)
+        }
 
         Button(action: onOpenReview) {
             HStack(spacing: 4) {
@@ -129,76 +90,184 @@ struct GitReviewCard: View {
                     .fill((palette.accent ?? .accentColor).opacity(0.22)))
         }
         .buttonStyle(.plain)
-        .padding(.top, 1)
+        .padding(.top, 3)
     }
 
+    /// What this is: the pull request when there is one, the branch when there
+    /// is not.
     @ViewBuilder
-    private func pullRequest(_ request: GitReviewPullRequest) -> some View {
+    private func identity(_ context: GitReviewContext) -> some View {
+        if let request = context.pullRequest {
+            HStack(spacing: 4) {
+                Text(verbatim: "#\(request.number)")
+                    .font(palette.font(size: 10, weight: .semibold))
+                    .foregroundStyle(palette.accent ?? .accentColor)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                Text(request.title)
+                    .font(palette.font(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                if request.isDraft {
+                    Text("Draft")
+                        .font(palette.font(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.secondary.opacity(0.18)))
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            if let preview = request.bodyPreview {
+                Text(preview)
+                    .font(palette.font(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+        } else {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                Text(context.branch)
+                    .font(palette.font(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// Where it is going, and why that is the target. The provenance is what
+    /// tells a reader whether they are looking at what a pull request will
+    /// merge or at a default nobody chose.
+    @ViewBuilder
+    private func route(_ context: GitReviewContext) -> some View {
         HStack(spacing: 4) {
-            Text(verbatim: "#\(request.number)")
-                .font(palette.font(size: 10, weight: .semibold))
-                .foregroundStyle(palette.accent ?? .accentColor)
+            Text("\u{2192}")
+                .font(palette.font(size: 10))
+                .foregroundStyle(.quaternary)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Text(context.target.ref)
+                .font(palette.font(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Text(context.target.provenance)
+                .font(palette.font(size: 9))
+                .foregroundStyle(.quaternary)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
 
-            Text(request.title)
-                .font(palette.font(size: 11, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            if request.isDraft {
-                Text("Draft")
-                    .font(palette.font(size: 8, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 3)
-                    .padding(.vertical, 1)
-                    .background(RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.secondary.opacity(0.18)))
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-
             Spacer(minLength: 0)
         }
+    }
 
-        if let preview = request.bodyPreview {
-            Text(preview)
-                .font(palette.font(size: 9))
-                .foregroundStyle(.tertiary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-        }
-
-        /// Who and when, on one line. The update rather than the creation when
-        /// both exist: a reader deciding whether to look at this wants to know
-        /// whether anything has happened, and "opened three weeks ago" says
-        /// the opposite of what "updated an hour ago" says about the same
-        /// pull request.
+    /// How much of it there is, on one line. They are read together or not at
+    /// all, so they are not boxed individually.
+    @ViewBuilder
+    private func size(_ context: GitReviewContext) -> some View {
         HStack(spacing: 4) {
-            if let author = request.author {
-                Text(author)
-                    .font(palette.font(size: 9))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            fact(count(context.commitCount, "commit"))
+            dot
+            fact(count(context.fileCount, "file"))
+            dot
 
-            if let when = GitReviewPullRequest.relative(request.updatedAt ?? request.createdAt) {
-                Text(request.updatedAt == nil ? "opened \(when)" : "updated \(when)")
-                    .font(palette.font(size: 9))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
+            Text(verbatim: "+\(context.addedLines)")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.green)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Text(verbatim: "\u{2212}\(context.removedLines)")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.red)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
 
             Spacer(minLength: 0)
         }
+    }
 
-        if !request.assignees.isEmpty {
-            Text("Assigned: \(request.assignees.joined(separator: ", "))")
+    /// Who, with the roles named rather than left to an icon.
+    ///
+    /// The update rather than the creation when both exist: a reader deciding
+    /// whether to look at this wants to know whether anything has happened,
+    /// and "opened three weeks ago" says the opposite of "updated an hour ago"
+    /// about the same pull request.
+    @ViewBuilder
+    private func people(_ context: GitReviewContext) -> some View {
+        if let request = context.pullRequest {
+            if let author = request.author {
+                labelled("Opened by", author)
+            }
+            if !request.assignees.isEmpty {
+                labelled("Assigned to", request.assignees.joined(separator: ", "))
+            }
+            if let when = GitReviewPullRequest.relative(
+                request.updatedAt ?? request.createdAt) {
+                labelled(request.updatedAt == nil ? "Opened" : "Updated", when)
+            }
+        }
+
+        if !context.authors.isEmpty {
+            labelled(
+                "Commits by",
+                context.authors.prefix(3)
+                    .map { "\($0.name) (\($0.commits))" }
+                    .joined(separator: ", ")
+            )
+            .help(context.authors.map { "\($0.name): \($0.commits)" }
+                .joined(separator: "\n"))
+        }
+    }
+
+    @ViewBuilder
+    private func labelled(_ name: String, _ value: String) -> some View {
+        HStack(spacing: 3) {
+            Text(name)
                 .font(palette.font(size: 9))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.quaternary)
+                .fixedSize(horizontal: true, vertical: false)
+            Text(value)
+                .font(palette.font(size: 9))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+            Spacer(minLength: 0)
         }
+    }
+
+    @ViewBuilder
+    private func fact(_ text: String) -> some View {
+        Text(text)
+            .font(palette.font(size: 9))
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var dot: some View {
+        Text("\u{00B7}")
+            .font(palette.font(size: 9))
+            .foregroundStyle(.quaternary)
+    }
+
+    /// Thinner than a `Divider` on purpose: in a card this size a full-weight
+    /// rule reads as a border and looks like the card ending.
+    private var rule: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.18))
+            .frame(height: 1)
+            .padding(.vertical, 1)
     }
 
     /// The one line that is a warning rather than a fact.
