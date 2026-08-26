@@ -25,11 +25,16 @@ struct MarkdownStyle: Equatable {
     ///
     /// **Derived, not chosen.** Typography puts a comfortable line at 65 to 80
     /// characters — past that the eye loses its place on the return sweep. The
-    /// column runs 86 of *this* font's characters, a little past that range and
-    /// on purpose: at 72 the contained preview read as too narrow for the width
-    /// the pane had to give. Measured rather than guessed at, which is what
-    /// keeps it right when the reader changes the editor's font size, where a
-    /// hardcoded pixel width would not.
+    /// column runs 104 of *this* font's characters, well past that range and
+    /// on purpose.
+    ///
+    /// It got there in two steps, and the second is the honest part: 72 was
+    /// the textbook answer and read as a ribbon down the middle of the pane;
+    /// 86 was still narrower than it looked on screen. The typographic range
+    /// assumes a printed page, and this is a wide pane beside a file tree —
+    /// the margin it leaves is not restful there, it is waste. Measured
+    /// rather than guessed at either way, which is what keeps it right when
+    /// the reader changes the editor's font size.
     var measure: CGFloat { Self.measure(for: bodyFont) }
 
     /// The widest an image is drawn, before its aspect ratio scales the
@@ -72,11 +77,11 @@ struct MarkdownStyle: Equatable {
     /// and the digits, which are the obvious thing to measure and what CSS's
     /// `ch` unit uses, are among its widest glyphs. In the system font a `0` is
     /// 21% wider than the average lowercase letter, so taking it as the sample
-    /// would have given a 698-point column for 575 points of text.
+    /// would have given a 845-point column for 695 points of text.
     ///
-    /// At the editor's default size that is 575 points, and it moves with the
-    /// font: 498 at 11 points, 903 at 22.
-    static func measure(for font: NSFont, characters: CGFloat = 86) -> CGFloat {
+    /// At the editor's default size that is 695 points, and it moves with the
+    /// font: 602 at 11 points, 1092 at 22.
+    static func measure(for font: NSFont, characters: CGFloat = 104) -> CGFloat {
         let sample = "abcdefghijklmnopqrstuvwxyz "
         let width = (sample as NSString).size(withAttributes: [.font: font]).width
         guard width > 0 else { return font.pointSize * 0.5 * characters }
