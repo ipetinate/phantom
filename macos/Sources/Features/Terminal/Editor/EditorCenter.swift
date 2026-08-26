@@ -92,6 +92,19 @@ final class EditorCenter: ObservableObject {
     /// offer the external editor instead.
     @Published var openFailure: OpenFailure?
 
+    /// The review screen, when one is open, and which work it is showing.
+    ///
+    /// A pane-level presentation rather than a tab, because it is not a file:
+    /// it has no path, nothing on disk changes when it closes, and the tab
+    /// model's every rule — reopening never duplicates, closing picks the
+    /// neighbour to the left — is about files. It takes the same area a file,
+    /// the terminal and the markdown preview take, which is what was asked
+    /// for; what it does not take is a place in the strip above them.
+    ///
+    /// One at a time per window. Two reviews side by side is a comparison
+    /// nobody asked for, and the screen is wide by nature.
+    @Published var review: GitReviewScope?
+
     struct OpenFailure: Identifiable {
         let id = UUID()
         let url: URL
@@ -229,6 +242,11 @@ final class EditorCenter: ObservableObject {
     func showsTabBar(in id: EditorGroup.ID) -> Bool {
         let cell = tabs(in: id)
         if !cell.isEmpty { return true }
+
+        /// A review with no files beside it still needs its own tab drawn, or
+        /// it is a panel with no way to close it: the button is in the strip.
+        if cell.showsReview { return true }
+
         return hostsTerminal(id) && tree.groups.count > 1
     }
 
@@ -362,10 +380,16 @@ final class EditorCenter: ObservableObject {
     ///   Applied to a document that is already open too: clicking the same
     ///   file in the Git panel again is a request to see the changes, not a
     ///   request to focus a tab that happens to exist.
+    ///
+    /// - Parameter markedBy: the agent that asked, when one did. It hangs that
+    ///   agent's mark in the gutter beside the revealed line — see
+    ///   ``EditorDocument/agentMark``. Nil for every gesture a person makes,
+    ///   which is all of them but `reveal_line`.
     @discardableResult
     func open(
         _ url: URL,
         reveal: LSPRange? = nil,
+        markedBy agent: CodingAgent? = nil,
         showing: EditorPresentation? = nil,
         reviewBase: String? = nil
     ) -> Bool {
@@ -383,7 +407,7 @@ final class EditorCenter: ObservableObject {
         }
 
         if let existing = documents[path] {
-            if let reveal { existing.reveal = (id: UUID().uuidString, range: reveal) }
+            if let reveal { apply(reveal, markedBy: agent, to: existing) }
             if let showing { existing.presentation = showing }
 
             /// Written on every open, including with nil, so a file opened
@@ -433,11 +457,29 @@ final class EditorCenter: ObservableObject {
                         self.setDirty(document.isDirty, for: path)
                     }
                 }
-            if let reveal { document.reveal = (id: UUID().uuidString, range: reveal) }
+            if let reveal { apply(reveal, markedBy: agent, to: document) }
             place(path)
             lastSelectedFile = path
             return true
         }
+    }
+
+    /// Sends a document to a range, and hangs an agent's mark on it when an
+    /// agent is what asked.
+    ///
+    /// One function for both halves of `open`, so a file that was already open
+    /// and one that was not cannot come to disagree about whether a mark
+    /// accompanies a reveal. The line is read out of the range rather than
+    /// passed beside it: a mark and a caret on two different lines is the one
+    /// thing this feature must not be able to express, and taking one number
+    /// from one place is what makes it unable to.
+    ///
+    /// A nil `agent` leaves an existing mark alone rather than clearing it. A
+    /// reader jumping to a definition has not made the agent's line wrong; only
+    /// an edit does that, and the document clears it there.
+    private func apply(_ reveal: LSPRange, markedBy agent: CodingAgent?, to document: EditorDocument) {
+        document.reveal = (id: UUID().uuidString, range: reveal)
+        if let agent { document.mark(agent, atLine: reveal.start.line + 1) }
     }
 
     /// Opens a media file: a tab, a viewer, and none of the machinery a text
@@ -544,6 +586,18 @@ final class EditorCenter: ObservableObject {
         let holder = holder(of: item)
         let cell = holder.flatMap { tree.group($0) }
 
+        /// The terminal answers `false` to all three of the pin questions and
+        /// there is nothing to decide: it has no path, it is drawn first in
+        /// its cell by `EditorTabBar` whatever the files do, and its own menu
+        /// keeps only the splits anyway.
+        var path: String?
+        if case .file(let file) = item { path = file }
+        let tab = path.flatMap { cell?.tabs.tab(for: $0) }
+        let canMove: (Int) -> Bool = { offset in
+            guard let path, let cell else { return false }
+            return cell.tabs.canMove(path, by: offset)
+        }
+
         return EditorTabCommand.Availability(
             hasSiblings: (cell?.tabs.tabs.count ?? 0) > 1,
             canSplitOut: canSplitOut(item),
@@ -551,8 +605,29 @@ final class EditorCenter: ObservableObject {
             canReturnToMainPane: {
                 guard case .file = item, let main = mainPaneID else { return false }
                 return holder != main
-            }()
+            }(),
+            isPinned: tab?.isPinned ?? false,
+            canMoveLeft: canMove(-1),
+            canMoveRight: canMove(1)
         )
+    }
+
+    /// Pins a tab to the head of its bar, or lets a pinned one go.
+    ///
+    /// Routed to the cell that *holds* the file rather than to the cell in
+    /// focus, for the reason every other per-file change is — see
+    /// `mutateHolder`. Nothing here can empty a cell, so the tree's heal has
+    /// nothing to do and the grid keeps its shape.
+    func setPinned(_ isPinned: Bool, for path: String) {
+        mutateHolder(of: path) { $0.setPinned(isPinned, for: path) }
+    }
+
+    /// Moves a tab one place along its bar, within its own run.
+    ///
+    /// The menu's "Move Left" and "Move Right", and the only way to reorder
+    /// tabs — see `EditorTabCommand` for why this is not a drag.
+    func moveTab(_ path: String, by offset: Int) {
+        mutateHolder(of: path) { $0.move(path, by: offset) }
     }
 
     /// Divides the cell a tab is in and puts the tab in the new half — the
@@ -634,6 +709,37 @@ final class EditorCenter: ObservableObject {
 
     /// Shows the terminal without closing anything, and moves focus to the
     /// cell it lives in — which is not necessarily the cell being worked in.
+    /// Puts the review screen on screen, or takes it down.
+    ///
+    /// Setting it does not close anything: the file underneath stays open and
+    /// comes back when the review is dismissed, which is what makes this
+    /// usable as a glance rather than as a place to go.
+    func showReview(_ scope: GitReviewScope?) {
+        guard review != scope else {
+            /// Asked for the review that is already open: bring its tab
+            /// forward rather than doing nothing. Clicking "Review this work"
+            /// twice should land on the review both times, and after the first
+            /// click the reader has probably opened a file since.
+            if scope != nil { mutateActive { $0.selectReview() } }
+            return
+        }
+
+        review = scope
+        if scope != nil {
+            mutateActive { $0.selectReview() }
+        } else {
+            /// Closing it leaves the cell showing whatever it showed before —
+            /// a file if one is open, the terminal if this is its cell. Both
+            /// are what `close` already does for a tab, so it is asked rather
+            /// than reimplemented.
+            mutateActive { $0.selectAfterReview() }
+        }
+        refreshPaneVisibility()
+    }
+
+    /// Takes the review's tab down.
+    func closeReview() { showReview(nil) }
+
     func selectTerminal() {
         guard let host = tree.terminalHost else { return }
         tree.update(host) { $0.tabs.selectTerminal() }

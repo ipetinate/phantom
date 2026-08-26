@@ -233,11 +233,18 @@ extension EditorGroupTree {
     }
 
     /// Moves an open file to another cell, selecting it there.
+    ///
+    /// The tab travels whole — its pin and its dirty dot with it — because
+    /// what the reader dragged is the tab and not its path. This used to
+    /// close the path here and `open` it there, which built a *fresh* tab at
+    /// the far end: a pinned tab landed unpinned in the middle of the bar,
+    /// and a tab with unsaved edits landed with no dot on it.
     mutating func move(_ path: String, to id: EditorGroup.ID) {
         guard let source = groupHolding(path), source != id, group(id) != nil else { return }
+        guard let tab = group(source)?.tabs.tab(for: path) else { return }
 
         apply(source) { $0.tabs.close(path) }
-        apply(id) { $0.tabs.open(path) }
+        apply(id) { $0.tabs.adopt(tab) }
         heal()
     }
 

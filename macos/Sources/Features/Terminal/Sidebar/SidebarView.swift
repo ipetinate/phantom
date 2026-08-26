@@ -75,6 +75,8 @@ struct SidebarView: View {
     var onNewCodexTabInGroup: (SidebarGroup?) -> Void = { _ in }
     var onNewOpenCodeTabInGroup: (SidebarGroup?) -> Void = { _ in }
     var onNewAntigravityTabInGroup: (SidebarGroup?) -> Void = { _ in }
+    var onNewKimiTabInGroup: (SidebarGroup?) -> Void = { _ in }
+    var onNewPiTabInGroup: (SidebarGroup?) -> Void = { _ in }
 
     /// Opens a terminal directly beside the selected one — same group, or
     /// ungrouped if that's where the selection lives — and hands back its
@@ -190,6 +192,7 @@ struct SidebarView: View {
             case .git:
                 GitPanelView(
                     tabManager: tabManager,
+                    editorCenter: editorCenter,
                     onSpawnTerminal: onSpawnTerminalBesideSelection,
                     onOpenInEditor: onOpenInEditor,
                     onOpenDiff: onOpenDiff,
@@ -223,6 +226,8 @@ struct SidebarView: View {
             onNewCodexTab: onNewCodexTabInGroup,
             onNewOpenCodeTab: onNewOpenCodeTabInGroup,
             onNewAntigravityTab: onNewAntigravityTabInGroup,
+            onNewKimiTab: onNewKimiTabInGroup,
+            onNewPiTab: onNewPiTabInGroup,
             editorCenter: editorCenter,
             onNewWorktreeTab: layout.onNewWorktreeTab,
             onNewWorktreeTabInGroup: layout.onNewWorktreeTabInGroup
@@ -327,6 +332,8 @@ struct SidebarTitlebarChrome: View {
     @AppStorage("SidebarShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage("SidebarShowKimi") private var showKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage("SidebarShowPi") private var showPi = AgentButtonDefaults.isShown(.pi)
 
     /// Whether the pane actions (new terminal, new Claude session, new
     /// group, refresh) stay visible without a hover — off by default,
@@ -417,6 +424,20 @@ struct SidebarTitlebarChrome: View {
                     layout.onNewAntigravityTab()
                 } label: {
                     AntigravityIcon(size: 12)
+                }
+            }
+            if showKimi {
+                SidebarIconButton(help: "New Kimi Code Session") {
+                    layout.onNewKimiTab()
+                } label: {
+                    KimiIcon(size: 12)
+                }
+            }
+            if showPi {
+                SidebarIconButton(help: "New Pi Session") {
+                    layout.onNewPiTab()
+                } label: {
+                    PiIcon(size: 12)
                 }
             }
             if showWorktreesPane {
@@ -630,6 +651,8 @@ private struct SidebarGroupSection: View {
     var onNewCodexTab: (SidebarGroup?) -> Void = { _ in }
     var onNewOpenCodeTab: (SidebarGroup?) -> Void = { _ in }
     var onNewAntigravityTab: (SidebarGroup?) -> Void = { _ in }
+    var onNewKimiTab: (SidebarGroup?) -> Void = { _ in }
+    var onNewPiTab: (SidebarGroup?) -> Void = { _ in }
 
     /// Passed straight through to the rows, which is the only reason this
     /// view knows about either: a group header draws no documents and opens
@@ -650,6 +673,8 @@ private struct SidebarGroupSection: View {
     @AppStorage("SidebarGroupShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarGroupShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage("SidebarGroupShowKimi") private var showKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage("SidebarGroupShowPi") private var showPi = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var showWorktree = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
@@ -932,6 +957,26 @@ private struct SidebarGroupSection: View {
                 .allowsHitTesting(alwaysShowActions || isHeaderHovered)
             }
 
+            if showKimi {
+                SidebarIconButton(help: "New Kimi Code Session in Group") {
+                    onNewKimiTab(group)
+                } label: {
+                    KimiIcon(size: 12)
+                }
+                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+            }
+
+            if showPi {
+                SidebarIconButton(help: "New Pi Session in Group") {
+                    onNewPiTab(group)
+                } label: {
+                    PiIcon(size: 12)
+                }
+                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+            }
+
             /// Always a new terminal from here, never a migration: a header
             /// stands for several terminals, so there is no single tab a
             /// switch could be about. See `WorktreeEntryRule`.
@@ -989,6 +1034,8 @@ private struct SidebarGroupSection: View {
         Button("New Codex Session in Group") { onNewCodexTab(group) }
         Button("New OpenCode Session in Group") { onNewOpenCodeTab(group) }
         Button("New Antigravity Session in Group") { onNewAntigravityTab(group) }
+        Button("New Kimi Code Session in Group") { onNewKimiTab(group) }
+        Button("New Pi Session in Group") { onNewPiTab(group) }
 
         Divider()
 
@@ -1492,6 +1539,8 @@ private struct SidebarTabRow: View {
     @AppStorage("SidebarTabShowCodex") private var showCodexAction = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarTabShowAntigravity") private var showAntigravityAction = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage("SidebarTabShowKimi") private var showKimiAction = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage("SidebarTabShowPi") private var showPiAction = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarTabShowWorktree") private var showWorktreeAction = true
     @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
@@ -1524,6 +1573,8 @@ private struct SidebarTabRow: View {
         if showCodexAction { shown.insert(.codex) }
         if showOpenCodeAction { shown.insert(.opencode) }
         if showAntigravityAction { shown.insert(.antigravity) }
+        if showKimiAction { shown.insert(.kimi) }
+        if showPiAction { shown.insert(.pi) }
 
         return TabRowAgentActions.agents(shown: shown, liveAgent: tab.liveAgent)
     }
@@ -1537,6 +1588,8 @@ private struct SidebarTabRow: View {
         case .codex: CodexIcon(size: 11)
         case .opencode: OpenCodeIcon(size: 11)
         case .antigravity: AntigravityIcon(size: 11)
+        case .kimi: KimiIcon(size: 11)
+        case .pi: PiIcon(size: 11)
         }
     }
 
@@ -1642,6 +1695,23 @@ private struct SidebarTabRow: View {
                             text: branch,
                             dirty: showGitStatus && tab.isDirty == true
                         )
+                    }
+
+                    /// Before the pull request and the dev server, because it
+                    /// is the only one of the three that is asking for
+                    /// something. A repository mid-merge cannot be committed
+                    /// to, pushed from or branched off until it is finished,
+                    /// and a reader who has forgotten a half-done merge in
+                    /// another terminal finds out from git at the moment it
+                    /// refuses them.
+                    ///
+                    /// Not behind a setting either, unlike every chip around
+                    /// it. Those say something about a repository that is
+                    /// working; this says it is stuck, and a reader who
+                    /// switched it off would be switching off the one chip
+                    /// they cannot infer from anywhere else on the row.
+                    if let conflicts = tab.conflicts, conflicts > 0 {
+                        conflictChip(count: conflicts)
                     }
 
                     if showPullRequest, let prNumber = tab.prNumber {
@@ -1947,6 +2017,37 @@ private struct SidebarTabRow: View {
     }
 
     /// The clickable PR tag: opens the branch's open pull request.
+    /// How many paths this terminal's repository cannot merge.
+    ///
+    /// Red rather than the theme's accent, which is the one place on this row
+    /// that breaks from the theme on purpose: every other chip is information,
+    /// and this is a stop sign.
+    ///
+    /// Spelled out rather than left as a glyph and a number. Every other chip
+    /// on this row is a count of something ordinary — commits behind, a pull
+    /// request, a port — so a bare `2` beside them reads as one more of those.
+    /// The words are what make it the one chip that is asking for something.
+    private func conflictChip(count: Int) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "arrow.2.squarepath")
+                .font(.system(size: 8, weight: .semibold))
+            Text(verbatim: "Merge Conflicts: \(count)")
+                .font(themePalette.font(size: 9, weight: .medium))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .foregroundStyle(Color(nsColor: .systemRed))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color(nsColor: .systemRed).opacity(0.15))
+        )
+        .help(count == 1
+            ? "1 file has merge conflicts"
+            : "\(count) files have merge conflicts")
+    }
+
     private func prChip(number: Int) -> some View {
         Button {
             if let url = tab.prURL.flatMap(URL.init(string:)) {

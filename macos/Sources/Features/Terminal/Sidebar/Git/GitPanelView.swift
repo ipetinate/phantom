@@ -18,6 +18,10 @@ import SwiftUI
 struct GitPanelView: View {
     @ObservedObject var tabManager: SidebarTabManager
 
+    /// Which file the editor is showing, so a row can say it is that one.
+    /// Held here only to hand down; this view draws no rows itself.
+    @ObservedObject var editorCenter: EditorCenter
+
     /// Opens a terminal beside the selected one; every file opened here
     /// gets its own. See `FileOpener.openInTerminal`.
     var onSpawnTerminal: () -> Ghostty.SurfaceView? = { nil }
@@ -115,6 +119,7 @@ struct GitPanelView: View {
         GitRepoView(
             root: root,
             style: style,
+            editorCenter: editorCenter,
             selectedTab: selectedTab,
             onSpawnTerminal: onSpawnTerminal,
             onOpenInEditor: onOpenInEditor,
@@ -270,6 +275,15 @@ struct GitChangeRow: View {
     /// still a callback, so the row remains unable to write to disk.
     let url: URL
 
+    /// Whether this row's file is the one the editor is showing.
+    ///
+    /// The Git panel is a checklist while a merge is being resolved: which
+    /// file is on screen is the reader's place in it, and a list with no mark
+    /// leaves them counting rows against tab titles. The Files tree already
+    /// answers this, and the two share `FileExplorerRowEmphasis` so they
+    /// cannot come to disagree about what "open" looks like.
+    var isOpenInEditor = false
+
     let onOpen: () -> Void
     let onPrimary: () -> Void
     let onDiscard: (() -> Void)?
@@ -294,6 +308,19 @@ struct GitChangeRow: View {
     @State private var isHovered = false
 
     private var accent: Color { palette.accent ?? .accentColor }
+
+    /// The same three states the Files tree paints, from the same rule.
+    private var rowFill: Color {
+        switch FileExplorerRowEmphasis.resolve(
+            isOpenInEditor: isOpenInEditor,
+            isSelected: false,
+            isHovered: isHovered
+        ).fill {
+        case .open: accent.opacity(0.45)
+        case .hover: accent.opacity(0.12)
+        case .none: .clear
+        }
+    }
 
     var body: some View {
         HStack(spacing: 5) {
@@ -349,7 +376,7 @@ struct GitChangeRow: View {
         .padding(.horizontal, 6)
         .background(
             RoundedRectangle(cornerRadius: 4)
-                .fill(isHovered ? accent.opacity(0.12) : .clear)
+                .fill(rowFill)
         )
         .onHover { isHovered = $0 }
         .contextMenu { menu }

@@ -325,6 +325,25 @@ private struct DocumentView: View {
     let configuration: CodeEditorConfiguration
     @ObservedObject var lsp: LSPCenter
 
+    /// The committed text the margin's `+` and `-` are measured against.
+    ///
+    /// Observed rather than fetched here: the answer arrives from a
+    /// subprocess, so the first pass over a freshly opened file has no
+    /// baseline and the marks appear a moment later.
+    @ObservedObject private var baseline: EditorGitBaseline = .shared
+
+    /// Who last changed the line the caret is on. Observed so the sentence
+    /// appears when `git blame` answers, which is after the caret moved.
+    @ObservedObject private var blame: EditorBlameCenter = .shared
+
+    /// Whether the diff pane is showing the unchanged parts of the file too.
+    ///
+    /// Here rather than in `GitDiffView` so its control can sit in the row of
+    /// actions this view already draws, beside the presentation and split
+    /// toggles. Per tab, and not remembered: it answers a question about the
+    /// diff being looked at now.
+    @State private var diffShowsWholeFile = false
+
     /// The working directory of the terminal this pane belongs to, or nil
     /// while it has not reported one. A plain value rather than the
     /// observable it came from: what this view does with it is compare it
@@ -439,7 +458,26 @@ private struct DocumentView: View {
         .resolve(fileName: document.url.lastPathComponent, hasChanges: documentHasChanges)
     }
 
-    private var documentHasChanges: Bool { gitContext != nil }
+    /// Whether there is a diff worth offering.
+    ///
+    /// A conflicted file has none: git answers `* Unmerged path` and nothing
+    /// else, so the diff pane could only say so — which is what it did, and it
+    /// was a dead end. The file it will not diff is exactly the file whose
+    /// conflicts the source view can resolve, so the presentation falls back
+    /// to the source rather than to a sentence.
+    /// The branch this document's repository is on, for the conflict markers
+    /// that only say `HEAD`.
+    private var currentBranch: String? {
+        guard let root = EditorChangeLookup.owningRoot(
+            forPath: document.url.path, amongRoots: Array(git.statuses.keys))
+        else { return nil }
+        return git.status(forRoot: root)?.branch
+    }
+
+    private var documentHasChanges: Bool {
+        guard let context = gitContext else { return false }
+        return !context.change.isUnmerged
+    }
 
     /// Everything a diff of this document needs, or nil when git has
     /// nothing to compare it against.
@@ -593,10 +631,38 @@ private struct DocumentView: View {
             extra: {
                 HStack(spacing: 1) {
                     if showsRenderedMarkdown { MarkdownWidthToggle() }
+                    if showsDiff { wholeFileToggle }
                     SplitDirectionToggle(model: splitModel)
                 }
             }
         )
+    }
+
+    /// The way back from an expanded diff.
+    ///
+    /// It has to exist rather than leaving the gap rows to do both jobs:
+    /// clicking a gap is how the whole file is asked for, and once the gaps
+    /// are gone there is no gap row left to click again.
+    private var wholeFileToggle: some View {
+        Button {
+            diffShowsWholeFile.toggle()
+        } label: {
+            Image(systemName: diffShowsWholeFile
+                ? "arrow.down.right.and.arrow.up.left"
+                : "arrow.up.left.and.arrow.down.right")
+        }
+        .buttonStyle(.plain)
+        .help(diffShowsWholeFile ? "Show changes only" : "Show the whole file")
+    }
+
+    /// Whether a diff is on screen for that toggle to act on — on its own or
+    /// as the second pane of a split.
+    private var showsDiff: Bool {
+        switch presentationOptions.nearest(to: document.presentation) {
+        case .diff: true
+        case .split: presentationOptions.splitPartner == .diff
+        case .source, .preview, .image, .table: false
+        }
     }
 
     /// Whether prose is on screen for the column control to act on. False for
@@ -646,6 +712,7 @@ private struct DocumentView: View {
                 font: configuration.font,
                 model: splitModel,
                 reloadKey: "\(context.change.index)\(context.change.worktree)\(document.isDirty)",
+                showsWholeFile: $diffShowsWholeFile,
                 accessory: { presentationControlWithSplitToggle }
             )
         } else {
@@ -763,6 +830,14 @@ private struct DocumentView: View {
             completionOffersDocumentation: { item in offersDocumentation(item) },
             completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
             reveal: revealRange,
+            gutterMark: gutterMark,
+            diffBaseline: baseline.baseline(for: document.url.path),
+            documentPath: document.url.path,
+            blameGhost: blame.current?.ghostText,
+            currentBranch: currentBranch,
+            onResolveConflict: { resolved, name in
+                document.replaceText(resolved, named: name)
+            },
             onJumpToDefinition: { offset in jump(from: offset) },
             onRename: { offset in
                 newName = EditorPaneView.identifier(at: offset, in: document.currentText)
@@ -834,6 +909,11 @@ private struct DocumentView: View {
                 git.requestStatus(root: root)
             }
 
+            /// What the margin compares against. Asked for here rather than
+            /// on every update: the store answers once per path and ignores
+            /// the rest, but a call per keystroke is a call per keystroke.
+            baseline.request(path: document.url.path)
+
             resolveDivergence()
         }
         /// The only thing that can make an open document diverge, and the
@@ -896,6 +976,26 @@ private struct DocumentView: View {
               let range = LSPTextCoordinates.range(of: reveal.range, in: document.currentText as NSString)
         else { return nil }
         return (id: reveal.id, range: range)
+    }
+
+    /// The line an agent pointed at, turned into something the gutter can draw.
+    ///
+    /// This is where the mark stops being an agent and becomes pixels, because
+    /// this is the last place that knows both: the document holds which agent,
+    /// and the configuration holds the font the mark has to be sized against.
+    /// The engine gets neither.
+    ///
+    /// Read on every body evaluation and costing one dictionary lookup after
+    /// the first, because `EditorAgentMarkImages` renders once per agent and
+    /// size. Nil when there is nothing to show *or* nothing to show it with: a
+    /// mark that could not be rendered is a mark not drawn, never a reveal that
+    /// failed.
+    private var gutterMark: CodeGutterView.Mark? {
+        guard let mark = document.agentMark else { return nil }
+        let size = CodeGutterView.markSize(for: configuration.font)
+        guard let image = EditorAgentMarkImages.shared.image(for: mark.agent, size: size)
+        else { return nil }
+        return CodeGutterView.Mark(line: mark.line, image: image)
     }
 
     private var renameSheet: some View {
@@ -1314,10 +1414,19 @@ private struct DocumentView: View {
         case .notOurs:
             return false
 
-        case .failed, .answered(nil):
+        case .failed(let message):
+            /// Kept past the notice that is about to fade, because whoever
+            /// can fix this — the reader coming back, or an agent asked to —
+            /// arrives after it has.
+            FormatFailureStore.shared.record(message, for: path)
+            return true
+
+        case .answered(nil):
+            FormatFailureStore.shared.clear(path)
             return true
 
         case .answered(let edit?):
+            FormatFailureStore.shared.clear(path)
             /// The same guard the server path needs, for the same reason: the
             /// edit was measured against the text as it was when the run
             /// started, and the reader kept typing while a subprocess ran.
@@ -1468,8 +1577,13 @@ private struct DocumentView: View {
             Image(systemName: "info.circle")
                 .foregroundStyle(.secondary)
 
+            /// Selectable because the sentence is often the only place a
+            /// command the reader has to run appears — a missing plugin's
+            /// `npm i -D …` arrives inside the server's own failure reason,
+            /// where no Copy button can reach it.
             Text("\(server.displayName) \(status.summary) — language features may not work.")
                 .font(palette.font(size: 11))
+                .textSelection(.enabled)
 
             Spacer(minLength: 0)
 
@@ -1497,10 +1611,30 @@ private struct DocumentView: View {
                     .font(palette.font(size: 11))
                     .buttonStyle(.link)
             }
+
+            Button("Open Settings") { openServerSettings(server) }
+                .font(palette.font(size: 11))
+                .buttonStyle(.link)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(Color.secondary.opacity(0.12))
+    }
+
+    /// Settings, on this server's own row — every way out of the states
+    /// this banner reports is there: a different binary, different
+    /// arguments, or the approval a withheld server is waiting on.
+    ///
+    /// The row is named before the window is asked for, because the first
+    /// open is also the moment the settings views are built and they read
+    /// the request as they appear. The window is reached through the menu's
+    /// own action, which keeps the `Ghostty.App` it needs out of the editor.
+    private func openServerSettings(_ server: LSPServerDefinition) {
+        SettingsNavigation.shared.target = SettingsNavigation.Target(
+            section: .languageServers,
+            row: SettingsNavigation.languageRow(for: server)
+        )
+        _ = NSApp.sendAction(#selector(AppDelegate.openConfig(_:)), to: nil, from: nil)
     }
 
     /// Both halves of the question, so a change to either re-asks it.

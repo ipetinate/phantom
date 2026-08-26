@@ -68,7 +68,10 @@ struct EditorPaneTabBar: View {
                     onTerminalCommand: performOnTerminal,
                     terminalTitle: center.terminalTitle,
                     onSelectTerminal: { center.selectTerminal() },
-                    hostsTerminal: center.hostsTerminal(groupID)
+                    hostsTerminal: center.hostsTerminal(groupID),
+                    reviewTitle: center.review?.title,
+                    onSelectReview: { center.showReview(center.review) },
+                    onCloseReview: { center.closeReview() }
                 )
                 Divider()
             }
@@ -90,6 +93,14 @@ struct EditorPaneTabBar: View {
             center.closeOthers(of: tab.path, in: groupID)
         case .closeAll:
             center.closeAll(in: groupID)
+        case .pin:
+            center.setPinned(true, for: tab.path)
+        case .unpin:
+            center.setPinned(false, for: tab.path)
+        case .moveLeft:
+            center.moveTab(tab.path, by: -1)
+        case .moveRight:
+            center.moveTab(tab.path, by: 1)
         case .revealInFinder:
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: tab.path)])
         case .copyPath:

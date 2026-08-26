@@ -24,6 +24,12 @@ struct GitRepoView: View {
     let root: String
     var style: GitRepoStyle = .standalone
 
+    /// The editor, for the one thing this panel asks of it: which file is on
+    /// screen. Observed rather than passed as a path, because it changes for
+    /// reasons this view does not watch — a tab click, a jump to definition,
+    /// the reader closing a tab.
+    @ObservedObject var editorCenter: EditorCenter
+
     /// The terminal the panel is following, for the file-open dialog.
     var selectedTab: SidebarTabModel?
 
@@ -372,8 +378,52 @@ struct GitRepoView: View {
 
     // MARK: Changes
 
+    /// The branch review, and under it the working tree's state.
+    ///
+    /// Two separate decisions here, and they were made at different times.
+    ///
+    /// **Outside the state switch**, which fixes a bug: the review used to
+    /// live inside the `changes` case, so committing everything replaced it
+    /// with "No changes" — and a clean tree is exactly when somebody wants it,
+    /// because the work is committed and the question becomes what is about to
+    /// go up. It belongs outside because it was never about the working tree.
+    /// It is about commits, and a repository with nothing uncommitted still
+    /// has every one of them.
+    ///
+    /// **Above the state, not below it**, which is where it started. Below
+    /// reads better on paper — change files, commit, then review — and looks
+    /// wrong: the placeholder for a clean tree takes the whole height, so the
+    /// review ended up pinned to the bottom edge of the window with a screen
+    /// of nothing above it. Collapsed it is one row, which is cheap to have
+    /// near the top and unreachable at the bottom.
     @ViewBuilder
     private var changeList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let onOpenBranchDiff {
+                GitBranchReviewView(
+                    root: root,
+                    onOpenReview: { editorCenter.showReview(.branch(root: root)) },
+                    onOpenCommit: { commit in
+                        editorCenter.showReview(.commit(
+                            root: root,
+                            sha: commit.sha,
+                            subject: commit.subject))
+                    },
+                    onOpenDiff: { file, base in
+                        onOpenBranchDiff(
+                            URL(fileURLWithPath: root).appendingPathComponent(file.path),
+                            base.ref
+                        )
+                    }
+                )
+            }
+
+            workingTreeState
+        }
+    }
+
+    @ViewBuilder
+    private var workingTreeState: some View {
         switch GitPanelContent.resolve(status: status, hasLoaded: center.hasLoaded(root)) {
         case .loading:
             placeholder {
@@ -431,21 +481,10 @@ struct GitRepoView: View {
         // A gap, so two adjacent rows' hover backgrounds never touch and
         // read as one block.
         LazyVStack(alignment: .leading, spacing: 2) {
-            /// First, because it answers the question somebody has when they
-            /// are about to open a pull request, and the sections below answer
-            /// the one they have while working. Collapsed until asked.
-            if let onOpenBranchDiff {
-                GitBranchReviewView(root: root) { file, base in
-                    onOpenBranchDiff(
-                        URL(fileURLWithPath: root).appendingPathComponent(file.path),
-                        base.ref
-                    )
-                }
-            }
-
             section("Merge Changes", status.unmerged, staged: false, merge: true)
             section("Staged Changes", status.staged, staged: true, merge: false)
             section("Changes", status.unstaged, staged: false, merge: false)
+
         }
         .padding(.horizontal, 6)
         .padding(.bottom, 8)
@@ -492,6 +531,8 @@ struct GitRepoView: View {
                     change: row.change,
                     staged: staged,
                     url: url(for: row.change),
+                    isOpenInEditor: url(for: row.change).path
+                        == editorCenter.tabs.selectedPath,
                     onOpen: { open(row.change) },
                     onPrimary: { toggleStage(row.change, staged: staged) },
                     onDiscard: merge ? nil : { discarding = [row.change] },

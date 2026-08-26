@@ -20,6 +20,14 @@ struct GitDiffView<Accessory: View>: View {
 
     @State private var outcome: GitDiffOutcome?
 
+    /// Enough context to reach the top and bottom of anything. Git clamps it
+    /// to the file, so a number larger than any real file is the whole file
+    /// without having to count its lines first.
+    ///
+    /// Computed rather than stored because this type is generic over its
+    /// accessory, and a generic type cannot carry a static stored property.
+    private static var wholeFileContext: Int { 1_000_000 }
+
     /// Changes exactly when the diff on screen has gone stale.
     ///
     /// Deliberately **not** the document's edit revision: that moves on
@@ -31,6 +39,20 @@ struct GitDiffView<Accessory: View>: View {
     /// means anyway.
     let reloadKey: String
 
+    /// Whether the unchanged parts of the file are on screen too.
+    ///
+    /// Not a rendering choice: git decides what to print, so showing the rest
+    /// means asking it again with enough context to cover any file.
+    ///
+    /// Bound rather than owned, because the control for it belongs in the
+    /// host's own row of actions beside the presentation and split toggles —
+    /// a second control floating next to that row reads as something else's.
+    /// The host keeps the state; this view keeps the meaning.
+    ///
+    /// Declared after `reloadKey` so the call site reads in the order Swift
+    /// requires of a memberwise initialiser.
+    @Binding var showsWholeFile: Bool
+
     /// The host's own controls, handed to the split so they sit beside its
     /// direction toggle instead of on top of it. Both want the same corner,
     /// and the corner is the container's.
@@ -38,7 +60,7 @@ struct GitDiffView<Accessory: View>: View {
 
     var body: some View {
         content
-            .task(id: reloadKey) { await load() }
+            .task(id: "\(reloadKey)\u{1}\(showsWholeFile)") { await load() }
     }
 
     @ViewBuilder
@@ -95,7 +117,8 @@ struct GitDiffView<Accessory: View>: View {
                 palette: palette,
                 font: font,
                 scrollSync: model.scrollSync,
-                syncSide: .first
+                syncSide: .first,
+                onExpandGap: showsWholeFile ? nil : { showsWholeFile = true }
             )
         } second: {
             GitDiffPane(
@@ -105,7 +128,8 @@ struct GitDiffView<Accessory: View>: View {
                 palette: palette,
                 font: font,
                 scrollSync: model.scrollSync,
-                syncSide: .second
+                syncSide: .second,
+                onExpandGap: showsWholeFile ? nil : { showsWholeFile = true }
             )
         } accessory: {
             accessory()
@@ -165,8 +189,9 @@ struct GitDiffView<Accessory: View>: View {
 
         /// Off the main actor because it spawns `git` and waits on it. The
         /// loader is `nonisolated` for exactly this call.
+        let context = showsWholeFile ? Self.wholeFileContext : GitDiffLoader.defaultContext
         let result = await Task.detached(priority: .userInitiated) {
-            GitDiffLoader.load(change, side: side, in: root)
+            GitDiffLoader.load(change, side: side, in: root, context: context)
         }.value
 
         outcome = result

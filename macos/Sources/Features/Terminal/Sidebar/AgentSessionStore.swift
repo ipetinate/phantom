@@ -134,6 +134,21 @@ struct AgentSessionStore: Sendable {
         /// consult that same cache itself, with the workspace scoping this
         /// method exists to reconstruct already built in.
         case .antigravity: return nil
+
+        /// Kimi and Pi both keep sessions, and neither documents where. The
+        /// same reasoning as Antigravity above applies, and the fallback is
+        /// better for them than it is for it: `kimi --continue` is documented
+        /// as resuming the most recent session *for the current working
+        /// directory*, which is exactly the scoping this method reconstructs
+        /// by hand for the others.
+        ///
+        /// Pi is the weaker of the two. Its `--continue` is documented as
+        /// "continue most recent session" with no mention of the directory, so
+        /// two tabs on two projects may both land in whichever conversation
+        /// was touched last. That is the pre-session-id behaviour every agent
+        /// here used to have, it is recoverable by hand, and it beats resuming
+        /// an id read out of a file whose format was guessed at.
+        case .kimi, .pi: return nil
         }
     }
 

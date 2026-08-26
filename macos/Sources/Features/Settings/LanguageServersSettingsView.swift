@@ -32,6 +32,7 @@ struct LanguageServersSettingsView: View {
     @State private var searchText = ""
     @ObservedObject private var lsp = LSPCenter.shared
     @ObservedObject private var languages = LanguageResolver.shared
+    @ObservedObject private var navigation = SettingsNavigation.shared
 
     /// Bumped whenever the detail pane writes something the sidebar shows.
     ///
@@ -52,37 +53,42 @@ struct LanguageServersSettingsView: View {
 
                 Divider()
 
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        ForEach(sections) { section in
-                            Section {
-                                ForEach(section.rows) { row in
-                                    languageRow(row)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                            ForEach(sections) { section in
+                                Section {
+                                    ForEach(section.rows) { row in
+                                        languageRow(row)
+                                            .id(row.id)
+                                    }
+                                } header: {
+                                    sectionHeader(
+                                        title: section.category.title,
+                                        systemImage: section.category.systemImage,
+                                        count: section.rows.count
+                                    )
                                 }
-                            } header: {
-                                sectionHeader(
-                                    title: section.category.title,
-                                    systemImage: section.category.systemImage,
-                                    count: section.rows.count
-                                )
+                            }
+
+                            if sections.isEmpty {
+                                /// `verbatim` because the query is whatever the
+                                /// reader typed, and the interpolating
+                                /// initializer would run it through
+                                /// `LocalizedStringKey` — so searching for
+                                /// `*ts*` would echo back in italics.
+                                Text(verbatim: "Nothing matches “\(searchText)”.")
+                                    .foregroundStyle(.secondary)
+                                    .font(.callout)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 16)
                             }
                         }
-
-                        if sections.isEmpty {
-                            /// `verbatim` because the query is whatever the
-                            /// reader typed, and the interpolating
-                            /// initializer would run it through
-                            /// `LocalizedStringKey` — so searching for
-                            /// `*ts*` would echo back in italics.
-                            Text(verbatim: "Nothing matches “\(searchText)”.")
-                                .foregroundStyle(.secondary)
-                                .font(.callout)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 16)
-                        }
                     }
+                    .scrollIndicators(.automatic)
+                    .onAppear { landOnRequestedRow(proxy) }
+                    .onChange(of: navigation.target) { _ in landOnRequestedRow(proxy) }
                 }
-                .scrollIndicators(.automatic)
             }
             .frame(minWidth: 280, idealWidth: 300, maxWidth: 320)
 
@@ -110,6 +116,29 @@ struct LanguageServersSettingsView: View {
             /// One `npm root -g` for the whole screen, here rather than in a
             /// popover's `body`. See `LSPDependencyCenter`.
             LSPDependencyCenter.shared.refresh()
+        }
+    }
+
+    /// Answers a request to open this screen at one server — the editor's
+    /// banner about a server that failed is the caller that has one.
+    ///
+    /// The search field is cleared first: a query left over from the last
+    /// visit filters the list, and a row that is filtered out cannot be
+    /// selected or scrolled to. The request is consumed here, so opening
+    /// Settings from the menu afterwards lands where the reader left it.
+    private func landOnRequestedRow(_ proxy: ScrollViewProxy) {
+        guard let target = navigation.target, target.section == .languageServers else { return }
+        navigation.target = nil
+        guard let row = target.row else { return }
+
+        searchText = ""
+        selection = row
+
+        /// Next turn of the loop, not this one: the list is lazy, so the
+        /// row being asked for may not exist until the selection above has
+        /// been drawn.
+        DispatchQueue.main.async {
+            proxy.scrollTo(row, anchor: .center)
         }
     }
 
@@ -291,10 +320,13 @@ private enum LanguageRow: Identifiable {
 
     /// Prefixed by kind, because a contributed language is free to name
     /// itself after a binary and nothing stops the two ids colliding.
+    ///
+    /// Spelled by ``SettingsNavigation`` rather than here, because a caller
+    /// that wants this screen opened at one row has to name the same string.
     var id: String {
         switch self {
-        case .server(let server): return "server:" + server.command
-        case .contributed(let contributed): return "ext:" + contributed.id
+        case .server(let server): return SettingsNavigation.serverRow(server.command)
+        case .contributed(let contributed): return SettingsNavigation.contributedRow(contributed.id)
         }
     }
 
@@ -961,6 +993,23 @@ struct ServerOverrideFields: View {
         )
     }
 
+    /// Stops this server under every command it could be running as — the
+    /// default, and whatever the reader has typed over it — and re-announces
+    /// the open files to whatever starts next.
+    private func restart() {
+        let outcome = LSPRestart.restart(commands: [defaultCommand, override.command])
+        restartNote = outcome.stopped == 0
+            ? "Nothing was running; it will start clean."
+            : "Stopped \(outcome.stopped) workspace\(outcome.stopped == 1 ? "" : "s")."
+    }
+
+    /// What the last restart did, so the button says something happened.
+    ///
+    /// A button that changes nothing visible reads as a broken button, and
+    /// this one's whole effect is somewhere else — a server that is quietly
+    /// running with different options now.
+    @State private var restartNote: String?
+
     var body: some View {
         Group {
             Section {
@@ -973,15 +1022,29 @@ struct ServerOverrideFields: View {
             } header: {
                 Text("Override")
             } footer: {
-                Text(
-                    """
-                    Blank uses the default above. Takes effect the next \
-                    time this server starts for a workspace — close and \
-                    reopen a file of this kind, or relaunch Phantom.
-                    """
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(
+                        """
+                        Blank uses the default above. Takes effect the next \
+                        time this server starts for a workspace.
+                        """
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    /// Here rather than only in the sentence above, because
+                    /// the reader who just changed a field is the reader who
+                    /// needs it applied, and the instruction they used to get
+                    /// was to relaunch the app.
+                    HStack(spacing: 8) {
+                        Button("Restart Server") { restart() }
+                        if let note = restartNote {
+                            Text(note)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
 
             Section {

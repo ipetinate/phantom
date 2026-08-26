@@ -17,6 +17,7 @@ struct SettingsRootView: View {
         case keyboardShortcuts
         case languageServers
         case agents
+        case mcp
         case worktrees
 
         var id: String { rawValue }
@@ -31,6 +32,7 @@ struct SettingsRootView: View {
             case .keyboardShortcuts: return "Keyboard Shortcuts"
             case .languageServers: return "Languages"
             case .agents: return "Agents"
+            case .mcp: return "MCP"
             case .worktrees: return "Worktrees"
             }
         }
@@ -49,11 +51,14 @@ struct SettingsRootView: View {
             case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
             case .agents: return "sparkles"
+            case .mcp: return "point.3.connected.trianglepath.dotted"
             }
         }
     }
 
     @State private var selection: SettingsSection = .general
+
+    @ObservedObject private var navigation = SettingsNavigation.shared
 
     var body: some View {
         NavigationSplitView {
@@ -94,10 +99,25 @@ struct SettingsRootView: View {
                 LanguageServersSettingsView()
             case .agents:
                 AgentsSettingsView()
+            case .mcp:
+                MCPSettingsView()
             case .worktrees:
                 WorktreesSettingsView()
             }
         }
+        /// Both moments a request can arrive in: before this view existed —
+        /// the first open of the window, where the caller published its
+        /// target and only then asked for the window — and while it is
+        /// already on screen. The section is read here; the row inside it is
+        /// left for the section's own view, which is the only thing that
+        /// knows how to select and reveal one.
+        .onAppear { showRequestedSection() }
+        .onChange(of: navigation.target) { _ in showRequestedSection() }
+    }
+
+    private func showRequestedSection() {
+        guard let section = navigation.target?.section else { return }
+        selection = section
     }
 }
 
@@ -198,6 +218,8 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarTabShowCodex") private var tabShowCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarTabShowOpenCode") private var tabShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarTabShowAntigravity") private var tabShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage("SidebarTabShowKimi") private var tabShowKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage("SidebarTabShowPi") private var tabShowPi = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarTabAlwaysShowActions") private var tabAlwaysShowActions = false
 
     @AppStorage("SidebarGroupShowPullRequests") private var groupShowPullRequests = true
@@ -205,6 +227,8 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarGroupShowCodex") private var groupShowCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarGroupShowOpenCode") private var groupShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarGroupShowAntigravity") private var groupShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage("SidebarGroupShowKimi") private var groupShowKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage("SidebarGroupShowPi") private var groupShowPi = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarGroupShowNewTerminal") private var groupShowNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var groupShowWorktree = true
     @AppStorage("SidebarGroupShowCount") private var groupShowCount = true
@@ -215,6 +239,8 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarShowCodex") private var chromeShowCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage("SidebarShowOpenCode") private var chromeShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage("SidebarShowAntigravity") private var chromeShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage("SidebarShowKimi") private var chromeShowKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage("SidebarShowPi") private var chromeShowPi = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarChromeAlwaysShowActions") private var chromeAlwaysShowActions = false
 
     @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
@@ -264,6 +290,9 @@ struct SidebarSettingsView: View {
                         .init(id: "opencode", title: "OpenCode", isOn: $chromeShowOpenCode),
                         .init(id: "antigravity", title: "Antigravity",
                               isOn: $chromeShowAntigravity),
+                        .init(id: "kimi", title: "Kimi Code", short: "Kimi",
+                              isOn: $chromeShowKimi),
+                        .init(id: "pi", title: "Pi", isOn: $chromeShowPi),
                     ],
                     emptyLabel: "Hidden")
 
@@ -305,6 +334,9 @@ struct SidebarSettingsView: View {
                         .init(id: "opencode", title: "OpenCode", isOn: $tabShowOpenCode),
                         .init(id: "antigravity", title: "Antigravity",
                               isOn: $tabShowAntigravity),
+                        .init(id: "kimi", title: "Kimi Code", short: "Kimi",
+                              isOn: $tabShowKimi),
+                        .init(id: "pi", title: "Pi", isOn: $tabShowPi),
                     ],
                     emptyLabel: "Hidden")
 
@@ -333,6 +365,9 @@ struct SidebarSettingsView: View {
                         .init(id: "opencode", title: "OpenCode", isOn: $groupShowOpenCode),
                         .init(id: "antigravity", title: "Antigravity",
                               isOn: $groupShowAntigravity),
+                        .init(id: "kimi", title: "Kimi Code", short: "Kimi",
+                              isOn: $groupShowKimi),
+                        .init(id: "pi", title: "Pi", isOn: $groupShowPi),
                     ],
                     emptyLabel: "Hidden")
 
@@ -380,6 +415,8 @@ struct AgentsSettingsView: View {
     @State private var codexInstalled = CodexHooksInstaller.isInstalled
     @State private var openCodeInstalled = OpenCodeHooksInstaller.isInstalled
     @State private var antigravityInstalled = AntigravityHooksInstaller.isInstalled
+    @State private var kimiInstalled = KimiHooksInstaller.isInstalled
+    @State private var piInstalled = PiHooksInstaller.isInstalled
     @State private var feedback: String?
 
     @AppStorage("AgentNotificationsEnabled") private var agentNotifications = true
@@ -437,6 +474,8 @@ struct AgentsSettingsView: View {
                     install: {
                         let ok = AntigravityHooksInstaller.install()
                         antigravityInstalled = AntigravityHooksInstaller.isInstalled
+            kimiInstalled = KimiHooksInstaller.isInstalled
+            piInstalled = PiHooksInstaller.isInstalled
                         feedback = ok && antigravityInstalled ? "Antigravity hooks installed ✓" : "Antigravity install failed: \(AntigravityHooksInstaller.lastError ?? "status did not update")"
                     },
                     uninstall: {
@@ -445,11 +484,51 @@ struct AgentsSettingsView: View {
                         feedback = ok && !antigravityInstalled ? "Antigravity hooks removed" : "Antigravity removal failed"
                     }
                 )
+                agentHookRow(
+                    title: "Kimi Code",
+                    icon: AnyView(KimiIcon(size: 14, tint: .original)),
+                    installed: kimiInstalled,
+                    install: {
+                        let ok = KimiHooksInstaller.install()
+                        kimiInstalled = KimiHooksInstaller.isInstalled
+                        feedback = ok && kimiInstalled ? "Kimi hooks installed ✓" : "Kimi install failed: \(KimiHooksInstaller.lastError ?? "status did not update")"
+                    },
+                    uninstall: {
+                        let ok = KimiHooksInstaller.uninstall()
+                        kimiInstalled = KimiHooksInstaller.isInstalled
+                        feedback = ok && !kimiInstalled ? "Kimi hooks removed" : "Kimi removal failed"
+                    }
+                )
                 if let feedback { Text(feedback).font(.caption).foregroundStyle(feedback.contains("failed") ? .red : .secondary) }
             } header: {
                 Text("Hooks")
             } footer: {
-                Text("Installs Phantom hooks for each agent while preserving existing configuration. Hooks update the tab activity indicator when an agent is working, waiting, or done. Antigravity reports only working and done: its hook system has no event for a permission prompt that Phantom can answer without also approving the tool call.")
+                Text("Installs Phantom hooks for each agent while preserving existing configuration. Hooks update the tab activity indicator when an agent is working, waiting, or done. Antigravity reports only working and done: its hook system has no event for a permission prompt that Phantom can answer without also approving the tool call. Kimi reports all of them, from its own documented event list.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                agentHookRow(
+                    title: "Pi",
+                    icon: AnyView(PiIcon(size: 14, tint: .original)),
+                    installed: piInstalled,
+                    install: {
+                        let ok = PiHooksInstaller.install()
+                        piInstalled = PiHooksInstaller.isInstalled
+                        feedback = ok && piInstalled ? "Pi extension installed ✓" : "Pi install failed: \(PiHooksInstaller.lastError ?? "status did not update")"
+                    },
+                    uninstall: {
+                        let ok = PiHooksInstaller.uninstall()
+                        piInstalled = PiHooksInstaller.isInstalled
+                        feedback = ok && !piInstalled ? "Pi extension removed" : "Pi removal failed"
+                    }
+                )
+                CopyableValueRow(title: "Installed at", value: PiHooksInstaller.extensionURL.path)
+            } header: {
+                Text("Pi Extension")
+            } footer: {
+                Text("Pi has no hooks file to add to. It loads TypeScript extensions, so Phantom ships one and writes it to the folder above, where Pi discovers it on its own — there is no package to install and nothing of yours to merge into. It subscribes to \(PiHooksInstaller.events.joined(separator: ", ")). Like Antigravity it reports working and done but never waiting, and for a different reason: Pi has no permission event to subscribe to at all. Its core does not prompt \u{2014} a confirmation comes from an extension that asks for one itself, so there is nothing here to observe.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

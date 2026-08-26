@@ -1444,16 +1444,22 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             self?.newSidebarTab(in: nil)
         }
         layout.onNewClaudeTab = { [weak self] in
-            self?.newSidebarTab(in: nil, runningClaude: true)
+            self?.newSidebarTab(in: nil, runningAgent: .claude)
         }
         layout.onNewCodexTab = { [weak self] in
-            self?.newSidebarTab(in: nil, runningCodex: true)
+            self?.newSidebarTab(in: nil, runningAgent: .codex)
         }
         layout.onNewOpenCodeTab = { [weak self] in
-            self?.newSidebarTab(in: nil, runningOpenCode: true)
+            self?.newSidebarTab(in: nil, runningAgent: .opencode)
         }
         layout.onNewAntigravityTab = { [weak self] in
-            self?.newSidebarTab(in: nil, runningAntigravity: true)
+            self?.newSidebarTab(in: nil, runningAgent: .antigravity)
+        }
+        layout.onNewKimiTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningAgent: .kimi)
+        }
+        layout.onNewPiTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningAgent: .pi)
         }
         layout.onNewWorktreeTab = { [weak self] directory in
             self?.newSidebarTab(in: nil, workingDirectory: directory)
@@ -1464,10 +1470,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         layout.onNewWorktreeAgentTab = { [weak self] directory, agent in
             self?.newSidebarTab(
                 in: nil,
-                runningClaude: agent == .claude,
-                runningCodex: agent == .codex,
-                runningOpenCode: agent == .opencode,
-                runningAntigravity: agent == .antigravity,
+                runningAgent: agent,
                 workingDirectory: directory)
         }
         self.sidebarLayout = layout
@@ -1481,16 +1484,22 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 self?.newSidebarTab(in: group)
             },
             onNewClaudeTabInGroup: { [weak self] group in
-                self?.newSidebarTab(in: group, runningClaude: true)
+                self?.newSidebarTab(in: group, runningAgent: .claude)
             },
             onNewCodexTabInGroup: { [weak self] group in
-                self?.newSidebarTab(in: group, runningCodex: true)
+                self?.newSidebarTab(in: group, runningAgent: .codex)
             },
             onNewOpenCodeTabInGroup: { [weak self] group in
-                self?.newSidebarTab(in: group, runningOpenCode: true)
+                self?.newSidebarTab(in: group, runningAgent: .opencode)
             },
             onNewAntigravityTabInGroup: { [weak self] group in
-                self?.newSidebarTab(in: group, runningAntigravity: true)
+                self?.newSidebarTab(in: group, runningAgent: .antigravity)
+            },
+            onNewKimiTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningAgent: .kimi)
+            },
+            onNewPiTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningAgent: .pi)
             },
             onSpawnTerminalBesideSelection: { [weak self] in
                 self?.newSidebarTabBesideSelection()
@@ -1750,10 +1759,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     @discardableResult
     private func newSidebarTab(
         in group: SidebarGroup?,
-        runningClaude: Bool = false,
-        runningCodex: Bool = false,
-        runningOpenCode: Bool = false,
-        runningAntigravity: Bool = false,
+        runningAgent: CodingAgent? = nil,
         inheritingPane: Bool = false,
         workingDirectory: String? = nil
     ) -> Ghostty.SurfaceView? {
@@ -1787,12 +1793,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // one it is and the hook might never say. A tab whose hook is not
         // installed used to leave no trace of having run an agent, so a
         // restore had nothing to resume from — see `recordAgentStart`.
-        if let surface, let agent = startingAgent(
-            claude: runningClaude,
-            codex: runningCodex,
-            openCode: runningOpenCode,
-            antigravity: runningAntigravity
-        ) {
+        if let surface, let agent = runningAgent {
             TabStateCenter.shared.recordAgentStart(surfaceId: surface.id, agent: agent)
             ClaudeSession.run(agent.launchCommand, in: surface)
         }
@@ -1817,18 +1818,6 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// where they become the one thing the rest of the flow needs, so that
     /// recording the agent and launching it cannot disagree about which it
     /// was.
-    private func startingAgent(
-        claude: Bool,
-        codex: Bool,
-        openCode: Bool,
-        antigravity: Bool
-    ) -> CodingAgent? {
-        if claude { return .claude }
-        if codex { return .codex }
-        if openCode { return .opencode }
-        if antigravity { return .antigravity }
-        return nil
-    }
 
     /// Resolves the working directory for a new sidebar terminal, per the
     /// sidebar rule:

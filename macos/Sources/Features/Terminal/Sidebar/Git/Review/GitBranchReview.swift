@@ -199,3 +199,22 @@ struct GitBranchReview: Equatable {
     /// "+0 −0" can still say how many files it left out.
     var binaryFileCount: Int { files.filter(\.isBinary).count }
 }
+
+extension GitFileDiff.Status {
+    /// Git's own letter for a status, so a row reads the same way wherever it
+    /// is drawn — the branch review's list, the review panel's file cards, and
+    /// the working-tree sections in the panel above them.
+    ///
+    /// On the model rather than private to a view, because it was private to
+    /// one and the second view that needed it could not see it. Two copies of
+    /// a mapping this small is how `R` comes to mean two things.
+    var badge: String {
+        switch self {
+        case .added: "A"
+        case .deleted: "D"
+        case .modified: "M"
+        case .renamed: "R"
+        case .copied: "C"
+        }
+    }
+}

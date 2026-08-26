@@ -13,6 +13,14 @@ final class GitStatusCenter: ObservableObject {
 
     struct RepoInfo: Equatable {
         var isDirty: Bool?
+
+        /// How many paths git reports as unmerged, or nil while nothing is
+        /// known about this repository yet.
+        ///
+        /// A count rather than a flag, because the chip that shows it says how
+        /// many — "3 conflicts" is a different size of problem from one, and a
+        /// reader deciding whether to finish now wants the number.
+        var conflicts: Int?
         var prNumber: Int?
         var prURL: String?
 
@@ -72,14 +80,15 @@ final class GitStatusCenter: ObservableObject {
         inflight.insert(root)
 
         Task.detached(priority: .utility) {
-            let dirty = needsDirty ? Self.checkDirty(root: root) : nil
+            let status = needsDirty ? Self.checkStatus(root: root) : nil
             let pr = needsPR ? Self.checkPullRequest(root: root) : nil
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 var info = self.repos[root] ?? RepoInfo()
                 if needsDirty {
-                    info.isDirty = dirty
+                    info.isDirty = status?.dirty
+                    info.conflicts = status?.conflicts
                     info.dirtyCheckedAt = Date()
                 }
                 if needsPR {
@@ -141,13 +150,40 @@ final class GitStatusCenter: ObservableObject {
 
     // MARK: Subprocess checks
 
-    nonisolated private static func checkDirty(root: String) -> Bool? {
+    /// Whether the tree is dirty and how many paths are unmerged, from one
+    /// `git status`.
+    ///
+    /// Both facts out of the same command rather than two, because they are in
+    /// the same output: porcelain marks an unmerged path with a pair of status
+    /// letters holding a `U`, or with `AA` and `DD` for the two cases where
+    /// both sides did the same thing. A second `git` process to count what the
+    /// first already printed would be a second process on a timer.
+    nonisolated private static func checkStatus(root: String) -> (dirty: Bool, conflicts: Int)? {
         guard let output = run(
             "/usr/bin/git",
             ["-C", root, "status", "--porcelain", "--untracked-files=no"],
             timeout: 5
         ) else { return nil }
-        return !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        let lines = output
+            .components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+
+        return (dirty: !lines.isEmpty, conflicts: lines.count(where: isUnmerged))
+    }
+
+    /// Whether a porcelain line describes a path git could not merge.
+    ///
+    /// The rule git documents: either letter is `U`, or the pair is `AA` or
+    /// `DD`. Checking only for `U` misses the two cases where both sides added
+    /// the same path or both deleted it, which are conflicts the reader has to
+    /// resolve like any other.
+    nonisolated static func isUnmerged(_ line: String) -> Bool {
+        let letters = Array(line.prefix(2))
+        guard letters.count == 2 else { return false }
+        if letters[0] == "U" || letters[1] == "U" { return true }
+        return (letters[0] == "A" && letters[1] == "A")
+            || (letters[0] == "D" && letters[1] == "D")
     }
 
     nonisolated private static let ghPath: String? = {

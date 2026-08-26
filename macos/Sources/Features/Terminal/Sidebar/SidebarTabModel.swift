@@ -67,6 +67,10 @@ final class SidebarTabModel: ObservableObject, Identifiable {
     @Published private(set) var liveAgent: CodingAgent?
 
     @Published private(set) var isDirty: Bool?
+
+    /// How many paths in this terminal's repository git could not merge, or
+    /// nil when it is not in one — or when nothing is known about it yet.
+    @Published private(set) var conflicts: Int?
     @Published private(set) var prNumber: Int?
     @Published private(set) var prURL: String?
 
@@ -134,8 +138,9 @@ final class SidebarTabModel: ObservableObject, Identifiable {
         if liveAgent != value { liveAgent = value }
     }
 
-    func setRepoStatus(isDirty: Bool?, prNumber: Int?, prURL: String?) {
+    func setRepoStatus(isDirty: Bool?, conflicts: Int? = nil, prNumber: Int?, prURL: String?) {
         if self.isDirty != isDirty { self.isDirty = isDirty }
+        if self.conflicts != conflicts { self.conflicts = conflicts }
         if self.prNumber != prNumber { self.prNumber = prNumber }
         if self.prURL != prURL { self.prURL = prURL }
     }

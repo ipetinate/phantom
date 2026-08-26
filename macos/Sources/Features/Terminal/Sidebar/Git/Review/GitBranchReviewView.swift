@@ -13,6 +13,15 @@ import SwiftUI
 /// uncommitted work, not at their branch.
 struct GitBranchReviewView: View {
     let root: String
+
+    /// Opens the full-size review of this branch, and of one commit in it.
+    ///
+    /// Callbacks rather than this view reaching for the editor: the sidebar
+    /// does not own the pane the review appears in, and a view that could
+    /// reach across to it would be a view able to replace what the reader is
+    /// looking at from anywhere.
+    var onOpenReview: (() -> Void)?
+    var onOpenCommit: ((GitReviewCommit) -> Void)?
     let onOpenDiff: (GitReviewFile, GitReviewBase) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
@@ -25,6 +34,14 @@ struct GitBranchReviewView: View {
             header
 
             if isExpanded {
+                /// The state of the work, above the list of what is in it. It
+                /// is what a reader expanding this section is usually after:
+                /// the list answers "what changed", the card answers "is this
+                /// ready to go".
+                if let onOpenReview {
+                    GitReviewCard(root: root, onOpenReview: onOpenReview)
+                }
+
                 content
                     .padding(.top, 4)
             }
@@ -53,6 +70,22 @@ struct GitBranchReviewView: View {
                 }
 
                 Spacer(minLength: 0)
+
+                /// Visible whether the section is open or not, unlike the
+                /// refresh beside it. Opening the section to reach the button
+                /// that opens the panel is a step that exists for no reason —
+                /// the section is the summary and the panel is the work, and
+                /// somebody who wants the work does not need the summary
+                /// first.
+                if onOpenReview != nil {
+                    SidebarIconButton(help: "Review this branch") {
+                        onOpenReview?()
+                    } label: {
+                        Image(systemName: "rectangle.split.2x1")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 if isExpanded {
                     SidebarIconButton(help: "Refresh Branch Review") { load() } label: {
@@ -185,11 +218,26 @@ struct GitBranchReviewView: View {
 
                 Spacer(minLength: 4)
 
+                /// Never wrapped, and never the thing that shrinks.
+                ///
+                /// `layoutPriority(-1)` alone told SwiftUI to take space from
+                /// this first, and with nothing forbidding a second line it
+                /// took it one character at a time — a commit with a long
+                /// subject left "5 days ago" running down the panel as a
+                /// column of letters. The subject is the part with room to
+                /// give, and it already truncates.
                 Text(commit.relativeDate)
                     .font(palette.font(size: 9))
                     .foregroundStyle(.tertiary)
-                    .layoutPriority(-1)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
+            /// The whole row, because every part of it identifies the same
+            /// commit. A hit target on the sha alone would be seven
+            /// characters wide.
+            .contentShape(Rectangle())
+            .onTapGesture { onOpenCommit?(commit) }
+            .help("Review \(commit.shortSha) \u{2014} \(commit.author)")
         }
 
         if review.hasMoreCommits {
@@ -277,22 +325,33 @@ private struct GitBranchReviewFileRow: View {
 
             /// The counts, or the word for a file that has none. A binary file
             /// showing `+0 −0` would read as unchanged.
+            /// All three held to one line for the reason the commit row's
+            /// date is: a long path leaves these as the only things with space
+            /// to give, and a count that wraps is a count read downwards.
             if let added = file.addedLines, let removed = file.removedLines {
                 Text("+\(added)")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.green)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 Text("−\(removed)")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             } else {
                 Text("binary")
                     .font(palette.font(size: 9))
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             Text(file.status.badge)
                 .font(palette.font(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .frame(width: 12)
         }
         .padding(.horizontal, 4)
@@ -306,16 +365,3 @@ private struct GitBranchReviewFileRow: View {
     }
 }
 
-private extension GitFileDiff.Status {
-    /// Git's own letter for a status, so a row in this list reads the same way
-    /// as a row in the working-tree sections above it.
-    var badge: String {
-        switch self {
-        case .added: "A"
-        case .deleted: "D"
-        case .modified: "M"
-        case .renamed: "R"
-        case .copied: "C"
-        }
-    }
-}

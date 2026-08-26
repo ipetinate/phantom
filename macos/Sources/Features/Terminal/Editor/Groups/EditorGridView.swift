@@ -98,6 +98,11 @@ private struct EditorGridNode: View {
 /// is what retires the inset the pane used to push the terminal's content
 /// down by — there is nothing to compensate for when the two do not overlap.
 private struct EditorGridCell: View {
+    /// The editor's own font size, for the review panel's diffs. Read from
+    /// the same key the panes read, so a reader who changes it once changes
+    /// it everywhere code is shown.
+    @AppStorage(EditorSettings.fontSizeKey) private var reviewFontSize
+        = EditorSettings.defaultFontSize
     let group: EditorGroup
     @ObservedObject var center: EditorCenter
     @ObservedObject var terminalDirectory: EditorTerminalDirectory
@@ -129,77 +134,47 @@ private struct EditorGridCell: View {
                 )
                 .background(coat)
                 surface
-                    .overlay { catcher(in: geometry.size) }
             }
-            /// Behind the cell's content, which is where the terminal's own
-            /// splits put theirs — see `TerminalSplitTreeView`.
+            /// One drop region, over the whole cell, and only while a tab is
+            /// in flight.
             ///
-            /// It was an overlay for one build, to get the region out from
-            /// under the editor's text view, and that was the wrong fix twice
-            /// over: a clear layer with a shape takes every click under it, so
-            /// it swallowed the tabs' own gestures and the tabs stopped being
-            /// draggable at all. And the region was never the problem — the
-            /// operation mask was. A drag begun by `.onDrag` allows a copy
-            /// only, so a cell proposing a move was refused, and what the
-            /// breadcrumbs recorded as enter-and-leave was that refusal. The
-            /// session is AppKit's now and answers `.move`, which is the
-            /// arrangement the terminal's splits have always used with the
-            /// region in the background.
-            .background {
-                Color.clear
-                    .onDrop(
-                        of: [EditorTabDrag.type],
-                        delegate: EditorCellDropDelegate(
-                            size: geometry.size,
-                            barHeight: barHeight,
-                            state: drop,
-                            perform: { item, zone in
-                                center.drop(item, on: group.id, zone: zone)
-                            },
-                            label: cellLabel
+            /// There were two for one build — one behind the content and one
+            /// over the surface — and they disagreed. The background one
+            /// measured the pointer in cell coordinates with a bar to
+            /// subtract; the catcher measured it in surface coordinates with
+            /// no bar. The same position produced `center` from one and `top`
+            /// from the other, a drag crossing between them flickered, and the
+            /// drop landed on whichever had spoken last: a few seconds of
+            /// aiming split the pane into cells the reader never asked for.
+            ///
+            /// Behind the content it could not be reached at all over the
+            /// terminal, which is a Metal view and wins the pointer. Over the
+            /// content it takes every click under it — that is how the tabs
+            /// lost their own gestures once. Both problems go away if it is
+            /// over the content *and* only exists during a drag: there are no
+            /// clicks to steal while the pointer is holding a tab, and the
+            /// session says exactly when that is.
+            .overlay {
+                if dragSession.item != nil {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onDrop(
+                            of: [EditorTabDrag.type],
+                            delegate: EditorCellDropDelegate(
+                                size: geometry.size,
+                                barHeight: barHeight,
+                                state: drop,
+                                perform: { item, zone in
+                                    center.drop(item, on: group.id, zone: zone)
+                                },
+                                label: cellLabel
+                            )
                         )
-                    )
+                }
             }
             .overlay(alignment: .topLeading) {
                 EditorCellDropHighlight(state: drop, size: geometry.size)
             }
-        }
-    }
-
-    /// A drop region over the surface, present only while a tab is in flight.
-    ///
-    /// The region in the cell's background is enough almost everywhere, and
-    /// for the terminal it is not: a Metal-backed `NSView` is a real subview
-    /// above it, and a drag over the shell never reached the cell underneath.
-    /// The editor's text view lets it through; the terminal does not.
-    ///
-    /// Above the surface and *only during a drag*, which is what makes it
-    /// safe. A clear layer with a shape takes every click under it — that is
-    /// how an earlier version of this cost the tabs their own gestures — and
-    /// there are no clicks to take while the pointer is holding a tab.
-    ///
-    /// Over the surface rather than the whole cell, so the tab bar keeps its
-    /// own gestures either way, and the geometry is the surface's: the bar is
-    /// not under this layer, so it has no height to subtract.
-    @ViewBuilder
-    private func catcher(in cell: CGSize) -> some View {
-        if dragSession.item != nil {
-            Color.clear
-                .contentShape(Rectangle())
-                .onDrop(
-                    of: [EditorTabDrag.type],
-                    delegate: EditorCellDropDelegate(
-                        size: CGSize(
-                            width: cell.width,
-                            height: max(cell.height - barHeight, 0)),
-                        barHeight: 0,
-                        state: drop,
-                        perform: { item, zone in
-                            center.drop(item, on: group.id, zone: zone)
-                        },
-                        label: cellLabel
-                    )
-                )
         }
     }
 
@@ -238,7 +213,43 @@ private struct EditorGridCell: View {
     /// paints there.
     @ViewBuilder
     private var surface: some View {
-        if group.tabs.showsTerminal {
+        /// The review when its tab is the one selected, and not otherwise.
+        ///
+        /// It was drawn whenever a review existed, over whatever the cell was
+        /// showing. That is what made clicking a file appear to do nothing:
+        /// the file opened underneath a panel that was still on top. A tab
+        /// selection is the same mechanism the terminal uses, and it answers
+        /// "which of these am I looking at" — which is the question a panel
+        /// laid over the others cannot answer.
+        if let review = center.review, group.tabs.showsReview {
+            GitReviewPanelView(
+                scope: review,
+                theme: EditorTheme.make(from: ThemePalette.shared),
+                font: EditorSettings.font(
+                    size: reviewFontSize,
+                    family: ThemePalette.shared.interfaceFontFamily),
+                /// Opening a file leaves the review's tab where it is and
+                /// selects the file's. Closing it would throw away a screen
+                /// the reader is in the middle of working through — the whole
+                /// reason it is a tab.
+                /// The panel hands over an absolute path; a relative one
+                /// resolves against this process's own directory and opens
+                /// nothing, which is what this button used to do.
+                ///
+                /// Opening also selects the file's tab, so the review steps
+                /// aside on its own — the reader sees the file rather than a
+                /// tab appearing behind a screen that did not move.
+                onOpenFile: { path in _ = center.open(URL(fileURLWithPath: path)) },
+                onClose: { center.closeReview() },
+                onOpenCommit: { commit in
+                    center.showReview(.commit(
+                        root: review.root,
+                        sha: commit.sha,
+                        subject: commit.subject))
+                }
+            )
+            .background(coat)
+        } else if group.tabs.showsTerminal, !group.tabs.showsReview {
             TerminalCellHost(terminal: terminal)
         } else {
             EditorPaneView(

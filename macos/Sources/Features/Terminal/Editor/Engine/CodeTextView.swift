@@ -137,6 +137,47 @@ struct CodeTextView: NSViewRepresentable {
     /// nothing.
     var reveal: (id: String, range: NSRange)?
 
+    /// A mark for the gutter to hang on one line, as pixels and a number.
+    ///
+    /// Beside `reveal` rather than derived from it, because the two are set by
+    /// different things: a reveal is any jump the app makes, and a mark is only
+    /// ever an agent's. Handed in already rendered, which is how the engine
+    /// stays ignorant of agents *and* how the gutter's draw stays free of
+    /// image work — see ``CodeGutterView/Mark``.
+    var gutterMark: CodeGutterView.Mark?
+
+    /// The committed text this file is compared against, split into lines, or
+    /// nil for a file with nothing to compare — untracked, outside a
+    /// repository, or one whose baseline has not arrived yet.
+    ///
+    /// Lines rather than a diff, because the reader is looking at a buffer:
+    /// a diff produced by running git is stale from the first keystroke, and
+    /// the margin is supposed to keep up while they type.
+    var diffBaseline: [String]?
+
+    /// The file on disk this buffer belongs to, for the things that ask git
+    /// about it. Nil for a buffer with no file behind it.
+    var documentPath: String?
+
+    /// Who last changed the line the caret is on, as one sentence, or nil for
+    /// a line nobody has committed. Drawn after the end of that line in the
+    /// theme's dimmest colour.
+    var blameGhost: String?
+
+    /// The branch `HEAD` is on, so a conflict marker can say which one that
+    /// is. Nil outside a repository, or before its status has arrived.
+    var currentBranch: String?
+
+    /// Called with the whole text a resolution produces.
+    ///
+    /// Handed up rather than applied here, so a resolution takes the same
+    /// route a format takes: the document owns the text, owns the revision,
+    /// and owns the undo entry. Writing into the text storage directly
+    /// registered an undo with the text view while leaving the document
+    /// holding the old string, which is two sources of truth and one of them
+    /// wrong.
+    var onResolveConflict: ((String, String) -> Void)?
+
     /// ⌘-click, and the editor commands the host implements.
     var onJumpToDefinition: ((Int) -> Void)?
     var onRename: ((Int) -> Void)?
@@ -287,6 +328,25 @@ struct CodeTextView: NSViewRepresentable {
         scrollView.contentView.addSubview(band, positioned: .below, relativeTo: textView)
         context.coordinator.currentLineBand = band
 
+        /// Under the text and under the current-line band, so a conflict's
+        /// colour does not cover the line the caret is on.
+        let bands = EditorConflictBandsView()
+        scrollView.contentView.addSubview(bands, positioned: .below, relativeTo: band)
+        context.coordinator.conflictBands = bands
+
+        /// The line's history, after the end of the line itself. A subview of
+        /// the text view rather than of the clip view, unlike the band: it has
+        /// to sit at the end of the *text*, which is a document coordinate,
+        /// and being in the document is also what scrolls it for free.
+        let blame = NSTextField(labelWithString: "")
+        blame.isHidden = true
+        blame.lineBreakMode = .byTruncatingTail
+        blame.isSelectable = false
+        /// Paint, not a control: a click here belongs to the text under it.
+        blame.refusesFirstResponder = true
+        textView.addSubview(blame)
+        context.coordinator.blameLabel = blame
+
         let container = NSView()
         container.addSubview(gutter)
         container.addSubview(scrollView)
@@ -343,6 +403,7 @@ struct CodeTextView: NSViewRepresentable {
 
         context.coordinator.textView = textView
         context.coordinator.gutter = gutter
+        gutter.setMark(gutterMark)
 
         // The gutter and the minimap already listen to this; the coordinator
         // needs it too, to colour a large document as it is scrolled into.
@@ -430,6 +491,53 @@ struct CodeTextView: NSViewRepresentable {
         context.coordinator.hostEditIsUndoable = replacementIsUndoable
         context.coordinator.applyIfNewRevision(text: text, revision: textRevision)
 
+        /// After the text too, and for the same reason as the jump below: the
+        /// line a mark names has to be a line the gutter has laid out. Applied
+        /// unconditionally, because nil is how a mark is taken down.
+        context.coordinator.gutter?.setMark(gutterMark)
+
+        /// The palette follows the theme, so it is set every pass rather than
+        /// only when the baseline arrives — a reader who changes theme with a
+        /// modified file open would otherwise keep the old green until their
+        /// next keystroke.
+        let diffPalette = GitDiffPalette.make(from: theme)
+        context.coordinator.gutter?.diffPalette = diffPalette
+        /// A theme change repaints the bands on the next layout, but the bars
+        /// carry their colours in their buttons and are only built when the
+        /// text moves — so the palette moving has to count as the text having
+        /// moved, or a reader who switches theme keeps the old theme's buttons
+        /// until their next keystroke.
+        let palette = EditorConflictBandsView.Palette(diff: diffPalette, theme: theme)
+        if context.coordinator.conflictPalette?.barBackground != palette.barBackground {
+            context.coordinator.conflictPalette = palette
+            context.coordinator.forgetConflictText()
+        }
+
+        if context.coordinator.diffBaseline != diffBaseline {
+            context.coordinator.diffBaseline = diffBaseline
+            context.coordinator.scheduleDiffMarkRefresh()
+        }
+
+        /// Both are cheap when nothing moved — the refresh returns on an
+        /// unchanged string, and the layout is arithmetic over however many
+        /// conflicts there are, which is almost always none.
+        ///
+        /// Here as well as on the edit because neither is only about edits: a
+        /// file arrives with its conflicts already in it, and the bars are
+        /// right-aligned, so a pane that changes width has to move them even
+        /// though the text did not change.
+        context.coordinator.scheduleConflictRefresh()
+        context.coordinator.layoutConflictBars()
+
+        context.coordinator.documentPath = documentPath
+        if context.coordinator.currentBranch != currentBranch {
+            context.coordinator.currentBranch = currentBranch
+            context.coordinator.forgetConflictText()
+        }
+        context.coordinator.onResolveConflict = onResolveConflict
+        context.coordinator.updateBlameGhost(
+            blameGhost, theme: theme, font: configuration.font)
+
         // After the text, so a jump into a file that is being opened in the
         // same breath lands on a document that already has its content.
         if let reveal { context.coordinator.reveal(reveal) }
@@ -463,6 +571,32 @@ struct CodeTextView: NSViewRepresentable {
 
         /// The pending minimap rebuild. See `scheduleMinimapRefresh`.
         private var minimapTask: Task<Void, Never>?
+
+        /// The baseline the marks are measured against, and the debounce that
+        /// keeps the measuring off the keystroke.
+        var diffBaseline: [String]?
+        private var diffTask: Task<Void, Never>?
+        private var appliedDiffText: String?
+
+        /// The conflicts in the text right now, and the bars over them.
+        ///
+        /// Parsed here rather than handed in, because they are a function of
+        /// the text and the text lives in this view: a copy passed down from
+        /// SwiftUI would be one update behind on the pass that matters, which
+        /// is the one right after a resolution rewrites the document.
+        /// The path and the ghost label, for the line history in the margin
+        /// of the caret's own line.
+        var documentPath: String?
+        var currentBranch: String?
+        var onResolveConflict: ((String, String) -> Void)?
+        weak var blameLabel: NSTextField?
+        weak var conflictBands: EditorConflictBandsView?
+        var conflictPalette: EditorConflictBandsView.Palette?
+
+        private var conflicts: [EditorConflict] = []
+        private var conflictBars: [EditorConflictBar] = []
+        private var conflictTask: Task<Void, Never>?
+        private var appliedConflictText: String?
 
         /// Whether this document is too big to colour in one go.
         ///
@@ -631,6 +765,8 @@ struct CodeTextView: NSViewRepresentable {
             }
             gutter?.reload()
             scheduleMinimapRefresh()
+            scheduleDiffMarkRefresh()
+            scheduleConflictRefresh()
         }
 
         /// Puts the viewport back where it was, without letting it past the
@@ -675,6 +811,8 @@ struct CodeTextView: NSViewRepresentable {
 
             gutter?.reload()
             scheduleMinimapRefresh()
+            scheduleDiffMarkRefresh()
+            scheduleConflictRefresh()
 
             // Put the view back at the start of the document.
             //
@@ -980,6 +1118,312 @@ struct CodeTextView: NSViewRepresentable {
             return 0
         }
 
+        /// Finds the conflicts shortly, rather than now.
+        ///
+        /// Gated on a substring search before anything else: a file with no
+        /// `<<<<<<<` anywhere in it cannot hold a conflict, and finding that
+        /// out is one scan instead of a walk over every line. Almost every
+        /// file is that file, on almost every keystroke.
+        func scheduleConflictRefresh() {
+            conflictTask?.cancel()
+            conflictTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { return }
+                self?.refreshConflicts()
+            }
+        }
+
+        /// Makes the next refresh rebuild rather than skip, for a change that
+        /// is not in the text.
+        func forgetConflictText() { appliedConflictText = nil }
+
+        func refreshConflicts() {
+            guard let textView else { return }
+            let text = textView.string
+            guard text != appliedConflictText else { return }
+            appliedConflictText = text
+
+            /// An edit moves every line below it, so a cached blame answer
+            /// is now attached to the wrong line. Done here rather than on
+            /// the keystroke because it walks the cache, and the answer it
+            /// protects is only read when the caret settles.
+            if let documentPath { EditorBlameCenter.shared.invalidate(path: documentPath) }
+
+            let found = EditorConflictParser.mayHoldConflict(text)
+                ? EditorConflictParser.conflicts(in: text)
+                : []
+
+            /// Rebuilt rather than reconciled. A resolution moves every
+            /// conflict below it, so the cheap-looking comparison — same
+            /// count, same ids — is exactly the case where every bar is in
+            /// the wrong place.
+            conflicts = found
+            for bar in conflictBars { bar.removeFromSuperview() }
+            conflictBars = found.map { conflict in
+                let barFont = textView.font ?? .monospacedSystemFont(ofSize: 12, weight: .regular)
+                let bar = EditorConflictBar(
+                    conflict: conflict,
+                    font: barFont,
+                    palette: conflictPalette,
+                    currentBranch: currentBranch
+                ) { [weak self] choice in
+                    self?.resolve(conflictID: conflict.id, with: choice)
+                }
+                textView.addSubview(bar)
+                return bar
+            }
+            layoutConflictBars()
+        }
+
+        /// A line separator, as UTF-16 sees one. `\r\n` is two of these, which
+        /// is why the caller loops rather than stepping back once.
+        private func isNewline(_ unit: unichar) -> Bool {
+            unit == 0x000A || unit == 0x000D || unit == 0x2028 || unit == 0x2029
+        }
+
+        /// Draws the line's history after the end of the line, or takes it
+        /// down.
+        ///
+        /// Positioned from the caret's own geometry rather than from a layout
+        /// fragment, for the reason `updateCurrentLineBand` records: the two
+        /// can disagree, and the caret is the thing the reader sees.
+        func updateBlameGhost(_ text: String?, theme: CodeTheme, font: NSFont) {
+            guard let label = blameLabel, let textView else { return }
+
+            guard let text, !text.isEmpty else {
+                label.isHidden = true
+                return
+            }
+
+            let selection = textView.selectedRange()
+            guard selection.length == 0 else {
+                label.isHidden = true
+                return
+            }
+
+            let line = (textView.string as NSString)
+                .lineRange(for: NSRange(location: selection.location, length: 0))
+            /// The end of the text, not the end of the line range: the range
+            /// takes the newline with it, and measuring at the newline puts
+            /// the label at the start of the row below.
+            let full = textView.string as NSString
+            var end = line.location + line.length
+            while end > line.location, isNewline(full.character(at: end - 1)) {
+                end -= 1
+            }
+
+            guard let caret = Self.caretRectInView(of: textView, caret: end) else {
+                label.isHidden = true
+                return
+            }
+
+            label.stringValue = text
+            label.font = .systemFont(ofSize: max(9, font.pointSize - 2))
+            label.textColor = theme.lineNumber.withAlphaComponent(0.75)
+            label.sizeToFit()
+
+            let gap: CGFloat = 24
+            let x = caret.maxX + gap
+            let available = max(0, textView.bounds.width - x - 12)
+            label.isHidden = available < 40
+            label.frame = NSRect(
+                x: x,
+                y: caret.minY + ((caret.height - label.frame.height) / 2).rounded(),
+                width: min(label.frame.width, available),
+                height: label.frame.height
+            )
+        }
+
+        /// Puts each bar over its own `<<<<<<<` line, and paints the sides.
+        ///
+        /// The bar sits **on** the marker line rather than below it. The line
+        /// says `<<<<<<< HEAD`, which is git's structure and not the reader's
+        /// code — covering it costs nothing, and it is the row every other
+        /// merge tool puts these choices on. Left-aligned, where a row of
+        /// actions is read from.
+        func layoutConflictBars() {
+            guard let textView else { return }
+
+            var bands: [EditorConflictBandsView.Band] = []
+            let palette = conflictPalette
+            let clip = conflictBands?.superview
+
+            for (bar, conflict) in zip(conflictBars, conflicts) {
+                guard let row = Self.lineRect(at: conflict.range.location, in: textView) else {
+                    bar.isHidden = true
+                    continue
+                }
+                /// The whole row, because the bar is covering the line rather
+                /// than sitting beside it. Its height is the row's, so a
+                /// wrapped marker line — which git does not write, but a
+                /// narrow pane can produce — is covered to its full depth.
+                bar.isHidden = false
+                bar.paint(
+                    conflictPalette?.barBackground ?? textView.backgroundColor,
+                    separator: conflictPalette?.separator ?? .separatorColor)
+                bar.frame = NSRect(
+                    x: 0,
+                    y: row.minY,
+                    width: textView.bounds.width,
+                    height: row.height
+                )
+
+                guard let palette, clip != nil else { continue }
+                let sections = conflict.sections
+                bands += self.bands(
+                    for: sections.currentLines, color: palette.current, in: textView)
+                bands += self.bands(
+                    for: sections.incomingLines, color: palette.incoming, in: textView)
+                if let baseLines = sections.baseLines {
+                    bands += self.bands(for: baseLines, color: palette.base, in: textView)
+                }
+                for line in sections.markerLines {
+                    bands += self.bands(for: line..<(line + 1), color: palette.marker, in: textView)
+                }
+
+                /// A hairline under the closing marker, matching the one the
+                /// bar draws at the top. Without it the block's colour simply
+                /// stops, and where it stops is the one place a reader has to
+                /// be sure of — everything below it is code that was never in
+                /// the conflict.
+                if let end = Self.offset(ofLine: conflict.endLine, in: textView.string as NSString),
+                   let row = Self.lineRect(at: end, in: textView) {
+                    bands.append(EditorConflictBandsView.Band(
+                        rect: NSRect(
+                            x: 0, y: row.maxY - 1,
+                            width: textView.bounds.width, height: 1),
+                        color: palette.separator))
+                }
+            }
+
+            /// Sized to the document and positioned where the text view is, so
+            /// the clip view scrolls both together and the rects below can be
+            /// the text view's own coordinates.
+            conflictBands?.frame = textView.frame
+            conflictBands?.setBands(bands)
+        }
+
+        /// The painted rows for a range of lines, one rect per line.
+        ///
+        /// Per line rather than one rect for the range, because a soft-wrapped
+        /// line is taller than a row and a single rect measured from its first
+        /// and last lines would miss the wrapped part of the last one.
+        private func bands(
+            for lines: Range<Int>,
+            color: NSColor,
+            in textView: NSTextView
+        ) -> [EditorConflictBandsView.Band] {
+            guard !lines.isEmpty else { return [] }
+            let text = textView.string as NSString
+
+            return lines.compactMap { line in
+                guard let offset = Self.offset(ofLine: line, in: text),
+                      let row = Self.lineRect(at: offset, in: textView)
+                else { return nil }
+                return EditorConflictBandsView.Band(
+                    rect: NSRect(
+                        x: 0, y: row.minY,
+                        width: textView.bounds.width, height: row.height),
+                    color: color)
+            }
+        }
+
+        /// The character offset a zero-based line starts at, or nil past the
+        /// end of the text.
+        static func offset(ofLine line: Int, in text: NSString) -> Int? {
+            var current = 0
+            var offset = 0
+            while current < line {
+                guard offset < text.length else { return nil }
+                let range = text.lineRange(for: NSRange(location: offset, length: 0))
+                offset = range.location + range.length
+                current += 1
+            }
+            return offset <= text.length ? offset : nil
+        }
+
+        /// Applies a choice as an ordinary edit.
+        ///
+        /// Through `shouldChangeText` and the undo manager rather than by
+        /// setting the string, which is what makes a resolution undoable with
+        /// ⌘Z and indistinguishable from having typed it. The text is
+        /// reparsed straight afterwards because every conflict below this one
+        /// has just moved.
+        ///
+        /// Re-parsed rather than trusting the block in hand: the reader may
+        /// have edited the file since the bar was made, and replacing a stale
+        /// range would cut the document in the wrong place.
+        func resolve(conflictID: Int, with choice: EditorConflict.Choice) {
+            guard let textView else { return }
+            let fresh = EditorConflictParser.conflicts(in: textView.string)
+            guard let conflict = fresh.first(where: { $0.id == conflictID }) else { return }
+
+            let replacement = conflict.replacement(for: choice)
+            let resolved = (textView.string as NSString)
+                .replacingCharacters(in: conflict.range, with: replacement)
+
+            /// Named for what the reader chose, so the Edit menu says "Undo
+            /// Accept Incoming" rather than "Undo Replace".
+            onResolveConflict?(resolved, choice.title)
+        }
+
+        /// The rect of the line a character offset sits on, in the text view's
+        /// own coordinates.
+        static func lineRect(at offset: Int, in textView: NSTextView) -> NSRect? {
+            guard let layoutManager = textView.textLayoutManager,
+                  let contentManager = layoutManager.textContentManager,
+                  let start = contentManager.location(
+                    contentManager.documentRange.location, offsetBy: offset),
+                  let fragment = layoutManager.textLayoutFragment(for: start)
+            else { return nil }
+
+            var frame = fragment.layoutFragmentFrame
+            frame.origin.y += textView.textContainerInset.height
+            frame.origin.x += textView.textContainerInset.width
+            return frame
+        }
+
+        /// Recomputes the margin's `+` and `-` shortly, rather than now.
+        ///
+        /// Debounced for the same reason the minimap is, and with a shorter
+        /// wait: comparing against the committed text is one
+        /// `CollectionDifference` over the lines, which is cheap for an edit
+        /// and not cheap for a paste that replaces the file. The margin is a
+        /// summary — arriving a moment after the character does not cost the
+        /// reader anything, and while they type it only has to settle when
+        /// they stop.
+        func scheduleDiffMarkRefresh() {
+            diffTask?.cancel()
+            guard diffBaseline != nil else {
+                appliedDiffText = nil
+                gutter?.setDiffMarks([:])
+                return
+            }
+            diffTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { return }
+                self?.refreshDiffMarks()
+            }
+        }
+
+        /// The comparison itself.
+        ///
+        /// Skipped when the text has not moved since the last pass, which is
+        /// what keeps a scroll, a theme change or a window resize from paying
+        /// for a comparison whose answer cannot have changed.
+        func refreshDiffMarks() {
+            guard let gutter, let textView, let baseline = diffBaseline else { return }
+
+            let text = textView.string
+            guard text != appliedDiffText else { return }
+            appliedDiffText = text
+
+            gutter.setDiffMarks(EditorDiffMarks.marks(
+                current: EditorDiffMarks.lines(of: text),
+                base: baseline
+            ))
+        }
+
         /// Rebuilds the minimap shortly, rather than now.
         ///
         /// The rebuild tokenises the **whole** document — a second full pass
@@ -1249,6 +1693,15 @@ struct CodeTextView: NSViewRepresentable {
             gutter?.setCurrentLine(currentLineNumber(in: textView))
             updateCurrentLineBand()
             highlightBracketMatch()
+
+            /// Asked on every caret move, and cheap on all but the first: the
+            /// centre answers a repeated question from its cache and only
+            /// spawns `git blame` for a line it has not seen.
+            EditorBlameCenter.shared.request(
+                path: documentPath,
+                line: textView.selectedRange().length == 0
+                    ? currentLineNumber(in: textView)
+                    : nil)
         }
 
         /// Moves the band to the line the insertion point is on.
@@ -1451,6 +1904,8 @@ struct CodeTextView: NSViewRepresentable {
             colorBrackets(in: region)
             gutter?.reload()
             scheduleMinimapRefresh()
+            scheduleDiffMarkRefresh()
+            scheduleConflictRefresh()
             updateCurrentLineBand()
             onEdit(textView.string)
         }

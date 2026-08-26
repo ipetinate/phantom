@@ -262,6 +262,48 @@ struct AgentTabRecordTests {
             forStateFileContents: "\nagent=codex\n", fallbackSessionID: hostile)
             == "codex resume --last")
     }
+    // MARK: The agents added in 0.12.0
+
+    /// The binaries, pinned because two of the six are not named after the
+    /// agent and a wrong one is a tab that opens a shell error.
+    @Test func kimiAndPiLaunchUnderTheirOwnBinaries() {
+        #expect(CodingAgent.kimi.launchCommand == "kimi")
+        #expect(CodingAgent.pi.launchCommand == "pi")
+    }
+
+    @Test func theirNamesAreTheOnesTheirVendorsUse() {
+        #expect(CodingAgent.kimi.displayName == "Kimi Code")
+        #expect(CodingAgent.pi.displayName == "Pi")
+    }
+
+    /// `--session` and not `--resume` for both, and that is the whole point of
+    /// pinning it. Kimi's `--resume` is a hidden alias for `--session`, and
+    /// Pi's opens a picker for a human to choose from — a picker is the wrong
+    /// thing for a tab restoring itself, which already knows which
+    /// conversation it wants.
+    @Test func resumingNamesTheSessionRatherThanOpeningAPicker() {
+        #expect(CodingAgent.kimi.resumeCommand(sessionID: "abc") == "kimi --session abc")
+        #expect(CodingAgent.pi.resumeCommand(sessionID: "abc") == "pi --session abc")
+    }
+
+    /// With no id there is nothing to name, and both document `--continue` as
+    /// picking up the most recent conversation.
+    @Test func withNoSessionIDBothContinueInstead() {
+        #expect(CodingAgent.kimi.resumeCommand(sessionID: nil) == "kimi --continue")
+        #expect(CodingAgent.pi.resumeCommand(sessionID: nil) == "pi --continue")
+        #expect(CodingAgent.kimi.resumeCommand(sessionID: "") == "kimi --continue")
+    }
+
+    /// Every agent has to answer both questions, which is the reason they are
+    /// answered in one type. A case added without a launch command is a button
+    /// that does nothing.
+    @Test func everyAgentHasABinaryAndAName() {
+        for agent in CodingAgent.allCases {
+            #expect(!agent.launchCommand.isEmpty)
+            #expect(!agent.displayName.isEmpty)
+            #expect(!agent.resumeCommand(sessionID: nil).isEmpty)
+        }
+    }
 }
 
 /// Runs the hook script Phantom actually installs.

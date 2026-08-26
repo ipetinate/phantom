@@ -25,6 +25,11 @@ struct GitDiffPane: View {
     let scrollSync: ScrollSyncLink
     let syncSide: ScrollSyncSide
 
+    /// Called when a reader asks to see what a gap is hiding. Nil while the
+    /// whole file is already on screen, which is what takes the affordance
+    /// off a row that has nothing left to reveal.
+    var onExpandGap: (() -> Void)?
+
     /// Uniform, and deliberately not measured per row.
     ///
     /// Diff rows are single lines of monospaced text with no wrapping, so
@@ -123,20 +128,61 @@ struct GitDiffPane: View {
         }
     }
 
+    @ViewBuilder
     private func gapRow(_ header: GitDiffHunk.Header) -> some View {
-        HStack(spacing: 0) {
+        let label = HStack(spacing: 0) {
             Text(gapLabel(header))
                 .font(Font(font))
                 .foregroundStyle(Color(nsColor: palette.gapForeground))
-                .padding(.leading, gutterWidth)
+                .padding(.leading, gutterWidth + signWidth + 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: palette.gapBackground))
+
+        if let onExpandGap {
+            /// The whole row, not a control inside it. The row is already the
+            /// thing that says lines are hidden here, so it is the thing to
+            /// click — and it is one line tall, which is not enough room for a
+            /// button beside a label.
+            Button(action: onExpandGap) { label }
+                .buttonStyle(.plain)
+                .help("Show the whole file")
+        } else {
+            label
+        }
     }
 
     /// Git's own `@@` line is the honest label here: it says exactly which
     /// lines were skipped, and a reader who wants that detail has nowhere
     /// else to get it.
+    /// `+` for a line that arrived, `-` for one that left, and a space for
+    /// one that was already there.
+    private func sign(of line: GitDiffLine) -> String {
+        switch line.kind {
+        case .added: return "+"
+        case .removed: return "\u{2212}"
+        case .context: return " "
+        }
+    }
+
+    private func signColor(of line: GitDiffLine) -> NSColor {
+        switch line.kind {
+        case .added: return palette.addedEmphasis
+        case .removed: return palette.removedEmphasis
+        case .context: return theme.lineNumber
+        }
+    }
+
+    /// Wide enough for either sign at this font, measured rather than guessed:
+    /// a `-` and a `+` are not the same width, and the reader can change the
+    /// font.
+    private var signWidth: CGFloat {
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let plus = ("+" as NSString).size(withAttributes: attributes).width
+        let minus = ("\u{2212}" as NSString).size(withAttributes: attributes).width
+        return ceil(max(plus, minus)) + 4
+    }
+
     private func gapLabel(_ header: GitDiffHunk.Header) -> String {
         let start = side == .left ? header.oldStart : header.newStart
         let count = side == .left ? header.oldCount : header.newCount
@@ -149,7 +195,22 @@ struct GitDiffPane: View {
                 .font(Font(font))
                 .foregroundStyle(Color(nsColor: theme.lineNumber))
                 .frame(width: gutterWidth, alignment: .trailing)
-                .padding(.trailing, 8)
+
+            /// The sign, between the number and the text.
+            ///
+            /// The band behind the row already says a line changed, and it is
+            /// the thing that fails first: it is a wash of colour, it is the
+            /// same colour for a whole run, and it is the part of this that a
+            /// reader with a colour vision deficiency gets least from. A
+            /// character says which way, per line, without depending on hue.
+            ///
+            /// The column is there on every row and empty on unchanged ones,
+            /// so nothing shifts sideways where a hunk begins.
+            Text(sign(of: line))
+                .font(Font(font))
+                .foregroundStyle(Color(nsColor: signColor(of: line)))
+                .frame(width: signWidth, alignment: .center)
+                .padding(.trailing, 4)
 
             Text(text(of: line, emphasis: emphasis))
                 .font(Font(font))

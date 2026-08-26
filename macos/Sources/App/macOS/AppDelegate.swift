@@ -239,10 +239,45 @@ class AppDelegate: NSObject,
         // existed therefore went on not capturing them — which looks exactly
         // like the resume being broken. These files are generated and never
         // hand-edited, so rewriting one costs nothing.
-        ClaudeHooksInstaller.repairIfStale()
-        CodexHooksInstaller.repairIfStale()
-        OpenCodeHooksInstaller.repairIfStale()
-        AntigravityHooksInstaller.repairIfStale()
+        /// Not from a test host. `xcodebuild test` hosts the bundle inside the
+        /// app, so this runs during a suite — and every line of it writes into
+        /// the reader's own home: their agents' hook scripts, and below, their
+        /// MCP entries. A suite that rewrites somebody's configuration as a
+        /// side effect of running can break their setup while reporting green,
+        /// which is what the socket guard in `MCPServer` was added for and the
+        /// same reasoning applies here.
+        ///
+        /// Scoped to the writes rather than returning early: everything after
+        /// them is this app's own state, and a test host wants it.
+        if !MCPServer.isTesting {
+            ClaudeHooksInstaller.repairIfStale()
+            CodexHooksInstaller.repairIfStale()
+            OpenCodeHooksInstaller.repairIfStale()
+            AntigravityHooksInstaller.repairIfStale()
+            KimiHooksInstaller.repairIfStale()
+            PiHooksInstaller.repairIfStale()
+        }
+
+        // The one object that puts the permission question on screen, and it
+        // starts before the listener does: a question raised with nobody
+        // watching is a `pending` nothing will ever answer, and the store
+        // refuses every later question while one is pending.
+        MCPPermissionPrompt.shared.start()
+
+        // The MCP listener, beside the hooks because it is the same idea: a
+        // rendezvous the agents running inside this app's terminals can find.
+        // The socket is named after the bundle, so a debug build and a
+        // release one running together each answer for themselves.
+        MCPServer.shared.start()
+
+        // The MCP entry in each agent's own configuration, kept current the
+        // same way the hooks above are: repaired when it is behind this build,
+        // never installed uninvited. The command it registers is this bundle's
+        // own binary, so a Phantom that moved on disk leaves an entry pointing
+        // at nothing until this rewrites it.
+        /// Behind the same guard, and for the same reason: this writes into
+        /// four other programs' configuration files.
+        if !MCPServer.isTesting { MCPServerRegistration.repairAll() }
 
         // Watching for the moments a window can become unreachable, before
         // any window exists to have them. Development builds only; see
@@ -513,6 +548,10 @@ class AppDelegate: NSObject,
 
     func applicationWillTerminate(_ notification: Notification) {
         WindowBreadcrumbs.note("willTerminate: the app is going down through AppKit")
+
+        // The socket file outlives the process that bound it, and a stale one
+        // is a path a client connects to and waits on forever.
+        MCPServer.shared.stop()
 
         // We have no notifications we want to persist after death,
         // so remove them all now. In the future we may want to be

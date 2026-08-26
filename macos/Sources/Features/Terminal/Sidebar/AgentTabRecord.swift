@@ -28,6 +28,8 @@ enum CodingAgent: String, Sendable, CaseIterable {
     case codex
     case opencode
     case antigravity
+    case kimi
+    case pi
 
     /// What to call this agent in the interface.
     ///
@@ -40,6 +42,8 @@ enum CodingAgent: String, Sendable, CaseIterable {
         case .codex: "Codex"
         case .opencode: "OpenCode"
         case .antigravity: "Antigravity"
+        case .kimi: "Kimi Code"
+        case .pi: "Pi"
         }
     }
 
@@ -61,6 +65,8 @@ enum CodingAgent: String, Sendable, CaseIterable {
         case .codex: "codex"
         case .opencode: "opencode"
         case .antigravity: "agy"
+        case .kimi: "kimi"
+        case .pi: "pi"
         }
     }
 
@@ -80,6 +86,8 @@ enum CodingAgent: String, Sendable, CaseIterable {
             case .codex: return "codex resume --last"
             case .opencode: return "opencode --continue"
             case .antigravity: return "agy --continue"
+            case .kimi: return "kimi --continue"
+            case .pi: return "pi --continue"
             }
         }
 
@@ -88,6 +96,14 @@ enum CodingAgent: String, Sendable, CaseIterable {
         case .codex: return "codex resume \(sessionID)"
         case .opencode: return "opencode --session \(sessionID)"
         case .antigravity: return "agy --conversation \(sessionID)"
+
+        /// Both spell the id-bearing form `--session`, and both also have a
+        /// `--resume`. Kimi's `-r`/`--resume` is a hidden alias for
+        /// `--session`, and Pi's opens a picker for the reader to choose from
+        /// — a picker is the wrong thing for a tab restoring itself, which
+        /// knows exactly which conversation it wants. So `--session` for both.
+        case .kimi: return "kimi --session \(sessionID)"
+        case .pi: return "pi --session \(sessionID)"
         }
     }
 }

@@ -12,10 +12,18 @@ import SwiftUI
 /// 24×24 box (measured: x 0…24, y 1…23.109), so it flattens to a legible
 /// glyph instead of the hairline the worktree artwork once shipped as.
 ///
-/// `originalColors` is therefore not offered, because there are no original
-/// colours to return to — only a choice of one of the four. The `.original`
-/// tint picks the blue, which covers the whole lower half of the mark and is
-/// the one Google leads the product's own branding with.
+/// So this mark ships **twice**, and it is the only one that does. The other
+/// three logos are one or two flat colours, which a silhouette plus a tint
+/// describes completely. This one is a continuous gradient that changes in
+/// two directions at once, and that is not a shape plus a colour — a
+/// linear-gradient fill of the silhouette was tried first and read as a
+/// different logo. Two assets here is not an exception for its own sake; it
+/// is the logo not fitting in one.
+///
+/// Each answers for one case and cannot answer for the other. `.theme` wants
+/// one more grey icon in a row of grey icons, which only a template can be.
+/// `.original` wants the mark as Google draws it, which only the artwork can
+/// be.
 struct AntigravityIcon: View {
     /// Which tint the mark takes. The same two cases `ClaudeIcon` offers, for
     /// the same reason: a chrome row wants one more grey icon, and the
@@ -32,29 +40,25 @@ struct AntigravityIcon: View {
     var size: CGFloat = 12
     var tint: Tint = .theme
 
-    /// The blue of the mark's largest blob, `#3186FF` in the source artwork.
-    private static let skySwatch = Color(
-        .sRGB,
-        red: 0x31 / 255,
-        green: 0x86 / 255,
-        blue: 0xff / 255
-    )
-
-    private var color: Color {
+    var body: some View {
         switch tint {
         case .original:
-            return Self.skySwatch
-        case .theme:
-            return .secondary
-        }
-    }
+            /// Drawn as it is, so `renderingMode` is left alone: asking for
+            /// `.original` on an image that is already original is how a
+            /// future reader learns nothing, and asking for `.template` here
+            /// would throw away the only thing this asset has.
+            Image("AntigravityIconColor")
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
 
-    var body: some View {
-        Image("AntigravityIcon")
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: size, height: size)
-            .foregroundStyle(color)
+        case .theme:
+            Image("AntigravityIcon")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+                .foregroundStyle(.secondary)
+        }
     }
 }

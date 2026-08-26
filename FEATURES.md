@@ -41,7 +41,7 @@ and not a new app.
 | Agents | Ended sessions are not resumed on the next launch | Shipped | v0.7.0 |
 | Agents | Agent processes are killed when a tab or window closes | Shipped | v0.7.0 |
 | Agents | Follow the agent as it edits files | Planned | — |
-| Agents | An MCP server exposing the terminals: list, read output, open tabs | Planned | 0.10.0 |
+| Agents | An MCP server: read the terminals, run in an idle one, drive groups and the editor | Planned | — |
 | Git | Repository status panel | Shipped | v0.2.0 |
 | Git | Diff, split horizontal and vertical | Shipped | v0.6.0 |
 | Git | File context menu | Shipped | v0.7.0 |

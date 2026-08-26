@@ -211,8 +211,39 @@ final class GitCenter: ObservableObject {
         perform("Stage", in: root, arguments: ["add", "--"] + paths)
     }
 
+    /// Stages everything that is safe to stage.
+    ///
+    /// **Never `add -A` while a merge is unfinished.** Git refuses to commit
+    /// with unmerged paths, which is the safety net — and `add -A` removes it:
+    /// it stages a conflicted file exactly as it sits on disk, markers
+    /// included, and git then considers the conflict resolved. One click on
+    /// Commit and `<<<<<<< HEAD` is in the history.
+    ///
+    /// So while anything is unmerged, the paths are named. `add -A` is kept
+    /// for the ordinary case because it is not the same command: it also picks
+    /// up deletions of paths git has not been told about, which a list built
+    /// from a status snapshot can miss.
     func stageAll(in root: String) {
-        perform("Stage All", in: root, arguments: ["add", "-A"])
+        let unmerged = statuses[root]?.unmerged ?? []
+        guard !unmerged.isEmpty else {
+            perform("Stage All", in: root, arguments: ["add", "-A"])
+            return
+        }
+
+        let safe = safePathsToStage(in: root)
+        guard !safe.isEmpty else { return }
+        perform("Stage All", in: root, arguments: ["add", "--"] + safe)
+    }
+
+    /// Every changed path except the ones git could not merge.
+    ///
+    /// Built from `unstaged`, which by construction holds no unmerged entry —
+    /// the parser files those under `unmerged` alone — so this is the whole
+    /// list minus the conflicts without having to subtract anything.
+    private func safePathsToStage(in root: String) -> [String] {
+        guard let status = statuses[root] else { return [] }
+        var seen: Set<String> = []
+        return status.unstaged.map(\.path).filter { seen.insert($0).inserted }
     }
 
     /// `restore --staged` rather than `reset HEAD` — it does the same thing
@@ -268,7 +299,22 @@ final class GitCenter: ObservableObject {
         var commitArguments = ["commit", "-m", message]
         if amend { commitArguments.append("--amend") }
 
-        let steps = stageAll ? [["add", "-A"], commitArguments] : [commitArguments]
+        /// The same rule as `stageAll(in:)`, and it matters more here: this
+        /// path stages and commits in one gesture, so an `add -A` over an
+        /// unfinished merge would put the conflict markers in a commit without
+        /// anything in between to notice.
+        let unmerged = statuses[root]?.unmerged ?? []
+        let stageStep: [[String]]
+        if !stageAll {
+            stageStep = []
+        } else if unmerged.isEmpty {
+            stageStep = [["add", "-A"]]
+        } else {
+            let safe = safePathsToStage(in: root)
+            stageStep = safe.isEmpty ? [] : [["add", "--"] + safe]
+        }
+
+        let steps = stageStep + [commitArguments]
         perform("Commit", in: root, steps: steps, timeout: GitCommand.mutateTimeout)
     }
 

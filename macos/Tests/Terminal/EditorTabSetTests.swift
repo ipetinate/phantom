@@ -386,3 +386,275 @@ struct PaneCommandTests {
         #expect(command("1", [.command, .option], hasOpenFiles: false) == nil)
     }
 }
+
+/// Where a pinned tab sits, and what may and may not move it there.
+///
+/// The whole ordering rule lives in `EditorTabSet`, which is a value with no
+/// window and no view in it, so these are the tests that hold the bar's order
+/// honest: the terminal first, then the pinned run, then the rest.
+struct EditorTabPinningTests {
+    private func withFiles(_ paths: [String]) -> EditorTabSet {
+        var tabs = EditorTabSet()
+        paths.forEach { tabs.open($0) }
+        return tabs
+    }
+
+    private func order(_ tabs: EditorTabSet) -> [String] { tabs.tabs.map(\.path) }
+
+    @Test func pinningMovesTheTabToTheHeadOfTheBar() {
+        var tabs = withFiles(["/a.ts", "/b.ts", "/c.ts"])
+        tabs.setPinned(true, for: "/c.ts")
+
+        #expect(order(tabs) == ["/c.ts", "/a.ts", "/b.ts"])
+        #expect(tabs.pinnedCount == 1)
+        #expect(tabs.tab(for: "/c.ts")?.isPinned == true)
+    }
+
+    /// The run grows in the order things were pinned, so a second pin lands
+    /// behind the first rather than displacing it.
+    @Test func pinnedTabsKeepTheOrderTheyWerePinnedIn() {
+        var tabs = withFiles(["/a.ts", "/b.ts", "/c.ts"])
+        tabs.setPinned(true, for: "/c.ts")
+        tabs.setPinned(true, for: "/b.ts")
+
+        #expect(order(tabs) == ["/c.ts", "/b.ts", "/a.ts"])
+        #expect(tabs.pinnedCount == 2)
+    }
+
+    /// Opening a file must not disturb the tabs the reader chose to keep at
+    /// hand, so a new tab lands behind the whole pinned run.
+    @Test func openingAFileLandsBehindThePinnedRun() {
+        var tabs = withFiles(["/a.ts", "/b.ts"])
+        tabs.setPinned(true, for: "/b.ts")
+        tabs.open("/c.ts")
+
+        #expect(order(tabs) == ["/b.ts", "/a.ts", "/c.ts"])
+        #expect(tabs.pinnedCount == 1)
+    }
+
+    /// Unpinning returns the tab to the unpinned run at the nearest slot,
+    /// rather than throwing it to the far end of a bar the reader may have to
+    /// scroll to find it in.
+    @Test func unpinningReturnsTheTabToTheHeadOfTheUnpinnedRun() {
+        var tabs = withFiles(["/a.ts", "/b.ts", "/c.ts"])
+        tabs.setPinned(true, for: "/c.ts")
+        tabs.setPinned(true, for: "/b.ts")
+        tabs.setPinned(false, for: "/c.ts")
+
+        #expect(order(tabs) == ["/b.ts", "/c.ts", "/a.ts"])
+        #expect(tabs.pinnedCount == 1)
+        #expect(tabs.tab(for: "/c.ts")?.isPinned == false)
+    }
+
+    @Test func everyPinnedTabComesBeforeEveryUnpinnedOne() {
+        var tabs = withFiles(["/a.ts", "/b.ts", "/c.ts", "/d.ts"])
+        tabs.setPinned(true, for: "/d.ts")
+        tabs.setPinned(true, for: "/a.ts")
+        tabs.setPinned(false, for: "/d.ts")
+        tabs.open("/e.ts")
+
+        let boundary = tabs.pinnedCount
+        let head = tabs.tabs.prefix(boundary).allSatisfy(\.isPinned)
+        let rest = tabs.tabs.dropFirst(boundary).allSatisfy { !$0.isPinned }
+        #expect(head, "a tab before the boundary is not pinned")
+        #expect(rest, "a tab after the boundary is pinned")
+    }
+
+    @Test func movingReordersWithinThePinnedRun() {
+        var tabs = withFiles(["/a.ts", "/b.ts", "/c.ts"])
+        tabs.setPinned(true, for: "/a.ts")
+        tabs.setPinned(true, for: "/b.ts")
+
+        let moved = tabs.move("/b.ts", by: -1)
+        #expect(moved)
+        #expect(order(tabs) == ["/b.ts", "/a.ts", "/c.ts"])
+    }
+
+    /// The boundary between the runs is not a place a move may cross: a tab
+    /// carried over it would be pinned by its position and not by its own
+    /// flag, which is the one way this array can come to disagree with itself.
+    @Test func aMoveCannotCrossTheBoundaryBetweenTheRuns() {
+        var tabs = withFiles(["/a.ts", "/b.ts", "/c.ts"])
+        tabs.setPinned(true, for: "/a.ts")
+
+        let outOfTheRun = tabs.move("/a.ts", by: 1)
+        #expect(!outOfTheRun, "the last pinned tab has nowhere to go on the right")
+        #expect(order(tabs) == ["/a.ts", "/b.ts", "/c.ts"])
+
+        let intoTheRun = tabs.move("/b.ts", by: -1)
+        #expect(!intoTheRun, "the first unpinned tab has nowhere to go on the left")
+        #expect(order(tabs) == ["/a.ts", "/b.ts", "/c.ts"])
+    }
+
+    @Test func aMoveOffEitherEndOfTheBarIsRefused() {
+        var tabs = withFiles(["/a.ts", "/b.ts"])
+
+        let offTheLeft = tabs.move("/a.ts", by: -1)
+        let offTheRight = tabs.move("/b.ts", by: 1)
+        #expect(!offTheLeft)
+        #expect(!offTheRight)
+        #expect(order(tabs) == ["/a.ts", "/b.ts"])
+    }
+
+    @Test func aTabThatIsNotOpenCannotBePinnedOrMoved() {
+        var tabs = withFiles(["/a.ts"])
+        tabs.setPinned(true, for: "/nowhere.ts")
+
+        let moved = tabs.move("/nowhere.ts", by: 1)
+        #expect(!moved)
+        #expect(order(tabs) == ["/a.ts"])
+        #expect(tabs.pinnedCount == 0)
+    }
+
+    /// Pinning is about position, not about permanence — a pinned tab closes
+    /// on the ordinary gesture, like any other.
+    @Test func aPinnedTabClosesLikeAnyOther() {
+        var tabs = withFiles(["/a.ts", "/b.ts"])
+        tabs.setPinned(true, for: "/a.ts")
+        tabs.close("/a.ts")
+
+        #expect(order(tabs) == ["/b.ts"])
+        #expect(tabs.selection == .file("/b.ts"))
+    }
+
+    /// A tab dragged into another cell arrives whole: the pin is the tab's,
+    /// not the bar's, and so is the dirty dot.
+    @Test func anAdoptedTabKeepsItsPinAndItsDot() {
+        var source = withFiles(["/a.ts"])
+        source.setPinned(true, for: "/a.ts")
+        source.setDirty(true, for: "/a.ts")
+
+        var destination = withFiles(["/x.ts", "/y.ts"])
+        guard let travelling = source.tab(for: "/a.ts") else {
+            Issue.record("the tab to move is missing")
+            return
+        }
+        destination.adopt(travelling)
+
+        #expect(order(destination) == ["/a.ts", "/x.ts", "/y.ts"])
+        #expect(destination.tab(for: "/a.ts")?.isPinned == true)
+        #expect(destination.tab(for: "/a.ts")?.isDirty == true)
+        #expect(destination.selection == .file("/a.ts"))
+    }
+
+    /// An unpinned arrival lands at the end, behind the destination's own
+    /// pinned run rather than in front of it.
+    @Test func anAdoptedUnpinnedTabLandsBehindTheHostsPins() {
+        var destination = withFiles(["/x.ts", "/y.ts"])
+        destination.setPinned(true, for: "/y.ts")
+        destination.adopt(EditorTab(path: "/a.ts"))
+
+        #expect(order(destination) == ["/y.ts", "/x.ts", "/a.ts"])
+    }
+
+    /// Adopting a file the destination already has selects it instead of
+    /// making a second tab — the same rule `open` follows, for the same
+    /// reason: two live editors over one file would need a shared buffer.
+    @Test func adoptingAFileTheCellAlreadyHasSelectsIt() {
+        var destination = withFiles(["/x.ts", "/y.ts"])
+        destination.adopt(EditorTab(path: "/x.ts", isPinned: true))
+
+        #expect(order(destination) == ["/x.ts", "/y.ts"])
+        #expect(destination.tab(for: "/x.ts")?.isPinned == false, "the resident tab is unchanged")
+        #expect(destination.selection == .file("/x.ts"))
+    }
+
+    /// A rename keeps the tab where it is, pin and all.
+    @Test func renamingKeepsThePin() {
+        var tabs = withFiles(["/a.ts", "/b.ts"])
+        tabs.setPinned(true, for: "/a.ts")
+        tabs.repath(from: "/a.ts", to: "/renamed.ts")
+
+        #expect(order(tabs) == ["/renamed.ts", "/b.ts"])
+        #expect(tabs.tab(for: "/renamed.ts")?.isPinned == true)
+    }
+
+    /// Numbers address the tabs in the order they are drawn, so the first one
+    /// is the leftmost tab in the bar — which, with a pin in it, is pinned.
+    @Test func numbersFollowTheOrderTheBarDraws() {
+        var tabs = withFiles(["/a.ts", "/b.ts", "/c.ts"])
+        tabs.setPinned(true, for: "/c.ts")
+
+        tabs.selectFile(at: 1)
+        #expect(tabs.selectedPath == "/c.ts")
+    }
+
+    // MARK: The review's tab
+
+    /// The review is a tab like the terminal is a tab: selecting it changes
+    /// what is shown without closing anything, so the file that was in front
+    /// is still open behind it.
+    @Test func selectingTheReviewKeepsTheFilesOpen() {
+        var set = EditorTabSet()
+        set.open("/a.swift")
+        set.open("/b.swift")
+
+        set.selectReview()
+
+        #expect(set.showsReview)
+        #expect(set.tabs.count == 2)
+        #expect(set.selectedPath == nil)
+    }
+
+    /// The bug this shape fixes: the review used to be drawn over whatever the
+    /// cell showed, so opening a file appeared to do nothing. Selecting a file
+    /// has to take the review down from the front.
+    @Test func selectingAFileTakesTheReviewOffTheFront() {
+        var set = EditorTabSet()
+        set.open("/a.swift")
+        set.selectReview()
+
+        set.select("/a.swift")
+
+        #expect(set.showsReview == false)
+        #expect(set.selectedPath == "/a.swift")
+    }
+
+    /// Closing it shows the last file rather than nothing: a cell showing
+    /// nothing is a cell the reader has to click to recover, and the review
+    /// was laid over something.
+    @Test func closingTheReviewFallsBackToTheLastFile() {
+        var set = EditorTabSet()
+        set.open("/a.swift")
+        set.selectReview()
+
+        set.selectAfterReview()
+
+        #expect(set.selectedPath == "/a.swift")
+    }
+
+    /// With no file to fall back to, the terminal — which is the other thing
+    /// a cell can always show.
+    @Test func closingItWithNoFilesFallsBackToTheTerminal() {
+        var set = EditorTabSet()
+        set.selectReview()
+
+        set.selectAfterReview()
+
+        #expect(set.showsTerminal)
+    }
+
+    /// Only from the review. Called while a file is selected it must not move
+    /// the selection, or closing a review in one cell would reshuffle another.
+    @Test func theFallbackDoesNothingWhenTheReviewIsNotShowing() {
+        var set = EditorTabSet()
+        set.open("/a.swift")
+        set.open("/b.swift")
+        set.select("/a.swift")
+
+        set.selectAfterReview()
+
+        #expect(set.selectedPath == "/a.swift")
+    }
+
+    @Test func theTerminalAndTheReviewAreDifferentSelections() {
+        var set = EditorTabSet()
+        set.selectReview()
+        #expect(set.showsReview)
+        #expect(set.showsTerminal == false)
+
+        set.selectTerminal()
+        #expect(set.showsTerminal)
+        #expect(set.showsReview == false)
+    }
+}
