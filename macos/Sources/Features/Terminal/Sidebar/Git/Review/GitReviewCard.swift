@@ -120,7 +120,22 @@ struct GitReviewCard: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
 
-                Spacer(minLength: 0)
+                Spacer(minLength: 4)
+
+                /// The way out to the browser, wherever a pull request is
+                /// named. A glyph rather than the word "GitHub", because in a
+                /// sidebar the label would cost more room than the title it
+                /// sits beside — and the arrow is the same one the file rows
+                /// in the review use for "open this elsewhere".
+                if let url = URL(string: request.url) {
+                    SidebarIconButton(help: "Open #\(request.number) on GitHub") {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             if let preview = request.bodyPreview {

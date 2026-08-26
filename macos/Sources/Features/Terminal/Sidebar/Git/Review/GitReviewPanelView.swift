@@ -146,13 +146,19 @@ struct GitReviewPanelView: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
 
-                Button("GitHub") {
-                    if let url = URL(string: request.url) { NSWorkspace.shared.open(url) }
+                /// The same glyph the card uses and the same one a file row
+                /// uses for "open this elsewhere". It was the word "GitHub"
+                /// here and a glyph there — two looks for one action inside
+                /// one feature, which is a thing to learn twice.
+                if let url = URL(string: request.url) {
+                    SidebarIconButton(help: "Open #\(request.number) on GitHub") {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                .buttonStyle(.plain)
-                .font(palette.font(size: 10))
-                .foregroundStyle(palette.accent ?? .accentColor)
-                .fixedSize(horizontal: true, vertical: false)
             }
 
             if let preview = request.bodyPreview {
