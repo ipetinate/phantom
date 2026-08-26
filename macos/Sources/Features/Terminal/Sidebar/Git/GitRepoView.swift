@@ -378,8 +378,45 @@ struct GitRepoView: View {
 
     // MARK: Changes
 
+    /// The working tree's state, and under it the branch review.
+    ///
+    /// The review is **outside** the state switch, and that is the fix for a
+    /// bug: it used to live inside the `changes` case, so committing everything
+    /// replaced it with "No changes". A clean tree is exactly when somebody
+    /// wants it — the work is committed and the question becomes what is about
+    /// to go up — and it was the one moment it disappeared.
+    ///
+    /// It belongs outside because it is not about the working tree at all. It
+    /// is about commits, and a repository with nothing uncommitted still has
+    /// every one of them.
     @ViewBuilder
     private var changeList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            workingTreeState
+
+            if let onOpenBranchDiff {
+                GitBranchReviewView(
+                    root: root,
+                    onOpenReview: { editorCenter.showReview(.branch(root: root)) },
+                    onOpenCommit: { commit in
+                        editorCenter.showReview(.commit(
+                            root: root,
+                            sha: commit.sha,
+                            subject: commit.subject))
+                    },
+                    onOpenDiff: { file, base in
+                        onOpenBranchDiff(
+                            URL(fileURLWithPath: root).appendingPathComponent(file.path),
+                            base.ref
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var workingTreeState: some View {
         switch GitPanelContent.resolve(status: status, hasLoaded: center.hasLoaded(root)) {
         case .loading:
             placeholder {
@@ -441,37 +478,6 @@ struct GitRepoView: View {
             section("Staged Changes", status.staged, staged: true, merge: false)
             section("Changes", status.unstaged, staged: false, merge: false)
 
-            /// Last, and it used to be first.
-            ///
-            /// It answers a question asked once per branch — is this whole
-            /// thing ready to go up — while the three sections above answer the
-            /// one asked on every visit. Between the commit box and the files
-            /// it pushed the files down by the height of a card, every time,
-            /// for a question nobody has in the middle of working. Reading the
-            /// panel top to bottom now follows the work: change the files,
-            /// commit, then look at the branch.
-            ///
-            /// It was first on the reasoning that it answers what somebody is
-            /// about to open a pull request for, which is true and is the
-            /// argument for it being *last*.
-            if let onOpenBranchDiff {
-                GitBranchReviewView(
-                    root: root,
-                    onOpenReview: { editorCenter.showReview(.branch(root: root)) },
-                    onOpenCommit: { commit in
-                        editorCenter.showReview(.commit(
-                            root: root,
-                            sha: commit.sha,
-                            subject: commit.subject))
-                    },
-                    onOpenDiff: { file, base in
-                        onOpenBranchDiff(
-                            URL(fileURLWithPath: root).appendingPathComponent(file.path),
-                            base.ref
-                        )
-                    }
-                )
-            }
         }
         .padding(.horizontal, 6)
         .padding(.bottom, 8)

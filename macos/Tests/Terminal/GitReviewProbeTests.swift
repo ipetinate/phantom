@@ -332,4 +332,27 @@ struct GitReviewProbeTests {
         #expect(freshBranch.isEmpty)
         #expect(freshBranch.isOnTarget == false)
     }
+
+    // MARK: What the panel draws when
+
+    /// The bug: the review used to be inside the `changes` case, so committing
+    /// everything replaced it with "No changes" — and a clean tree is exactly
+    /// when somebody wants it, because the work is committed and the question
+    /// becomes what is about to go up.
+    ///
+    /// This pins the reasoning rather than the layout: a clean working tree is
+    /// still a repository with commits, so the two facts are independent and
+    /// `GitPanelContent` must not be consulted about the branch.
+    @Test func aCleanTreeStillHasCommitsToReview() {
+        var clean = GitStatus()
+        clean.branch = "feat/thing"
+
+        #expect(clean.isClean)
+        #expect(GitPanelContent.resolve(status: clean, hasLoaded: true) == .clean)
+
+        /// And the review's own emptiness is decided by the commit count, not
+        /// by any of that.
+        let ahead = context(branch: "feat/thing", target: .repositoryDefault("main"))
+        #expect(ahead.isEmpty == false)
+    }
 }
