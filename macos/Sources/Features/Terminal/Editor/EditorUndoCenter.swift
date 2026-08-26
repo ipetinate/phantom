@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// Every file's undo history, for as long as the app is running.
@@ -12,14 +11,19 @@ import Foundation
 /// history has to be held by something that survives a document, and this is
 /// the only thing in the editor that does.
 ///
-/// ## What it does not promise
+/// ## What it promises across launches
 ///
-/// Nothing here is written to disk. Quit the app and every timeline goes with
-/// it: reopening a file in a new launch starts with an empty history. That is
-/// a deliberate line rather than an oversight — persisting undo means writing
-/// the contents of files the reader never saved into a cache directory, and
-/// deciding when to expire it, which is a larger promise than the one being
-/// made here.
+/// A closed file's history is written to disk by ``EditorUndoArchive`` and
+/// read back when the file is opened again, so quitting the app no longer
+/// ends every timeline. That promise is larger than the in-memory one and is
+/// described where it is kept: the archive holds pieces of the reader's text,
+/// including text they never saved.
+///
+/// One thing is deliberately not restored. `UndoManager` puts a step on the
+/// redo side only by undoing it, so rebuilding a redo stack would mean
+/// undoing steps against the file — the exact edit nobody asked for. A
+/// reopened file therefore has everything to undo and nothing to redo, until
+/// the reader undoes something.
 ///
 /// ## The rule that makes it safe
 ///
@@ -72,6 +76,15 @@ final class EditorUndoCenter {
     func attach(path: String, text: String) -> CodeUndoTimeline {
         guard var entry = entries[path] else {
             let timeline = CodeUndoTimeline()
+
+            /// Nothing in memory means either a first open or a new launch.
+            /// The archive answers which, and answers nothing at all unless
+            /// the file still holds the text the history was recorded
+            /// against.
+            if let saved = EditorUndoArchive.load(path: path, matching: text) {
+                timeline.restore(saved)
+            }
+
             entries[path] = Entry(timeline: timeline, fingerprint: nil, touched: Date())
             evictIfNeeded()
             return timeline
@@ -79,6 +92,19 @@ final class EditorUndoCenter {
 
         if let fingerprint = entry.fingerprint, fingerprint != Self.fingerprint(of: text) {
             entry.timeline.clear()
+            EditorUndoArchive.forget(path: path)
+        }
+
+        /// An entry can exist without this ever having run: ``timeline(forPath:)``
+        /// makes one for any view that asks, and a rebuilt pane can reach it
+        /// before the open does. An empty timeline here therefore means the
+        /// archive has not been offered yet rather than that it was refused, so
+        /// offer it. Both gates still hold — ``CodeUndoTimeline/restore(_:)``
+        /// takes nothing on top of a live history, and the archive returns
+        /// nothing unless the text still matches.
+        if entry.timeline.steps.isEmpty,
+           let saved = EditorUndoArchive.load(path: path, matching: text) {
+            entry.timeline.restore(saved)
         }
         entry.fingerprint = nil
         entry.touched = Date()
@@ -115,9 +141,31 @@ final class EditorUndoCenter {
         guard var entry = entries[path] else { return }
         entry.timeline.flush()
         entry.timeline.target = nil
-        entry.fingerprint = Self.fingerprint(of: text)
+        let fingerprint = Self.fingerprint(of: text)
+        entry.fingerprint = fingerprint
         entry.touched = Date()
         entries[path] = entry
+
+        EditorUndoArchive.save(
+            path: path, fingerprint: fingerprint, steps: entry.timeline.steps)
+    }
+
+    /// Writes down every open file's history, for the moment the app is going
+    /// away without the tabs being closed first.
+    ///
+    /// Quitting with files open is the ordinary case, and it is the one where
+    /// ``detach(path:text:)`` never runs. The caller supplies each open file's
+    /// current text because only it knows that; this class holds histories,
+    /// not buffers.
+    func persistOpenFiles(texts: [String: String]) {
+        for (path, text) in texts {
+            guard let entry = entries[path] else { continue }
+            entry.timeline.flush()
+            EditorUndoArchive.save(
+                path: path,
+                fingerprint: Self.fingerprint(of: text),
+                steps: entry.timeline.steps)
+        }
     }
 
     /// Throws a file's history away.
@@ -129,6 +177,7 @@ final class EditorUndoCenter {
     /// out next.
     func invalidate(path: String) {
         entries[path]?.timeline.clear()
+        EditorUndoArchive.forget(path: path)
     }
 
     /// Follows a file that was renamed or moved, so the history moves with the
@@ -137,6 +186,11 @@ final class EditorUndoCenter {
         guard oldPath != newPath, var entry = entries.removeValue(forKey: oldPath) else { return }
         entry.touched = Date()
         entries[newPath] = entry
+
+        /// The record on disk is named after the old path and nothing will ask
+        /// for it again. The history is safe in memory and is written back
+        /// under the new name at the next close.
+        EditorUndoArchive.forget(path: oldPath)
     }
 
     /// Whether a path has anything to take back, for tests and for anything
@@ -176,6 +230,6 @@ final class EditorUndoCenter {
     /// memory this class is otherwise careful about. Thirty-two bytes of
     /// SHA-256 costs one pass over the file at close and one at open.
     private static func fingerprint(of text: String) -> Data {
-        Data(SHA256.hash(data: Data(text.utf8)))
+        EditorUndoArchive.fingerprint(of: text)
     }
 }

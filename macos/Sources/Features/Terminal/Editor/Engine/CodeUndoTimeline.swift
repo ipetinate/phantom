@@ -11,7 +11,7 @@ import AppKit
 /// a format. Undo that restores the text and leaves the caret at the end of
 /// the file is only half of "take that back" — the reader was somewhere, and
 /// the point of undoing is to be there again.
-struct CodeUndoStep: Equatable {
+struct CodeUndoStep: Equatable, Codable {
     /// Where the edit landed, in UTF-16 offsets into the text **before** it.
     var range: NSRange
 
@@ -35,6 +35,53 @@ struct CodeUndoStep: Equatable {
 
     /// What holding this step costs, measured the way `String` stores it.
     var byteCount: Int { removed.utf8.count + inserted.utf8.count }
+}
+
+// MARK: - On disk
+
+/// Written out by hand, as five integers and three strings.
+///
+/// `NSRange` is a C struct that Foundation happens to extend with `Codable`,
+/// and a step archived in one launch has to decode in a later one — possibly
+/// after an OS update. Spelling the fields here makes the file format the
+/// property of this file rather than of the overlay, and makes it legible to
+/// anybody who opens the JSON to work out what an editor kept about them.
+extension CodeUndoStep {
+    private enum CodingKeys: String, CodingKey {
+        case location, length
+        case removed, inserted, name
+        case selectionBeforeLocation, selectionBeforeLength
+        case selectionAfterLocation, selectionAfterLength
+    }
+
+    init(from decoder: Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        range = NSRange(
+            location: try box.decode(Int.self, forKey: .location),
+            length: try box.decode(Int.self, forKey: .length))
+        removed = try box.decode(String.self, forKey: .removed)
+        inserted = try box.decode(String.self, forKey: .inserted)
+        name = try box.decode(String.self, forKey: .name)
+        selectionBefore = NSRange(
+            location: try box.decode(Int.self, forKey: .selectionBeforeLocation),
+            length: try box.decode(Int.self, forKey: .selectionBeforeLength))
+        selectionAfter = NSRange(
+            location: try box.decode(Int.self, forKey: .selectionAfterLocation),
+            length: try box.decode(Int.self, forKey: .selectionAfterLength))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var box = encoder.container(keyedBy: CodingKeys.self)
+        try box.encode(range.location, forKey: .location)
+        try box.encode(range.length, forKey: .length)
+        try box.encode(removed, forKey: .removed)
+        try box.encode(inserted, forKey: .inserted)
+        try box.encode(name, forKey: .name)
+        try box.encode(selectionBefore.location, forKey: .selectionBeforeLocation)
+        try box.encode(selectionBefore.length, forKey: .selectionBeforeLength)
+        try box.encode(selectionAfter.location, forKey: .selectionAfterLocation)
+        try box.encode(selectionAfter.length, forKey: .selectionAfterLength)
+    }
 }
 
 extension CodeUndoStep {
@@ -229,7 +276,24 @@ final class CodeUndoTimeline {
     /// What each registered step costs, oldest first, mirroring the stack so
     /// the byte budget can be applied without asking `UndoManager` a question
     /// it does not answer.
-    private var registeredBytes: [Int] = []
+    /// The steps on the undo stack, oldest first, mirroring what `UndoManager`
+    /// holds.
+    ///
+    /// **Observational, and that word is the safety argument.** `UndoManager`
+    /// still does every undo; nothing here drives behaviour while the app is
+    /// running. This array exists so the history can be written down and put
+    /// back in a later launch, and it is kept in step with the manager at the
+    /// three places the stack moves — registering, undoing, and trimming.
+    ///
+    /// The consequence of that choice is worth stating: a bug in this
+    /// bookkeeping can lose history. It cannot corrupt a file, because it is
+    /// never consulted to decide what an undo does, and because a restored
+    /// history is refused outright when the file's fingerprint has moved.
+    ///
+    /// It replaces the `[Int]` of byte counts this used to keep for the
+    /// budget — the steps know their own size, and two arrays that must stay
+    /// the same length are one array that sometimes does not.
+    private(set) var steps: [CodeUndoStep] = []
 
     private(set) var byteCount = 0
 
@@ -319,7 +383,7 @@ final class CodeUndoTimeline {
     func clear() {
         pending = nil
         manager.removeAllActions()
-        registeredBytes.removeAll()
+        steps.removeAll()
         byteCount = 0
         manager.levelsOfUndo = Self.maximumSteps
     }
@@ -339,6 +403,20 @@ final class CodeUndoTimeline {
         isApplying = true
         target.applyUndoStep(step, undoing: undoing)
         isApplying = false
+
+        /// The mirror follows the stack. Undoing takes the newest step off;
+        /// redoing puts it back. Matched by value rather than by index because
+        /// `UndoManager` is the one deciding what moves, and an index kept
+        /// here would be a second opinion about its stack.
+        if undoing {
+            if steps.last == step {
+                steps.removeLast()
+                byteCount -= step.byteCount
+            }
+        } else {
+            steps.append(step)
+            byteCount += step.byteCount
+        }
 
         manager.beginUndoGrouping()
         manager.registerUndo(withTarget: self) { timeline in
@@ -361,7 +439,7 @@ final class CodeUndoTimeline {
         manager.setActionName(step.name)
         manager.endUndoGrouping()
 
-        registeredBytes.append(step.byteCount)
+        steps.append(step)
         byteCount += step.byteCount
         trimToBudget()
     }
@@ -375,15 +453,43 @@ final class CodeUndoTimeline {
     /// because `levelsOfUndo = 0` means *unlimited*, which is the one value
     /// that would turn this method into the bug it prevents.
     private func trimToBudget() {
-        while registeredBytes.count > 1, byteCount > Self.maximumBytes {
-            byteCount -= registeredBytes.removeFirst()
+        while steps.count > 1, byteCount > Self.maximumBytes {
+            byteCount -= steps.removeFirst().byteCount
         }
-        while registeredBytes.count > Self.maximumSteps {
-            byteCount -= registeredBytes.removeFirst()
+        while steps.count > Self.maximumSteps {
+            byteCount -= steps.removeFirst().byteCount
         }
 
-        guard registeredBytes.count > 0 else { return }
-        manager.levelsOfUndo = registeredBytes.count
+        guard steps.count > 0 else { return }
+        manager.levelsOfUndo = steps.count
         manager.levelsOfUndo = Self.maximumSteps
+    }
+
+    // MARK: Coming back in a later launch
+
+    /// Puts a saved history back, without touching the buffer.
+    ///
+    /// Each step is registered exactly as it would have been when it happened,
+    /// so ⌘Z walks back through them in the same order and every step carries
+    /// the name it had. Nothing is applied: the file on disk already holds the
+    /// result of all of them, which is the state the reader left.
+    ///
+    /// **Only into an empty timeline.** Restoring over a history that already
+    /// has steps would interleave two accounts of the same file, and there is
+    /// no ordering between them that means anything. The caller checks the
+    /// file's fingerprint before getting here — see `EditorUndoCenter` — so
+    /// this refuses on structure and trusts that check for the text.
+    ///
+    /// The redo stack is deliberately not restored, and cannot be: a step
+    /// reaches `UndoManager`'s redo side only by being undone, and undoing it
+    /// here would edit the file. A reopened file therefore starts with
+    /// everything undoable and nothing to redo — until the reader undoes
+    /// something, at which point redo works normally.
+    @discardableResult
+    func restore(_ saved: [CodeUndoStep]) -> Bool {
+        guard steps.isEmpty, pending == nil, !manager.canUndo else { return false }
+
+        for step in saved { register(step) }
+        return true
     }
 }

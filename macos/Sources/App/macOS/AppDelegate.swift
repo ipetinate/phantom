@@ -222,6 +222,14 @@ class AppDelegate: NSObject,
         /// private API it resolves has not gone away.
         ToolTipDelay.applyInitialDelay()
 
+        /// Age out undo histories for files nobody has come back to. Off the
+        /// main thread because it walks a directory, and skipped under test
+        /// because the test bundle is hosted inside the app and would prune
+        /// the real one.
+        if !MCPServer.isTesting {
+            DispatchQueue.global(qos: .utility).async { EditorUndoArchive.prune() }
+        }
+
         // Put the chosen app icon back on. The override is in-memory only
         // (`NSApp.applicationIconImage`), so every launch starts from the
         // compiled-in icon until this runs.
@@ -568,6 +576,17 @@ class AppDelegate: NSObject,
 
         // Final authoritative write of our own session store.
         PhantomSessionStore.shared.saveNow()
+
+        // Quitting with files open is the ordinary way to quit, and it is the
+        // one path where no tab ever closes — so this is the only chance the
+        // open files get to have their undo history written down.
+        var open: [String: String] = [:]
+        for controller in TerminalController.all {
+            for (path, document) in controller.editorCenter.documents {
+                open[path] = document.currentText
+            }
+        }
+        EditorUndoCenter.shared.persistOpenFiles(texts: open)
     }
 
     /// This is called when the application is already open and someone double-clicks the icon
