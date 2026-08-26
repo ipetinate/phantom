@@ -556,11 +556,23 @@ struct GitRepoView: View {
 
     // MARK: Actions
 
+    /// The one gesture that can end a merge badly, which is why staging goes
+    /// through `GitConflictStaging` and unstaging does not: `git add` on a file
+    /// with markers still in it tells git the conflict is resolved, and git's
+    /// refusal to commit unmerged paths was the last thing in the way. Both the
+    /// row's `+` button and the menu's Stage item arrive here, so guarding this
+    /// guards both.
     private func toggleStage(_ change: GitFileChange, staged: Bool) {
         if staged {
             center.unstage([change.path], in: root)
         } else {
-            center.stage([change.path], in: root)
+            GitConflictStaging.confirming(
+                change,
+                at: url(for: change),
+                in: selectedTab?.window
+            ) {
+                center.stage([change.path], in: root)
+            }
         }
     }
 
