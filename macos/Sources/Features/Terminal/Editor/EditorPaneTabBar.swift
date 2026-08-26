@@ -68,7 +68,10 @@ struct EditorPaneTabBar: View {
                     onTerminalCommand: performOnTerminal,
                     terminalTitle: center.terminalTitle,
                     onSelectTerminal: { center.selectTerminal() },
-                    hostsTerminal: center.hostsTerminal(groupID)
+                    hostsTerminal: center.hostsTerminal(groupID),
+                    reviewTitle: center.review?.title,
+                    onSelectReview: { center.showReview(center.review) },
+                    onCloseReview: { center.closeReview() }
                 )
                 Divider()
             }

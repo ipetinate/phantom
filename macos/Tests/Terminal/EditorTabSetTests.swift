@@ -578,4 +578,83 @@ struct EditorTabPinningTests {
         tabs.selectFile(at: 1)
         #expect(tabs.selectedPath == "/c.ts")
     }
+
+    // MARK: The review's tab
+
+    /// The review is a tab like the terminal is a tab: selecting it changes
+    /// what is shown without closing anything, so the file that was in front
+    /// is still open behind it.
+    @Test func selectingTheReviewKeepsTheFilesOpen() {
+        var set = EditorTabSet()
+        set.open("/a.swift")
+        set.open("/b.swift")
+
+        set.selectReview()
+
+        #expect(set.showsReview)
+        #expect(set.tabs.count == 2)
+        #expect(set.selectedPath == nil)
+    }
+
+    /// The bug this shape fixes: the review used to be drawn over whatever the
+    /// cell showed, so opening a file appeared to do nothing. Selecting a file
+    /// has to take the review down from the front.
+    @Test func selectingAFileTakesTheReviewOffTheFront() {
+        var set = EditorTabSet()
+        set.open("/a.swift")
+        set.selectReview()
+
+        set.select("/a.swift")
+
+        #expect(set.showsReview == false)
+        #expect(set.selectedPath == "/a.swift")
+    }
+
+    /// Closing it shows the last file rather than nothing: a cell showing
+    /// nothing is a cell the reader has to click to recover, and the review
+    /// was laid over something.
+    @Test func closingTheReviewFallsBackToTheLastFile() {
+        var set = EditorTabSet()
+        set.open("/a.swift")
+        set.selectReview()
+
+        set.selectAfterReview()
+
+        #expect(set.selectedPath == "/a.swift")
+    }
+
+    /// With no file to fall back to, the terminal — which is the other thing
+    /// a cell can always show.
+    @Test func closingItWithNoFilesFallsBackToTheTerminal() {
+        var set = EditorTabSet()
+        set.selectReview()
+
+        set.selectAfterReview()
+
+        #expect(set.showsTerminal)
+    }
+
+    /// Only from the review. Called while a file is selected it must not move
+    /// the selection, or closing a review in one cell would reshuffle another.
+    @Test func theFallbackDoesNothingWhenTheReviewIsNotShowing() {
+        var set = EditorTabSet()
+        set.open("/a.swift")
+        set.open("/b.swift")
+        set.select("/a.swift")
+
+        set.selectAfterReview()
+
+        #expect(set.selectedPath == "/a.swift")
+    }
+
+    @Test func theTerminalAndTheReviewAreDifferentSelections() {
+        var set = EditorTabSet()
+        set.selectReview()
+        #expect(set.showsReview)
+        #expect(set.showsTerminal == false)
+
+        set.selectTerminal()
+        #expect(set.showsTerminal)
+        #expect(set.showsReview == false)
+    }
 }

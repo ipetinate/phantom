@@ -242,6 +242,11 @@ final class EditorCenter: ObservableObject {
     func showsTabBar(in id: EditorGroup.ID) -> Bool {
         let cell = tabs(in: id)
         if !cell.isEmpty { return true }
+
+        /// A review with no files beside it still needs its own tab drawn, or
+        /// it is a panel with no way to close it: the button is in the strip.
+        if cell.showsReview { return true }
+
         return hostsTerminal(id) && tree.groups.count > 1
     }
 
@@ -710,9 +715,30 @@ final class EditorCenter: ObservableObject {
     /// comes back when the review is dismissed, which is what makes this
     /// usable as a glance rather than as a place to go.
     func showReview(_ scope: GitReviewScope?) {
-        guard review != scope else { return }
+        guard review != scope else {
+            /// Asked for the review that is already open: bring its tab
+            /// forward rather than doing nothing. Clicking "Review this work"
+            /// twice should land on the review both times, and after the first
+            /// click the reader has probably opened a file since.
+            if scope != nil { mutateActive { $0.selectReview() } }
+            return
+        }
+
         review = scope
+        if scope != nil {
+            mutateActive { $0.selectReview() }
+        } else {
+            /// Closing it leaves the cell showing whatever it showed before —
+            /// a file if one is open, the terminal if this is its cell. Both
+            /// are what `close` already does for a tab, so it is asked rather
+            /// than reimplemented.
+            mutateActive { $0.selectAfterReview() }
+        }
+        refreshPaneVisibility()
     }
+
+    /// Takes the review's tab down.
+    func closeReview() { showReview(nil) }
 
     func selectTerminal() {
         guard let host = tree.terminalHost else { return }

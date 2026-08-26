@@ -45,6 +45,13 @@ struct EditorTabBar: View {
     /// clicked it.
     let hostsTerminal: Bool
 
+    /// The review's tab, when one is open in this cell. Its title, because
+    /// this view is handed values rather than the centre — the same rule the
+    /// terminal's title follows.
+    var reviewTitle: String?
+    var onSelectReview: () -> Void = {}
+    var onCloseReview: () -> Void = {}
+
     @ObservedObject private var palette: ThemePalette = .shared
 
     /// How tall a tab is, and how much room is left under it for the
@@ -70,6 +77,19 @@ struct EditorTabBar: View {
                         availability: terminalAvailability,
                         onSelect: onSelectTerminal,
                         onCommand: onTerminalCommand
+                    )
+                }
+
+                /// After the terminal and before the files, which is where it
+                /// was opened from: the reader asked for it while looking at
+                /// the branch, not while looking at a file. Closable, unlike
+                /// the terminal — it is a guest here too.
+                if let reviewTitle {
+                    EditorReviewTabItem(
+                        title: reviewTitle,
+                        isSelected: selection == .review,
+                        onSelect: onSelectReview,
+                        onClose: onCloseReview
                     )
                 }
 

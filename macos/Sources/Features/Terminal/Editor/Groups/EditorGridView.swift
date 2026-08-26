@@ -213,28 +213,27 @@ private struct EditorGridCell: View {
     /// paints there.
     @ViewBuilder
     private var surface: some View {
-        /// The review takes the whole cell, over whatever it was showing.
+        /// The review when its tab is the one selected, and not otherwise.
         ///
-        /// Over rather than instead of: the file or the terminal underneath is
-        /// untouched and comes back when the review closes, which is what
-        /// makes this usable as a glance at what is about to be pushed rather
-        /// than a place the reader has to navigate back from.
-        ///
-        /// In the cell that has focus, and only there. A review drawn in every
-        /// cell of a split would be the same screen three times, and drawing
-        /// it in one that is not focused would put it where nobody was looking.
-        if let review = center.review, group.id == center.activeGroupID {
+        /// It was drawn whenever a review existed, over whatever the cell was
+        /// showing. That is what made clicking a file appear to do nothing:
+        /// the file opened underneath a panel that was still on top. A tab
+        /// selection is the same mechanism the terminal uses, and it answers
+        /// "which of these am I looking at" — which is the question a panel
+        /// laid over the others cannot answer.
+        if let review = center.review, group.tabs.showsReview {
             GitReviewPanelView(
                 scope: review,
                 theme: EditorTheme.make(from: ThemePalette.shared),
                 font: EditorSettings.font(
                     size: reviewFontSize,
                     family: ThemePalette.shared.interfaceFontFamily),
-                onOpenFile: { path in
-                    center.showReview(nil)
-                    _ = center.open(URL(fileURLWithPath: path))
-                },
-                onClose: { center.showReview(nil) },
+                /// Opening a file leaves the review's tab where it is and
+                /// selects the file's. Closing it would throw away a screen
+                /// the reader is in the middle of working through — the whole
+                /// reason it is a tab.
+                onOpenFile: { path in _ = center.open(URL(fileURLWithPath: path)) },
+                onClose: { center.closeReview() },
                 onOpenCommit: { commit in
                     center.showReview(.commit(
                         root: review.root,
@@ -243,7 +242,7 @@ private struct EditorGridCell: View {
                 }
             )
             .background(coat)
-        } else if group.tabs.showsTerminal {
+        } else if group.tabs.showsTerminal, !group.tabs.showsReview {
             TerminalCellHost(terminal: terminal)
         } else {
             EditorPaneView(

@@ -50,6 +50,14 @@ enum EditorSelection: Equatable {
     case terminal
     case file(String)
 
+    /// The branch review, which is a tab like the terminal is a tab: one per
+    /// cell, not a file, and closable.
+    ///
+    /// No payload. Which review is showing lives on `EditorCenter`, because it
+    /// is one per window and this enum is per cell — carrying it here would
+    /// let two cells disagree about a screen there is only one of.
+    case review
+
     var path: String? {
         guard case .file(let path) = self else { return nil }
         return path
@@ -75,6 +83,8 @@ struct EditorTabSet: Equatable {
 
     /// Whether the pane is showing the terminal rather than a file.
     var showsTerminal: Bool { selection == .terminal }
+
+    var showsReview: Bool { selection == .review }
 
     /// The bar appears only once there is something to switch *to*.
     ///
@@ -145,6 +155,27 @@ struct EditorTabSet: Equatable {
     mutating func select(_ path: String) {
         guard tabs.contains(where: { $0.path == path }) else { return }
         selection = .file(path)
+    }
+
+    /// Brings the review forward. Like `selectTerminal`, it changes what is
+    /// shown without closing anything: the file that was in front stays open
+    /// and comes back when the review is closed or another tab is picked.
+    mutating func selectReview() {
+        selection = .review
+    }
+
+    /// What to show once the review's tab is gone.
+    ///
+    /// The last file if there is one, the terminal otherwise. Not "nothing":
+    /// a cell showing nothing is a cell the reader has to click to recover,
+    /// and the review was laid over something.
+    mutating func selectAfterReview() {
+        guard selection == .review else { return }
+        if let last = tabs.last {
+            selection = .file(last.path)
+        } else {
+            selection = .terminal
+        }
     }
 
     mutating func selectTerminal() {

@@ -31,7 +31,44 @@ final class GitReviewCenter: ObservableObject {
 
     private var loading: Set<String> = []
 
-    private init() {}
+    /// The branch each root's state was read on, so a checkout can be noticed.
+    private var branchesSeen: [String: String] = [:]
+
+    private var subscription: AnyCancellable?
+
+    private init() {
+        /// A review is about one branch, and the cache was keyed only by
+        /// repository — so checking out another branch left the previous
+        /// branch's review on screen under the new branch's name. It reported
+        /// `main \u{2192} main` on a feature branch, which is not a stale number
+        /// but a wrong comparison, and it looks like a working screen.
+        ///
+        /// The signal is the one the app already has. `GitCenter` refreshes a
+        /// root's status on its own schedule and after every operation it runs,
+        /// and the branch is in it.
+        subscription = GitCenter.shared.$statuses
+            .sink { [weak self] statuses in
+                MainActor.assumeIsolated { self?.noticeBranches(statuses) }
+            }
+    }
+
+    private func noticeBranches(_ statuses: [String: GitStatus]) {
+        for (root, status) in statuses {
+            guard let branch = status.branch else { continue }
+            guard let seen = branchesSeen[root] else {
+                branchesSeen[root] = branch
+                continue
+            }
+            guard seen != branch else { continue }
+
+            branchesSeen[root] = branch
+            /// The reader's chosen target went with the old branch. Keeping it
+            /// would compare a new branch against something picked for another
+            /// one, which is worse than starting from the default again.
+            chosen.removeValue(forKey: root)
+            states.removeValue(forKey: root)
+        }
+    }
 
     func state(for root: String) -> State? { states[root] }
 
@@ -46,6 +83,7 @@ final class GitReviewCenter: ObservableObject {
 
         loading.insert(root)
         if states[root] == nil { states[root] = .loading }
+        branchesSeen[root] = GitCenter.shared.statuses[root]?.branch ?? branchesSeen[root]
 
         let chosenTarget = chosen[root]
         Task.detached(priority: .userInitiated) {
