@@ -2025,7 +2025,7 @@ private struct SidebarTabRow: View {
     /// a count alone beside a branch name reads as a number of commits.
     private func conflictChip(count: Int) -> some View {
         HStack(spacing: 3) {
-            Image(systemName: "arrow.triangle.merge")
+            Image(systemName: "arrow.2.squarepath")
                 .font(.system(size: 8, weight: .semibold))
             Text(verbatim: "\(count)")
                 .font(themePalette.font(size: 9, weight: .medium))

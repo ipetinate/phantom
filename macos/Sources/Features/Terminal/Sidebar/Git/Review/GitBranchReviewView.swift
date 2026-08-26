@@ -185,10 +185,19 @@ struct GitBranchReviewView: View {
 
                 Spacer(minLength: 4)
 
+                /// Never wrapped, and never the thing that shrinks.
+                ///
+                /// `layoutPriority(-1)` alone told SwiftUI to take space from
+                /// this first, and with nothing forbidding a second line it
+                /// took it one character at a time — a commit with a long
+                /// subject left "5 days ago" running down the panel as a
+                /// column of letters. The subject is the part with room to
+                /// give, and it already truncates.
                 Text(commit.relativeDate)
                     .font(palette.font(size: 9))
                     .foregroundStyle(.tertiary)
-                    .layoutPriority(-1)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
 
@@ -277,22 +286,33 @@ private struct GitBranchReviewFileRow: View {
 
             /// The counts, or the word for a file that has none. A binary file
             /// showing `+0 −0` would read as unchanged.
+            /// All three held to one line for the reason the commit row's
+            /// date is: a long path leaves these as the only things with space
+            /// to give, and a count that wraps is a count read downwards.
             if let added = file.addedLines, let removed = file.removedLines {
                 Text("+\(added)")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.green)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 Text("−\(removed)")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             } else {
                 Text("binary")
                     .font(palette.font(size: 9))
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             Text(file.status.badge)
                 .font(palette.font(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .frame(width: 12)
         }
         .padding(.horizontal, 4)
