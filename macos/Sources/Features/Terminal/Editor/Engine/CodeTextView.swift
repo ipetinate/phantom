@@ -164,6 +164,16 @@ struct CodeTextView: NSViewRepresentable {
     /// theme's dimmest colour.
     var blameGhost: String?
 
+    /// Called with the whole text a resolution produces.
+    ///
+    /// Handed up rather than applied here, so a resolution takes the same
+    /// route a format takes: the document owns the text, owns the revision,
+    /// and owns the undo entry. Writing into the text storage directly
+    /// registered an undo with the text view while leaving the document
+    /// holding the old string, which is two sources of truth and one of them
+    /// wrong.
+    var onResolveConflict: ((String, String) -> Void)?
+
     /// ⌘-click, and the editor commands the host implements.
     var onJumpToDefinition: ((Int) -> Void)?
     var onRename: ((Int) -> Void)?
@@ -313,6 +323,12 @@ struct CodeTextView: NSViewRepresentable {
         band.isHidden = true
         scrollView.contentView.addSubview(band, positioned: .below, relativeTo: textView)
         context.coordinator.currentLineBand = band
+
+        /// Under the text and under the current-line band, so a conflict's
+        /// colour does not cover the line the caret is on.
+        let bands = EditorConflictBandsView()
+        scrollView.contentView.addSubview(bands, positioned: .below, relativeTo: band)
+        context.coordinator.conflictBands = bands
 
         /// The line's history, after the end of the line itself. A subview of
         /// the text view rather than of the clip view, unlike the band: it has
@@ -480,7 +496,10 @@ struct CodeTextView: NSViewRepresentable {
         /// only when the baseline arrives — a reader who changes theme with a
         /// modified file open would otherwise keep the old green until their
         /// next keystroke.
-        context.coordinator.gutter?.diffPalette = GitDiffPalette.make(from: theme)
+        let diffPalette = GitDiffPalette.make(from: theme)
+        context.coordinator.gutter?.diffPalette = diffPalette
+        context.coordinator.conflictPalette = EditorConflictBandsView.Palette(
+            diff: diffPalette, theme: theme)
 
         if context.coordinator.diffBaseline != diffBaseline {
             context.coordinator.diffBaseline = diffBaseline
@@ -499,6 +518,7 @@ struct CodeTextView: NSViewRepresentable {
         context.coordinator.layoutConflictBars()
 
         context.coordinator.documentPath = documentPath
+        context.coordinator.onResolveConflict = onResolveConflict
         context.coordinator.updateBlameGhost(
             blameGhost, theme: theme, font: configuration.font)
 
@@ -551,7 +571,10 @@ struct CodeTextView: NSViewRepresentable {
         /// The path and the ghost label, for the line history in the margin
         /// of the caret's own line.
         var documentPath: String?
+        var onResolveConflict: ((String, String) -> Void)?
         weak var blameLabel: NSTextField?
+        weak var conflictBands: EditorConflictBandsView?
+        var conflictPalette: EditorConflictBandsView.Palette?
 
         private var conflicts: [EditorConflict] = []
         private var conflictBars: [EditorConflictBar] = []
@@ -1185,9 +1208,20 @@ struct CodeTextView: NSViewRepresentable {
             )
         }
 
-        /// Puts each bar at the trailing edge of its own `<<<<<<<` line.
+        /// Puts each bar over its own `<<<<<<<` line, and paints the sides.
+        ///
+        /// The bar sits **on** the marker line rather than below it. The line
+        /// says `<<<<<<< HEAD`, which is git's structure and not the reader's
+        /// code — covering it costs nothing, and it is the row every other
+        /// merge tool puts these choices on. Left-aligned, where a row of
+        /// actions is read from.
         func layoutConflictBars() {
             guard let textView else { return }
+
+            var bands: [EditorConflictBandsView.Band] = []
+            let palette = conflictPalette
+            let clip = conflictBands?.superview
+
             for (bar, conflict) in zip(conflictBars, conflicts) {
                 guard let row = Self.lineRect(at: conflict.range.location, in: textView) else {
                     bar.isHidden = true
@@ -1196,12 +1230,70 @@ struct CodeTextView: NSViewRepresentable {
                 let size = bar.preferredSize
                 bar.isHidden = false
                 bar.frame = NSRect(
-                    x: max(0, textView.bounds.width - size.width - 12),
+                    x: textView.textContainerInset.width + 4,
                     y: row.minY + ((row.height - size.height) / 2).rounded(),
                     width: size.width,
                     height: size.height
                 )
+
+                guard let palette, clip != nil else { continue }
+                let sections = conflict.sections
+                bands += self.bands(
+                    for: sections.currentLines, color: palette.current, in: textView)
+                bands += self.bands(
+                    for: sections.incomingLines, color: palette.incoming, in: textView)
+                if let baseLines = sections.baseLines {
+                    bands += self.bands(for: baseLines, color: palette.base, in: textView)
+                }
+                for line in sections.markerLines {
+                    bands += self.bands(for: line..<(line + 1), color: palette.marker, in: textView)
+                }
             }
+
+            /// Sized to the document and positioned where the text view is, so
+            /// the clip view scrolls both together and the rects below can be
+            /// the text view's own coordinates.
+            conflictBands?.frame = textView.frame
+            conflictBands?.setBands(bands)
+        }
+
+        /// The painted rows for a range of lines, one rect per line.
+        ///
+        /// Per line rather than one rect for the range, because a soft-wrapped
+        /// line is taller than a row and a single rect measured from its first
+        /// and last lines would miss the wrapped part of the last one.
+        private func bands(
+            for lines: Range<Int>,
+            color: NSColor,
+            in textView: NSTextView
+        ) -> [EditorConflictBandsView.Band] {
+            guard !lines.isEmpty else { return [] }
+            let text = textView.string as NSString
+
+            return lines.compactMap { line in
+                guard let offset = Self.offset(ofLine: line, in: text),
+                      let row = Self.lineRect(at: offset, in: textView)
+                else { return nil }
+                return EditorConflictBandsView.Band(
+                    rect: NSRect(
+                        x: 0, y: row.minY,
+                        width: textView.bounds.width, height: row.height),
+                    color: color)
+            }
+        }
+
+        /// The character offset a zero-based line starts at, or nil past the
+        /// end of the text.
+        static func offset(ofLine line: Int, in text: NSString) -> Int? {
+            var current = 0
+            var offset = 0
+            while current < line {
+                guard offset < text.length else { return nil }
+                let range = text.lineRange(for: NSRange(location: offset, length: 0))
+                offset = range.location + range.length
+                current += 1
+            }
+            return offset <= text.length ? offset : nil
         }
 
         /// Applies a choice as an ordinary edit.
@@ -1221,12 +1313,12 @@ struct CodeTextView: NSViewRepresentable {
             guard let conflict = fresh.first(where: { $0.id == conflictID }) else { return }
 
             let replacement = conflict.replacement(for: choice)
-            guard textView.shouldChangeText(in: conflict.range, replacementString: replacement)
-            else { return }
+            let resolved = (textView.string as NSString)
+                .replacingCharacters(in: conflict.range, with: replacement)
 
-            textView.textStorage?.replaceCharacters(in: conflict.range, with: replacement)
-            textView.didChangeText()
-            refreshConflicts()
+            /// Named for what the reader chose, so the Edit menu says "Undo
+            /// Accept Incoming" rather than "Undo Replace".
+            onResolveConflict?(resolved, choice.title)
         }
 
         /// The rect of the line a character offset sits on, in the text view's

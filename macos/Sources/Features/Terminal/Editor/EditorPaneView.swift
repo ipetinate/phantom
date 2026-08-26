@@ -458,7 +458,17 @@ private struct DocumentView: View {
         .resolve(fileName: document.url.lastPathComponent, hasChanges: documentHasChanges)
     }
 
-    private var documentHasChanges: Bool { gitContext != nil }
+    /// Whether there is a diff worth offering.
+    ///
+    /// A conflicted file has none: git answers `* Unmerged path` and nothing
+    /// else, so the diff pane could only say so — which is what it did, and it
+    /// was a dead end. The file it will not diff is exactly the file whose
+    /// conflicts the source view can resolve, so the presentation falls back
+    /// to the source rather than to a sentence.
+    private var documentHasChanges: Bool {
+        guard let context = gitContext else { return false }
+        return !context.change.isUnmerged
+    }
 
     /// Everything a diff of this document needs, or nil when git has
     /// nothing to compare it against.
@@ -815,6 +825,9 @@ private struct DocumentView: View {
             diffBaseline: baseline.baseline(for: document.url.path),
             documentPath: document.url.path,
             blameGhost: blame.current?.ghostText,
+            onResolveConflict: { resolved, name in
+                document.replaceText(resolved, named: name)
+            },
             onJumpToDefinition: { offset in jump(from: offset) },
             onRename: { offset in
                 newName = EditorPaneView.identifier(at: offset, in: document.currentText)

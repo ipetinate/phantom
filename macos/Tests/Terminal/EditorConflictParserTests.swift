@@ -247,4 +247,38 @@ struct EditorConflictParserTests {
         #expect(conflict.lines(for: .both) == ["a", "b"])
         #expect(conflict.lines(for: .base) == ["o"])
     }
+
+    // MARK: Where each part sits, for whatever paints behind it
+
+    @Test func theSectionsOfAPlainBlockAreWhereTheyLook() throws {
+        let source = text("a", "<<<<<<< HEAD", "mine", "=======", "theirs", ">>>>>>> x")
+        let sections = try #require(EditorConflictParser.conflicts(in: source).first).sections
+
+        #expect(Array(sections.currentLines) == [2])
+        #expect(Array(sections.incomingLines) == [4])
+        #expect(sections.baseLines == nil)
+        #expect(sections.markerLines == [1, 3, 5])
+    }
+
+    /// The ancestor shifts everything below it, which is the arithmetic worth
+    /// pinning: get it wrong and the wrong half of the conflict is painted.
+    @Test func anAncestorShiftsTheSectionsBelowIt() throws {
+        let source = text(
+            "<<<<<<< HEAD", "mine", "||||||| base", "old", "=======", "theirs", ">>>>>>> x")
+        let sections = try #require(EditorConflictParser.conflicts(in: source).first).sections
+
+        #expect(Array(sections.currentLines) == [1])
+        #expect(Array(sections.baseLines ?? 0..<0) == [3])
+        #expect(Array(sections.incomingLines) == [5])
+        #expect(sections.markerLines == [0, 2, 4, 6])
+    }
+
+    @Test func anEmptySideHasAnEmptyRange() throws {
+        let source = text("<<<<<<< HEAD", "=======", "theirs", ">>>>>>> x")
+        let sections = try #require(EditorConflictParser.conflicts(in: source).first).sections
+
+        #expect(sections.currentLines.isEmpty)
+        #expect(Array(sections.incomingLines) == [2])
+        #expect(sections.markerLines == [0, 1, 3])
+    }
 }

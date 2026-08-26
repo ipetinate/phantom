@@ -125,6 +125,47 @@ struct EditorConflict: Equatable, Identifiable {
     /// Whether this block has an ancestor section to offer.
     var hasBase: Bool { base != nil }
 
+    /// The line ranges each part of the block occupies, for whatever draws
+    /// behind them. Zero-based and half-open, in the file the block was
+    /// parsed from.
+    ///
+    /// Derived here rather than by the view because the arithmetic is the
+    /// parser's: which line the ancestor starts on depends on whether there
+    /// is one, and getting that wrong paints the wrong half of a conflict.
+    struct Sections {
+        let currentLines: Range<Int>
+        let baseLines: Range<Int>?
+        let incomingLines: Range<Int>
+
+        /// The three or four lines that are markers rather than content.
+        let markerLines: [Int]
+    }
+
+    var sections: Sections {
+        let currentStart = startLine + 1
+        let currentEnd = currentStart + current.count
+
+        var markers = [startLine, endLine]
+        var baseRange: Range<Int>?
+        var separator = currentEnd
+
+        if let base {
+            markers.append(currentEnd)
+            let baseStart = currentEnd + 1
+            baseRange = baseStart..<(baseStart + base.count)
+            separator = baseStart + base.count
+        }
+        markers.append(separator)
+
+        let incomingStart = separator + 1
+        return Sections(
+            currentLines: currentStart..<currentEnd,
+            baseLines: baseRange,
+            incomingLines: incomingStart..<(incomingStart + incoming.count),
+            markerLines: markers.sorted()
+        )
+    }
+
     /// The choices worth showing for this block.
     ///
     /// `base` only when there is one, and never when it is empty: a button
