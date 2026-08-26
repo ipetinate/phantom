@@ -429,15 +429,19 @@ struct CodexMCPInstallerTests {
 
     /// snake_case. `mcpServers` is the other three agents' spelling and would
     /// register nothing here.
+    /// Snake case, and the entry's own name — which carries the build
+    /// variant, so this cannot be written as a literal without pinning one
+    /// build's spelling and failing in the other.
     @Test func theTableIsSnakeCase() {
-        #expect(CodexMCPInstaller.table == "mcp_servers.phantom")
+        #expect(CodexMCPInstaller.table == "mcp_servers.\(MCPServerCommand.name)")
+        #expect(CodexMCPInstaller.table.hasPrefix("mcp_servers."))
     }
 
     @Test func theBlockIsACommandAndAnArgumentList() {
         let block = CodexMCPInstaller.block(executable: "/x/Phantom.app/Contents/MacOS/ghostty")
 
         #expect(block == """
-        [mcp_servers.phantom]
+        [mcp_servers.\(MCPServerCommand.name)]
         command = "/x/Phantom.app/Contents/MacOS/ghostty"
         args = ["+mcp-server"]
         """)
@@ -466,12 +470,14 @@ struct CodexMCPInstallerTests {
     }
 
     @Test func aQuotedKeyIsStillTheSameKey() {
-        #expect(CodexMCPInstaller.isPhantom("mcp_servers.phantom"))
-        #expect(CodexMCPInstaller.isPhantom("mcp_servers.\"phantom\""))
-        #expect(CodexMCPInstaller.isPhantom("mcp_servers.phantom.env"))
+        let name = MCPServerCommand.name
+
+        #expect(CodexMCPInstaller.isPhantom("mcp_servers.\(name)"))
+        #expect(CodexMCPInstaller.isPhantom("mcp_servers.\"\(name)\""))
+        #expect(CodexMCPInstaller.isPhantom("mcp_servers.\(name).env"))
         #expect(!CodexMCPInstaller.isPhantom("mcp_servers.context7"))
         #expect(!CodexMCPInstaller.isPhantom("mcp_servers"))
-        #expect(!CodexMCPInstaller.isPhantom("hooks.phantom"))
+        #expect(!CodexMCPInstaller.isPhantom("hooks.\(name)"))
     }
 
     // MARK: - Merging
@@ -503,8 +509,9 @@ struct CodexMCPInstallerTests {
         let block = CodexMCPInstaller.block(executable: "/x/ghostty")
         let once = try #require(CodexMCPInstaller.merged(block, into: existing))
         let twice = try #require(CodexMCPInstaller.merged(block, into: once))
+        let header = "[mcp_servers.\(MCPServerCommand.name)]"
         let headers = twice.components(separatedBy: .newlines)
-            .filter { $0.trimmingCharacters(in: .whitespaces) == "[mcp_servers.phantom]" }
+            .filter { $0.trimmingCharacters(in: .whitespaces) == header }
 
         #expect(headers.count == 1)
     }
@@ -513,14 +520,18 @@ struct CodexMCPInstallerTests {
     /// under no `[mcp_servers.phantom]` is a table with no parent, which Codex
     /// would accept and nothing would ever clean up.
     @Test func rewritingCarriesPhantomsSubTablesAway() throws {
+        /// Built from the entry's own name rather than written as a literal:
+        /// the name carries the build variant, so a fixture spelling one
+        /// build's table describes a table this build would never find.
+        let name = MCPServerCommand.name
         let old = existing + """
 
 
-        [mcp_servers.phantom]
+        [mcp_servers.\(name)]
         command = "/old/ghostty"
         args = ["+mcp-server"]
 
-        [mcp_servers.phantom.env]
+        [mcp_servers.\(name).env]
         LEFTOVER = "1"
         """
         let block = CodexMCPInstaller.block(executable: "/new/ghostty")

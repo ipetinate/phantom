@@ -83,7 +83,12 @@ struct MCPMessageTests {
         let request = MCPMessage.Request(id: .number(1), method: "initialize", params: [:])
         let result = try MCPService().answer(request).get()
 
-        #expect(result.object?["serverInfo"]?.object?["name"]?.string == "phantom")
+        /// The entry name, not the bare `phantom`: it carries the build
+        /// variant so two installed builds cannot overwrite each other's
+        /// registration, and `initialize` has to answer with the same string a
+        /// reader will find in their agent's own listing.
+        #expect(result.object?["serverInfo"]?.object?["name"]?.string
+            == MCPServerCommand.name)
         #expect(result.object?["protocolVersion"]?.string == MCPService.protocolVersion)
     }
 
