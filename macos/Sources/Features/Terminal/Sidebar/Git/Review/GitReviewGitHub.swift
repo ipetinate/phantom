@@ -27,7 +27,8 @@ enum GitReviewGitHub {
     /// `baseRefName` is the one that matters — it is what makes this screen
     /// show what will actually be merged rather than a guess — and the rest is
     /// what the card puts around it.
-    static let fields = "number,title,url,baseRefName,author,assignees,isDraft,body,state"
+    static let fields =
+        "number,title,url,baseRefName,author,assignees,isDraft,body,state,createdAt,updatedAt"
 
     nonisolated static func pullRequest(in root: String) -> GitReviewPullRequest? {
         guard let path else { return nil }
@@ -66,7 +67,9 @@ enum GitReviewGitHub {
             author: (json["author"] as? [String: Any])?["login"] as? String,
             assignees: assignees,
             isDraft: json["isDraft"] as? Bool ?? false,
-            bodyPreview: GitReviewPullRequest.preview(of: json["body"] as? String)
+            bodyPreview: GitReviewPullRequest.preview(of: json["body"] as? String),
+            createdAt: GitReviewPullRequest.date(fromISO8601: json["createdAt"] as? String),
+            updatedAt: GitReviewPullRequest.date(fromISO8601: json["updatedAt"] as? String)
         )
     }
 }

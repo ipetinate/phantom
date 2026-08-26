@@ -237,4 +237,48 @@ struct GitReviewProbeTests {
         #expect(GitReviewGitHub.fields.contains("assignees"))
         #expect(GitReviewGitHub.fields.contains("state"))
     }
+
+    // MARK: When it happened
+
+    /// `gh` prints ISO 8601 with a `Z` and no fractional seconds, and an
+    /// `ISO8601DateFormatter` configured for one shape rejects the other in
+    /// silence — a nil date then looks exactly like a missing field.
+    @Test func githubsTimestampsAreRead() throws {
+        let plain = try #require(
+            GitReviewPullRequest.date(fromISO8601: "2026-08-26T09:14:05Z"))
+        let fractional = try #require(
+            GitReviewPullRequest.date(fromISO8601: "2026-08-26T09:14:05.123Z"))
+
+        #expect(plain.timeIntervalSince1970 > 0)
+        #expect(abs(fractional.timeIntervalSince(plain)) < 1)
+    }
+
+    @Test func aMissingTimestampIsNil() {
+        #expect(GitReviewPullRequest.date(fromISO8601: nil) == nil)
+        #expect(GitReviewPullRequest.date(fromISO8601: "") == nil)
+        #expect(GitReviewPullRequest.date(fromISO8601: "yesterday") == nil)
+    }
+
+    @Test func theDatesArriveWithThePullRequest() throws {
+        let output = """
+            {
+              "number": 19, "state": "OPEN", "baseRefName": "main",
+              "createdAt": "2026-08-25T20:02:00Z",
+              "updatedAt": "2026-08-26T09:14:05Z"
+            }
+            """
+
+        let request = try #require(GitReviewGitHub.parse(output))
+
+        #expect(request.createdAt != nil)
+        #expect(request.updatedAt != nil)
+        #expect(request.updatedAt! > request.createdAt!)
+    }
+
+    /// Both are asked for, because they answer different questions: how long
+    /// this has been waiting, and whether anything happened lately.
+    @Test func bothDatesAreAskedOfGh() {
+        #expect(GitReviewGitHub.fields.contains("createdAt"))
+        #expect(GitReviewGitHub.fields.contains("updatedAt"))
+    }
 }

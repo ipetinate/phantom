@@ -34,6 +34,14 @@ struct GitBranchReviewView: View {
             header
 
             if isExpanded {
+                /// The state of the work, above the list of what is in it. It
+                /// is what a reader expanding this section is usually after:
+                /// the list answers "what changed", the card answers "is this
+                /// ready to go".
+                if let onOpenReview {
+                    GitReviewCard(root: root, onOpenReview: onOpenReview)
+                }
+
                 content
                     .padding(.top, 4)
             }

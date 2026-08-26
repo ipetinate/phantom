@@ -83,6 +83,40 @@ struct GitReviewPullRequest: Equatable {
     /// The description, cut to something a card can hold.
     let bodyPreview: String?
 
+    /// When it was opened, and when it last moved.
+    ///
+    /// Both, because they answer different questions: how long this has been
+    /// waiting, and whether anything has happened lately. A pull request
+    /// opened three weeks ago and updated an hour ago is a different thing
+    /// from one opened and abandoned three weeks ago, and one date cannot
+    /// tell them apart.
+    let createdAt: Date?
+    let updatedAt: Date?
+
+    /// How long ago, in words, for whichever date a card has room for.
+    static func relative(_ date: Date?, now: Date = Date()) -> String? {
+        guard let date else { return nil }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: now)
+    }
+
+    /// GitHub's timestamps, which are ISO 8601 with a `Z`.
+    ///
+    /// Parsed with an explicit formatter rather than `ISO8601DateFormatter()`'s
+    /// default, because `gh` includes no fractional seconds and the default
+    /// accepts them — a formatter configured for one shape rejects the other
+    /// silently, and a nil date is indistinguishable from a missing field.
+    static func date(fromISO8601 text: String?) -> Date? {
+        guard let text, !text.isEmpty else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        if let parsed = formatter.date(from: text) { return parsed }
+
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: text)
+    }
+
     /// How the body is shortened.
     ///
     /// The first paragraph rather than the first N characters: a body that
