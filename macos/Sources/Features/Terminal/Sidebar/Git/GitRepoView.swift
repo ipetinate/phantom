@@ -378,22 +378,27 @@ struct GitRepoView: View {
 
     // MARK: Changes
 
-    /// The working tree's state, and under it the branch review.
+    /// The branch review, and under it the working tree's state.
     ///
-    /// The review is **outside** the state switch, and that is the fix for a
-    /// bug: it used to live inside the `changes` case, so committing everything
-    /// replaced it with "No changes". A clean tree is exactly when somebody
-    /// wants it — the work is committed and the question becomes what is about
-    /// to go up — and it was the one moment it disappeared.
+    /// Two separate decisions here, and they were made at different times.
     ///
-    /// It belongs outside because it is not about the working tree at all. It
-    /// is about commits, and a repository with nothing uncommitted still has
-    /// every one of them.
+    /// **Outside the state switch**, which fixes a bug: the review used to
+    /// live inside the `changes` case, so committing everything replaced it
+    /// with "No changes" — and a clean tree is exactly when somebody wants it,
+    /// because the work is committed and the question becomes what is about to
+    /// go up. It belongs outside because it was never about the working tree.
+    /// It is about commits, and a repository with nothing uncommitted still
+    /// has every one of them.
+    ///
+    /// **Above the state, not below it**, which is where it started. Below
+    /// reads better on paper — change files, commit, then review — and looks
+    /// wrong: the placeholder for a clean tree takes the whole height, so the
+    /// review ended up pinned to the bottom edge of the window with a screen
+    /// of nothing above it. Collapsed it is one row, which is cheap to have
+    /// near the top and unreachable at the bottom.
     @ViewBuilder
     private var changeList: some View {
         VStack(alignment: .leading, spacing: 0) {
-            workingTreeState
-
             if let onOpenBranchDiff {
                 GitBranchReviewView(
                     root: root,
@@ -412,6 +417,8 @@ struct GitRepoView: View {
                     }
                 )
             }
+
+            workingTreeState
         }
     }
 
