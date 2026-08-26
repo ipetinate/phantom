@@ -29,6 +29,18 @@ struct GitReviewContext: Equatable {
     let addedLines: Int
     let removedLines: Int
     let fileCount: Int
+
+    /// Whether the branch being reviewed *is* the target.
+    ///
+    /// The degenerate case, and it has to be named rather than left to the
+    /// numbers: on the default branch with nothing ahead, the review reports
+    /// zero of everything and "no conflicts with the target" — which is true,
+    /// trivially, and reads as a green light on work that does not exist. A
+    /// reader glancing at a check mark does not stop to notice the zeros.
+    var isOnTarget: Bool { branch == target.ref }
+
+    /// Whether there is anything to review.
+    var isEmpty: Bool { commitCount == 0 && fileCount == 0 }
 }
 
 /// The base of the comparison, and why it is that one.

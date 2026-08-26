@@ -68,14 +68,32 @@ struct GitReviewCard: View {
         rule
 
         route(context)
-        size(context)
-        conflictLine(context.conflicts)
+
+        /// On the target itself there is nothing to size and nothing to check.
+        /// Saying so beats a row of zeros and a green tick, which together
+        /// read as approval of work that does not exist.
+        if context.isOnTarget {
+            labelled("Nothing to review", "this branch is the target")
+        } else {
+            size(context)
+            conflictLine(context.conflicts)
+        }
 
         if context.pullRequest != nil || !context.authors.isEmpty {
             rule
             people(context)
         }
 
+        /// No way in when there is nothing behind it. A panel that opens onto
+        /// "nothing changes against the target" is a click that answers a
+        /// question the card already answered.
+        if !context.isOnTarget, !context.isEmpty {
+            reviewButton
+        }
+    }
+
+    @ViewBuilder
+    private var reviewButton: some View {
         Button(action: onOpenReview) {
             HStack(spacing: 4) {
                 Image(systemName: "rectangle.split.2x1")

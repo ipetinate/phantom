@@ -71,11 +71,13 @@ struct GitBranchReviewView: View {
 
                 Spacer(minLength: 0)
 
-                if isExpanded {
-                    /// The way into the full-size review. Here rather than at
-                    /// the bottom of the list because it is the thing most
-                    /// readers open this section to do — the list is the
-                    /// summary, and the panel is the work.
+                /// Visible whether the section is open or not, unlike the
+                /// refresh beside it. Opening the section to reach the button
+                /// that opens the panel is a step that exists for no reason —
+                /// the section is the summary and the panel is the work, and
+                /// somebody who wants the work does not need the summary
+                /// first.
+                if onOpenReview != nil {
                     SidebarIconButton(help: "Review this branch") {
                         onOpenReview?()
                     } label: {
@@ -83,7 +85,9 @@ struct GitBranchReviewView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
+                }
 
+                if isExpanded {
                     SidebarIconButton(help: "Refresh Branch Review") { load() } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 10, weight: .semibold))

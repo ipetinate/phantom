@@ -281,4 +281,55 @@ struct GitReviewProbeTests {
         #expect(GitReviewGitHub.fields.contains("createdAt"))
         #expect(GitReviewGitHub.fields.contains("updatedAt"))
     }
+
+    // MARK: The degenerate case
+
+    private func context(
+        branch: String,
+        target: GitReviewTargetChoice,
+        commits: Int = 3,
+        files: Int = 2
+    ) -> GitReviewContext {
+        GitReviewContext(
+            branch: branch,
+            target: target,
+            pullRequest: nil,
+            conflicts: .clean,
+            authors: [],
+            commitCount: commits,
+            addedLines: 10,
+            removedLines: 2,
+            fileCount: files
+        )
+    }
+
+    /// On the default branch with nothing ahead, the review reports zero of
+    /// everything and "no conflicts with the target" — true, trivially, and it
+    /// reads as a green light on work that does not exist. A reader glancing at
+    /// a check mark does not stop to notice the zeros, so the case is named.
+    @Test func beingOnTheTargetIsRecognised() {
+        let onTarget = context(
+            branch: "main", target: .repositoryDefault("main"), commits: 0, files: 0)
+
+        #expect(onTarget.isOnTarget)
+        #expect(onTarget.isEmpty)
+    }
+
+    @Test func aBranchAheadOfItsTargetIsNotOnIt() {
+        let ahead = context(branch: "feat/thing", target: .repositoryDefault("main"))
+
+        #expect(ahead.isOnTarget == false)
+        #expect(ahead.isEmpty == false)
+    }
+
+    /// Empty and on-target are different facts: a branch can be pointed at
+    /// another branch and still have nothing to show, which is what a freshly
+    /// created branch looks like.
+    @Test func emptyAndOnTargetAreNotTheSameThing() {
+        let freshBranch = context(
+            branch: "feat/new", target: .repositoryDefault("main"), commits: 0, files: 0)
+
+        #expect(freshBranch.isEmpty)
+        #expect(freshBranch.isOnTarget == false)
+    }
 }

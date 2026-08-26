@@ -437,9 +437,23 @@ struct GitRepoView: View {
         // A gap, so two adjacent rows' hover backgrounds never touch and
         // read as one block.
         LazyVStack(alignment: .leading, spacing: 2) {
-            /// First, because it answers the question somebody has when they
-            /// are about to open a pull request, and the sections below answer
-            /// the one they have while working. Collapsed until asked.
+            section("Merge Changes", status.unmerged, staged: false, merge: true)
+            section("Staged Changes", status.staged, staged: true, merge: false)
+            section("Changes", status.unstaged, staged: false, merge: false)
+
+            /// Last, and it used to be first.
+            ///
+            /// It answers a question asked once per branch — is this whole
+            /// thing ready to go up — while the three sections above answer the
+            /// one asked on every visit. Between the commit box and the files
+            /// it pushed the files down by the height of a card, every time,
+            /// for a question nobody has in the middle of working. Reading the
+            /// panel top to bottom now follows the work: change the files,
+            /// commit, then look at the branch.
+            ///
+            /// It was first on the reasoning that it answers what somebody is
+            /// about to open a pull request for, which is true and is the
+            /// argument for it being *last*.
             if let onOpenBranchDiff {
                 GitBranchReviewView(
                     root: root,
@@ -449,18 +463,15 @@ struct GitRepoView: View {
                             root: root,
                             sha: commit.sha,
                             subject: commit.subject))
+                    },
+                    onOpenDiff: { file, base in
+                        onOpenBranchDiff(
+                            URL(fileURLWithPath: root).appendingPathComponent(file.path),
+                            base.ref
+                        )
                     }
-                ) { file, base in
-                    onOpenBranchDiff(
-                        URL(fileURLWithPath: root).appendingPathComponent(file.path),
-                        base.ref
-                    )
-                }
+                )
             }
-
-            section("Merge Changes", status.unmerged, staged: false, merge: true)
-            section("Staged Changes", status.staged, staged: true, merge: false)
-            section("Changes", status.unstaged, staged: false, merge: false)
         }
         .padding(.horizontal, 6)
         .padding(.bottom, 8)
