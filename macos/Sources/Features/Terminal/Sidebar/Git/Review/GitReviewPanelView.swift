@@ -16,6 +16,11 @@ struct GitReviewPanelView: View {
     /// Opening a file for real, rather than reading it inside the review. A
     /// diff answers "what changed"; the editor answers "and now fix it", and
     /// the second belongs in a tab.
+    ///
+    /// Called with an **absolute** path. Git reports paths relative to the
+    /// repository root, and handing one of those to `URL(fileURLWithPath:)`
+    /// resolves it against the process's own directory instead — which is why
+    /// this button silently did nothing.
     let onOpenFile: (String) -> Void
     let onClose: () -> Void
 
@@ -469,7 +474,7 @@ struct GitReviewPanelView: View {
                         target: target,
                         isExpanded: expanded.contains(file.path),
                         onToggle: { toggle(file.path) },
-                        onOpenFile: { onOpenFile(file.path) }
+                        onOpenFile: { onOpenFile(absolutePath(of: file)) }
                     )
                 }
             }
@@ -479,6 +484,19 @@ struct GitReviewPanelView: View {
     }
 
     // MARK: Pieces
+
+    /// A file's path as the filesystem spells it.
+    ///
+    /// Joined here rather than by the caller because this view is the one that
+    /// holds the scope, and the scope holds the root. Everything else in the
+    /// review wants the relative path — it is what `git` is handed and what
+    /// the accordion keys on — so the join happens at the one boundary that
+    /// leaves the review.
+    private func absolutePath(of file: GitReviewFile) -> String {
+        URL(fileURLWithPath: scope.root)
+            .appendingPathComponent(file.path)
+            .path
+    }
 
     /// Matching on the whole path, not the name.
     ///

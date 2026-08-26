@@ -232,6 +232,13 @@ private struct EditorGridCell: View {
                 /// selects the file's. Closing it would throw away a screen
                 /// the reader is in the middle of working through — the whole
                 /// reason it is a tab.
+                /// The panel hands over an absolute path; a relative one
+                /// resolves against this process's own directory and opens
+                /// nothing, which is what this button used to do.
+                ///
+                /// Opening also selects the file's tab, so the review steps
+                /// aside on its own — the reader sees the file rather than a
+                /// tab appearing behind a screen that did not move.
                 onOpenFile: { path in _ = center.open(URL(fileURLWithPath: path)) },
                 onClose: { center.closeReview() },
                 onOpenCommit: { commit in

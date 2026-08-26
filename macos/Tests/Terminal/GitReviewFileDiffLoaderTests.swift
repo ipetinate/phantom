@@ -134,4 +134,29 @@ struct GitReviewFileDiffLoaderTests {
         #expect(one.id != two.id)
         #expect(branch.isCommit == false)
     }
+
+    // MARK: The path that leaves the review
+
+    /// Git reports paths relative to the repository root. Handing one of those
+    /// to `URL(fileURLWithPath:)` resolves it against the process's own
+    /// directory — which is why the "Open File" button silently did nothing,
+    /// and why the join has to happen at the boundary.
+    @Test func aRepoRelativePathIsNotAFilesystemPath() {
+        let root = "/Users/someone/Projects/thing"
+        let relative = "src/modules/deep/file.ts"
+
+        let joined = URL(fileURLWithPath: root).appendingPathComponent(relative).path
+
+        #expect(joined == "/Users/someone/Projects/thing/src/modules/deep/file.ts")
+        #expect(URL(fileURLWithPath: relative).path != joined)
+    }
+
+    /// A path with a space in it is one path through the join, which is the
+    /// reason to use `appendingPathComponent` rather than string addition.
+    @Test func aPathWithSpacesJoinsCorrectly() {
+        let joined = URL(fileURLWithPath: "/a/b")
+            .appendingPathComponent("My Folder/file name.ts").path
+
+        #expect(joined == "/a/b/My Folder/file name.ts")
+    }
 }
