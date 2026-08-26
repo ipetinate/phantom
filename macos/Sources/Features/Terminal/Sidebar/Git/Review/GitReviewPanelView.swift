@@ -266,7 +266,7 @@ struct GitReviewPanelView: View {
         case .failed(let message):
             centered(message)
 
-        case .ready(_, let review):
+        case .ready(let context, let review):
             let files = filtered(review.files)
             VStack(spacing: 0) {
                 search(total: review.files.count, shown: files.count)
@@ -276,7 +276,7 @@ struct GitReviewPanelView: View {
                         ? "Nothing changes against the target."
                         : "No file matches \u{201C}\(query)\u{201D}.")
                 } else {
-                    fileList(files, review: review)
+                    fileList(files, target: context.target.ref)
                 }
             }
         }
@@ -310,7 +310,7 @@ struct GitReviewPanelView: View {
     }
 
     @ViewBuilder
-    private func fileList(_ files: [GitReviewFile], review: GitBranchReview) -> some View {
+    private func fileList(_ files: [GitReviewFile], target: String) -> some View {
         ScrollView {
             LazyVStack(spacing: 8) {
                 ForEach(files) { file in
@@ -319,6 +319,7 @@ struct GitReviewPanelView: View {
                         scope: scope,
                         theme: theme,
                         font: font,
+                        target: target,
                         isExpanded: expanded.contains(file.path),
                         onToggle: { toggle(file.path) },
                         onOpenFile: { onOpenFile(file.path) }

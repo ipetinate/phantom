@@ -13,6 +13,13 @@ struct GitReviewFileCard: View {
     let scope: GitReviewScope
     let theme: CodeTheme
     let font: NSFont
+    /// What the branch is compared against, from the header that resolved it.
+    ///
+    /// Passed down rather than read from the centre, because the centre is
+    /// `@MainActor` and the load runs off it — and because one value handed
+    /// down cannot disagree with the header the way two lookups can.
+    let target: String
+
     let isExpanded: Bool
     let onToggle: () -> Void
     let onOpenFile: () -> Void
@@ -45,7 +52,9 @@ struct GitReviewFileCard: View {
     /// Reloads when the file, the scope or the open state changes — and not
     /// when anything else does. Being keyed on `isExpanded` is what defers the
     /// diff until the card opens.
-    private var taskKey: String { "\(scope.id)\u{1}\(file.path)\u{1}\(isExpanded)" }
+    private var taskKey: String {
+        "\(scope.id)\u{1}\(file.path)\u{1}\(target)\u{1}\(isExpanded)"
+    }
 
     // MARK: The card's own row
 
@@ -177,9 +186,11 @@ struct GitReviewFileCard: View {
         let scope = scope
         let path = file.path
         let previous = file.previousPath
+        let target = target
 
         let loaded = await Task.detached(priority: .userInitiated) {
-            GitReviewFileDiffLoader.load(path: path, previousPath: previous, scope: scope)
+            GitReviewFileDiffLoader.load(
+                path: path, previousPath: previous, scope: scope, target: target)
         }.value
 
         outcome = loaded.outcome

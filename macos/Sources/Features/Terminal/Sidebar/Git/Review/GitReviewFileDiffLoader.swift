@@ -13,10 +13,20 @@ enum GitReviewFileDiffLoader {
     }
 
     /// Blocking — both halves run `git`. Call it off the main actor.
+    ///
+    /// - Parameter target: what the branch is compared against, handed in
+    ///   rather than looked up. It lives on `GitReviewCenter`, which is
+    ///   `@MainActor`, and reaching for it from here is a crash and not a race:
+    ///   `MainActor.assumeIsolated` is a precondition, so calling it off the
+    ///   main actor aborts the process rather than returning something wrong.
+    ///   It is also the honest shape — the header and the file rows have to
+    ///   agree about the target, and one value passed down cannot disagree
+    ///   with itself.
     nonisolated static func load(
         path: String,
         previousPath: String?,
-        scope: GitReviewScope
+        scope: GitReviewScope,
+        target: String
     ) -> Loaded {
         switch scope {
         case .branch(let root):
@@ -24,7 +34,7 @@ enum GitReviewFileDiffLoader {
                 outcome: GitDiffLoader.load(
                     path: path,
                     previousPath: previousPath,
-                    side: .branch(base: mergeBaseArgument(in: root)),
+                    side: .branch(base: target),
                     in: root),
                 commit: lastCommit(touching: path, in: root)
             )
@@ -41,20 +51,6 @@ enum GitReviewFileDiffLoader {
                     in: root),
                 commit: commit(sha, in: root)
             )
-        }
-    }
-
-    /// What the branch is compared against, for the file-level diff.
-    ///
-    /// Read back from the review that is already on screen rather than
-    /// resolved again: the header and the file rows must agree about the
-    /// target, and asking twice is how they come to disagree the moment a
-    /// reader changes it.
-    private nonisolated static func mergeBaseArgument(in root: String) -> String {
-        MainActor.assumeIsolated {
-            guard case .ready(let context, _)? = GitReviewCenter.shared.state(for: root)
-            else { return "HEAD" }
-            return context.target.ref
         }
     }
 
