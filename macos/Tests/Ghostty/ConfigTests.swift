@@ -143,9 +143,25 @@ struct ConfigTests {
 
     // MARK: - Numeric Properties
 
-    @Test func backgroundOpacityDefaultsToOne() throws {
+    /// Phantom ships slightly transparent rather than opaque, which is
+    /// upstream's default and was this test's name. Pinned because it is a
+    /// decision somebody made and not a number that drifted: the window is
+    /// meant to sit over what the reader is working on.
+    @Test func backgroundOpacityDefaultsToPhantomsOwnValue() throws {
         let config = try TemporaryConfig("")
-        #expect(config.backgroundOpacity == 1.0)
+        #expect(config.backgroundOpacity == 0.85)
+    }
+
+    /// And the blur that makes it legible. The two ship together — unblurred
+    /// transparency puts the desktop into the middle of the text — so a change
+    /// to either that leaves the other behind fails here.
+    @Test func backgroundBlurShipsWithThatOpacity() throws {
+        let config = try TemporaryConfig("")
+
+        guard case .radius(let radius) = config.backgroundBlur else {
+            return #expect(Bool(false), "blur should ship as a radius")
+        }
+        #expect(radius == 50)
     }
 
     @Test func backgroundOpacitySetToCustom() throws {
