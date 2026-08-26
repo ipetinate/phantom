@@ -2021,14 +2021,20 @@ private struct SidebarTabRow: View {
     ///
     /// Red rather than the theme's accent, which is the one place on this row
     /// that breaks from the theme on purpose: every other chip is information,
-    /// and this is a stop sign. The glyph carries it as well as the colour —
-    /// a count alone beside a branch name reads as a number of commits.
+    /// and this is a stop sign.
+    ///
+    /// Spelled out rather than left as a glyph and a number. Every other chip
+    /// on this row is a count of something ordinary — commits behind, a pull
+    /// request, a port — so a bare `2` beside them reads as one more of those.
+    /// The words are what make it the one chip that is asking for something.
     private func conflictChip(count: Int) -> some View {
         HStack(spacing: 3) {
             Image(systemName: "arrow.2.squarepath")
                 .font(.system(size: 8, weight: .semibold))
-            Text(verbatim: "\(count)")
+            Text(verbatim: "Merge Conflicts: \(count)")
                 .font(themePalette.font(size: 9, weight: .medium))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .foregroundStyle(Color(nsColor: .systemRed))
         .padding(.horizontal, 5)
