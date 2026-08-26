@@ -24,6 +24,12 @@ struct GitRepoView: View {
     let root: String
     var style: GitRepoStyle = .standalone
 
+    /// The editor, for the one thing this panel asks of it: which file is on
+    /// screen. Observed rather than passed as a path, because it changes for
+    /// reasons this view does not watch — a tab click, a jump to definition,
+    /// the reader closing a tab.
+    @ObservedObject var editorCenter: EditorCenter
+
     /// The terminal the panel is following, for the file-open dialog.
     var selectedTab: SidebarTabModel?
 
@@ -492,6 +498,8 @@ struct GitRepoView: View {
                     change: row.change,
                     staged: staged,
                     url: url(for: row.change),
+                    isOpenInEditor: url(for: row.change).path
+                        == editorCenter.tabs.selectedPath,
                     onOpen: { open(row.change) },
                     onPrimary: { toggleStage(row.change, staged: staged) },
                     onDiscard: merge ? nil : { discarding = [row.change] },

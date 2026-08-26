@@ -192,6 +192,7 @@ struct SidebarView: View {
             case .git:
                 GitPanelView(
                     tabManager: tabManager,
+                    editorCenter: editorCenter,
                     onSpawnTerminal: onSpawnTerminalBesideSelection,
                     onOpenInEditor: onOpenInEditor,
                     onOpenDiff: onOpenDiff,
