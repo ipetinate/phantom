@@ -780,6 +780,45 @@ final class EditorCenter: ObservableObject {
         refreshPaneVisibility()
     }
 
+    /// Puts a saved arrangement back: the cells, the tabs in each, and the
+    /// cell that was in front.
+    ///
+    /// The files are opened first and the layout is stated afterwards, in one
+    /// assignment. `open` places a file in the cell *in focus*, so replaying
+    /// it cell by cell would mean rebuilding the shape and moving files
+    /// through it at the same time, and every intermediate shape would have
+    /// to be a legal one. Documents are keyed by path and know nothing of
+    /// cells, so loading them in any order and then declaring the layout
+    /// gives the same result with no ordering to get wrong.
+    ///
+    /// A file that is gone, or that is there but cannot be read, costs its
+    /// own tab and nothing else: it is left out by `rebuilt`, which is told
+    /// what actually opened rather than what was asked for.
+    ///
+    /// Unsaved text is deliberately not restored here. The tab comes back
+    /// over the file as it is on disk; the buffer the reader left is the undo
+    /// timeline's to return, and two writers over the same bytes would be two
+    /// sources of truth for them.
+    func restore(_ state: EditorGridState) {
+        var opened: Set<String> = []
+        for path in state.paths where FileManager.default.fileExists(atPath: path) {
+            if open(URL(fileURLWithPath: path)) { opened.insert(path) }
+        }
+
+        /// `open` raises this for a file it could name but not read, and the
+        /// host turns it into a dialog offering the external editor. There is
+        /// no gesture behind a restore to explain such a dialog, so a reader
+        /// would be greeted at launch by a question about a file they last saw
+        /// working. The tab is dropped instead, which is the same answer the
+        /// missing ones get.
+        openFailure = nil
+
+        guard let rebuilt = state.rebuilt(isOpen: opened.contains) else { return }
+        tree = rebuilt.tree
+        activeGroupID = rebuilt.activeGroupID
+        refreshPaneVisibility()
+    }
+
     /// Selects an open file, in whichever cell has it — clicking a tab in
     /// another cell is also a request to work in that cell.
     func select(_ path: String) {

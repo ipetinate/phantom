@@ -91,6 +91,9 @@ final class TerminalRestorableState: TerminalRestorable {
     var isFullscreen: Bool? {
         internalState.isFullscreen
     }
+    var editorGrid: EditorGridState? {
+        internalState.editorGrid
+    }
 
     /// Internal State we use to perform unit tests
     ///

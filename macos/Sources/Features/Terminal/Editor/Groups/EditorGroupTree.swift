@@ -274,6 +274,19 @@ extension EditorGroupTree {
         heal()
     }
 
+    /// Gives the terminal to the first cell when a tree arrives without a
+    /// host.
+    ///
+    /// Invariant 1 holds by construction for every tree this file builds, so
+    /// nothing inside the app needs this. A tree assembled from the session
+    /// file does not have that guarantee — it can be edited by hand, and it
+    /// can be written by a build that recorded the host differently — and a
+    /// tree with no host reaches the grid with no way back to the shell.
+    mutating func ensureTerminalHost() {
+        guard terminalHost == nil else { return }
+        adoptTerminal()
+    }
+
     /// Moves a divider. Addressed by the split's own id so a drag survives
     /// the tree changing shape around it.
     mutating func setRatio(_ ratio: CGFloat, forSplit id: UUID) {
