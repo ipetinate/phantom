@@ -75,58 +75,41 @@ struct GitReviewPanelView: View {
         .padding(.vertical, 10)
     }
 
-    /// The facts, as chips rather than a sentence.
+    /// The facts, in three groups with a rule between them.
     ///
-    /// A paragraph would read once and never again; these are looked *up* —
-    /// which branch, against what, how many commits, does it conflict — so
-    /// each is its own thing to find.
+    /// Everything used to be a chip, and a chip is a promise that something
+    /// can be pressed. Twenty of them in five rows is what made this read as
+    /// noise: the eye has nowhere to start, because nothing is quieter than
+    /// anything else.
+    ///
+    /// So the rule now is that a chip means *actionable* — the target picker,
+    /// the link out — and a fact is text. Grouped by the question it answers:
+    /// what this is, where it goes and how big, and who did it.
     @ViewBuilder
     private func summary(_ context: GitReviewContext) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             if let request = context.pullRequest {
                 pullRequestRow(request)
+                Divider().opacity(0.5)
             }
 
-            HStack(spacing: 6) {
-                chip(
-                    icon: "arrow.triangle.branch",
-                    text: "\(context.branch) \u{2192} \(context.target.ref)",
-                    help: "Comparing against the \(context.target.provenance)")
+            routeRow(context)
+            sizeRow(context)
+            conflictRow(context.conflicts)
 
-                chip(icon: "clock", text: countLabel(context.commitCount, "commit"))
-                chip(icon: "doc.on.doc", text: countLabel(context.fileCount, "file"))
-
-                Text(verbatim: "+\(context.addedLines)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.green)
-                Text(verbatim: "\u{2212}\(context.removedLines)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.red)
-
-                Spacer(minLength: 0)
-            }
-
-            HStack(spacing: 6) {
-                conflictChip(context.conflicts)
-
-                if !context.authors.isEmpty {
-                    chip(
-                        icon: "person.2",
-                        text: context.authors.prefix(3)
-                            .map { "\($0.name) (\($0.commits))" }
-                            .joined(separator: ", "),
-                        help: context.authors
-                            .map { "\($0.name): \($0.commits)" }
-                            .joined(separator: "\n"))
-                }
-
-                if !scope.isCommit { targetPicker }
-
-                Spacer(minLength: 0)
+            if !context.authors.isEmpty || context.pullRequest != nil {
+                Divider().opacity(0.5)
+                peopleRow(context)
             }
         }
     }
 
+    /// What this is: the number, the title, and the way out to GitHub.
+    ///
+    /// The people moved to their own line. Two identical avatar chips side by
+    /// side is what this produced when the author and the assignee are the
+    /// same person, which is the common case on a branch somebody opened for
+    /// themselves — and it said less than the words do.
     @ViewBuilder
     private func pullRequestRow(_ request: GitReviewPullRequest) -> some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -134,24 +117,42 @@ struct GitReviewPanelView: View {
                 Text(verbatim: "#\(request.number)")
                     .font(palette.font(size: 11, weight: .semibold))
                     .foregroundStyle(palette.accent ?? .accentColor)
+                    .fixedSize(horizontal: true, vertical: false)
 
                 Text(request.title)
-                    .font(palette.font(size: 11))
+                    .font(palette.font(size: 12, weight: .medium))
                     .lineLimit(1)
                     .truncationMode(.tail)
 
                 if request.isDraft {
-                    chip(icon: "pencil", text: "Draft")
+                    Text("Draft")
+                        .font(palette.font(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.secondary.opacity(0.18)))
+                        .fixedSize(horizontal: true, vertical: false)
                 }
 
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
 
-                Button("Open on GitHub") {
+                if let when = GitReviewPullRequest.relative(
+                    request.updatedAt ?? request.createdAt) {
+                    Text(request.updatedAt == nil ? "opened \(when)" : "updated \(when)")
+                        .font(palette.font(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+
+                Button("GitHub") {
                     if let url = URL(string: request.url) { NSWorkspace.shared.open(url) }
                 }
                 .buttonStyle(.plain)
                 .font(palette.font(size: 10))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(palette.accent ?? .accentColor)
+                .fixedSize(horizontal: true, vertical: false)
             }
 
             if let preview = request.bodyPreview {
@@ -159,44 +160,49 @@ struct GitReviewPanelView: View {
                     .font(palette.font(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-            }
-
-            HStack(spacing: 6) {
-                if let author = request.author {
-                    chip(icon: "person", text: author, help: "Opened by \(author)")
-                }
-                if !request.assignees.isEmpty {
-                    chip(
-                        icon: "person.crop.circle.badge.checkmark",
-                        text: request.assignees.joined(separator: ", "),
-                        help: "Assigned")
-                }
-                Spacer(minLength: 0)
+                    .multilineTextAlignment(.leading)
             }
         }
     }
 
-    /// The one chip that is not information.
+    /// Where the work is going, and the one control that changes it.
     @ViewBuilder
-    private func conflictChip(_ check: GitReviewConflictCheck) -> some View {
-        switch check {
-        case .clean:
-            chip(icon: "checkmark.circle", text: check.summary, tint: .green)
-        case .conflicting(let paths):
-            chip(
-                icon: "exclamationmark.triangle.fill",
-                text: check.summary,
-                tint: Color(nsColor: .systemRed),
-                help: paths.joined(separator: "\n"))
-        case .unknown:
-            chip(
-                icon: "questionmark.circle",
-                text: check.summary,
-                help: "Git could not compute the merge — an unrelated history, or a missing target.")
+    private func routeRow(_ context: GitReviewContext) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+
+            Text(context.branch)
+                .font(palette.font(size: 11, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Text("\u{2192}")
+                .font(palette.font(size: 11))
+                .foregroundStyle(.tertiary)
+
+            Text(context.target.ref)
+                .font(palette.font(size: 11, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Text("(\(context.target.provenance))")
+                .font(palette.font(size: 9))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            if !scope.isCommit { targetPicker }
+
+            Spacer(minLength: 0)
         }
     }
 
     /// Changing what the branch is compared against.
+    ///
+    /// A chip, because it is one of the two things here that can be pressed —
+    /// which is the whole reason the facts around it stopped being chips.
     ///
     /// A fetch is offered rather than performed: it is the network, and a
     /// picker that reached for it on open would stall the panel for a list
@@ -221,6 +227,141 @@ struct GitReviewPanelView: View {
                 center.loadBranches(root: scope.root, fetching: false)
             }
         }
+    }
+
+    /// How much of it there is. One line, separated by dots rather than boxed
+    /// individually — they are read together or not at all.
+    @ViewBuilder
+    private func sizeRow(_ context: GitReviewContext) -> some View {
+        HStack(spacing: 5) {
+            fact(countLabel(context.commitCount, "commit"))
+            dot
+            fact(countLabel(context.fileCount, "file"))
+            dot
+
+            Text(verbatim: "+\(context.addedLines)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.green)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Text(verbatim: "\u{2212}\(context.removedLines)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.red)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The one line that is a warning. It keeps its colour and its icon,
+    /// because it is the only thing here a reader has to act on.
+    @ViewBuilder
+    private func conflictRow(_ check: GitReviewConflictCheck) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: conflictIcon(check))
+                .font(.system(size: 9, weight: .semibold))
+            Text(check.summary)
+                .font(palette.font(size: 10))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(conflictTint(check))
+        .help(conflictHelp(check))
+    }
+
+    /// Who, on one line, with the roles named rather than implied by an icon.
+    ///
+    /// Two identical avatars side by side is what the icons produced when the
+    /// author and the assignee are the same person, which is the common case
+    /// on a branch somebody opened for themselves.
+    @ViewBuilder
+    private func peopleRow(_ context: GitReviewContext) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let request = context.pullRequest {
+                HStack(spacing: 5) {
+                    if let author = request.author {
+                        label("Opened by", author)
+                    }
+                    if !request.assignees.isEmpty {
+                        if request.author != nil { dot }
+                        label("Assigned to", request.assignees.joined(separator: ", "))
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+
+            if !context.authors.isEmpty {
+                HStack(spacing: 5) {
+                    label(
+                        "Commits by",
+                        context.authors.prefix(4)
+                            .map { "\($0.name) (\($0.commits))" }
+                            .joined(separator: ", "))
+                    Spacer(minLength: 0)
+                }
+                .help(context.authors.map { "\($0.name): \($0.commits)" }
+                    .joined(separator: "\n"))
+            }
+        }
+    }
+
+    private func conflictIcon(_ check: GitReviewConflictCheck) -> String {
+        switch check {
+        case .clean: return "checkmark.circle"
+        case .conflicting: return "exclamationmark.triangle.fill"
+        case .unknown: return "questionmark.circle"
+        }
+    }
+
+    private func conflictTint(_ check: GitReviewConflictCheck) -> Color {
+        switch check {
+        case .clean: return .green
+        case .conflicting: return Color(nsColor: .systemRed)
+        case .unknown: return .secondary
+        }
+    }
+
+    private func conflictHelp(_ check: GitReviewConflictCheck) -> String {
+        switch check {
+        case .clean: return "This branch merges into its target cleanly."
+        case .conflicting(let paths): return paths.joined(separator: "\n")
+        case .unknown:
+            return "Git could not compute the merge \u{2014} an unrelated history, "
+                + "or a target it cannot find."
+        }
+    }
+
+    @ViewBuilder
+    private func fact(_ text: String) -> some View {
+        Text(text)
+            .font(palette.font(size: 10))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    @ViewBuilder
+    private func label(_ name: String, _ value: String) -> some View {
+        HStack(spacing: 3) {
+            Text(name)
+                .font(palette.font(size: 9))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: true, vertical: false)
+            Text(value)
+                .font(palette.font(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+
+    private var dot: some View {
+        Text("\u{00B7}")
+            .font(palette.font(size: 10))
+            .foregroundStyle(.quaternary)
     }
 
     /// The commits, each one a way into its own review.

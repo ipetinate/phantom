@@ -59,15 +59,19 @@ enum GitReviewGitHub {
         let assignees = (json["assignees"] as? [[String: Any]] ?? [])
             .compactMap { $0["login"] as? String }
 
+        /// GitHub's shortcodes are rendered here rather than at the two places
+        /// that draw them, so the card and the panel cannot come to disagree
+        /// about whether `:rocket:` is a rocket.
         return GitReviewPullRequest(
             number: number,
-            title: json["title"] as? String ?? "",
+            title: GitHubEmoji.render(json["title"] as? String ?? ""),
             url: json["url"] as? String ?? "",
             baseRef: json["baseRefName"] as? String ?? "",
             author: (json["author"] as? [String: Any])?["login"] as? String,
             assignees: assignees,
             isDraft: json["isDraft"] as? Bool ?? false,
-            bodyPreview: GitReviewPullRequest.preview(of: json["body"] as? String),
+            bodyPreview: GitReviewPullRequest.preview(of: json["body"] as? String)
+                .map(GitHubEmoji.render),
             createdAt: GitReviewPullRequest.date(fromISO8601: json["createdAt"] as? String),
             updatedAt: GitReviewPullRequest.date(fromISO8601: json["updatedAt"] as? String)
         )

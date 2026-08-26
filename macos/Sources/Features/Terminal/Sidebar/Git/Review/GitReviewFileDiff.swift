@@ -52,5 +52,28 @@ struct GitReviewFileDiff: View {
         } accessory: {
             EmptyView()
         }
+        .onAppear { link() }
+        .onDisappear { model.scrollSync.isEnabled = false }
+    }
+
+    /// Ties the two columns together.
+    ///
+    /// Both panes hold the same number of rows at the same height — that is
+    /// what the filler rows in `GitDiffPane` are for — so equal offsets *are*
+    /// line-for-line alignment, which is what `absolute` means and why nothing
+    /// has to count lines.
+    ///
+    /// Both axes, because the two sides hold the same long lines: scrolling
+    /// one sideways without the other puts different columns of the same line
+    /// beside each other, which is worse than not scrolling at all.
+    ///
+    /// Switched off on the way out. The model belongs to the card and the card
+    /// is inside a `LazyVStack`, so it is torn down and rebuilt as the reader
+    /// scrolls past it — a link left on would be holding scroll views that no
+    /// longer exist.
+    private func link() {
+        model.scrollSync.strategy = .absolute
+        model.scrollSync.axes = .both
+        model.scrollSync.isEnabled = true
     }
 }
