@@ -1696,6 +1696,23 @@ private struct SidebarTabRow: View {
                         )
                     }
 
+                    /// Before the pull request and the dev server, because it
+                    /// is the only one of the three that is asking for
+                    /// something. A repository mid-merge cannot be committed
+                    /// to, pushed from or branched off until it is finished,
+                    /// and a reader who has forgotten a half-done merge in
+                    /// another terminal finds out from git at the moment it
+                    /// refuses them.
+                    ///
+                    /// Not behind a setting either, unlike every chip around
+                    /// it. Those say something about a repository that is
+                    /// working; this says it is stuck, and a reader who
+                    /// switched it off would be switching off the one chip
+                    /// they cannot infer from anywhere else on the row.
+                    if let conflicts = tab.conflicts, conflicts > 0 {
+                        conflictChip(count: conflicts)
+                    }
+
                     if showPullRequest, let prNumber = tab.prNumber {
                         prChip(number: prNumber)
                     }
@@ -1999,6 +2016,31 @@ private struct SidebarTabRow: View {
     }
 
     /// The clickable PR tag: opens the branch's open pull request.
+    /// How many paths this terminal's repository cannot merge.
+    ///
+    /// Red rather than the theme's accent, which is the one place on this row
+    /// that breaks from the theme on purpose: every other chip is information,
+    /// and this is a stop sign. The glyph carries it as well as the colour —
+    /// a count alone beside a branch name reads as a number of commits.
+    private func conflictChip(count: Int) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "arrow.triangle.merge")
+                .font(.system(size: 8, weight: .semibold))
+            Text(verbatim: "\(count)")
+                .font(themePalette.font(size: 9, weight: .medium))
+        }
+        .foregroundStyle(Color(nsColor: .systemRed))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color(nsColor: .systemRed).opacity(0.15))
+        )
+        .help(count == 1
+            ? "1 file has merge conflicts"
+            : "\(count) files have merge conflicts")
+    }
+
     private func prChip(number: Int) -> some View {
         Button {
             if let url = tab.prURL.flatMap(URL.init(string:)) {

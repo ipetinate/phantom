@@ -254,6 +254,7 @@ final class SidebarTabManager: ObservableObject {
                     }
                     model.setRepoStatus(
                         isDirty: info.isDirty,
+                        conflicts: info.conflicts,
                         prNumber: info.prNumber,
                         prURL: info.prURL
                     )
@@ -435,6 +436,7 @@ final class SidebarTabManager: ObservableObject {
             let info = GitStatusCenter.shared.info(forRoot: git.root)
             model.setRepoStatus(
                 isDirty: info?.isDirty,
+                conflicts: info?.conflicts,
                 prNumber: info?.prNumber,
                 prURL: info?.prURL
             )

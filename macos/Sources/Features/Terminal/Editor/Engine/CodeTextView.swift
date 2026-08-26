@@ -498,8 +498,16 @@ struct CodeTextView: NSViewRepresentable {
         /// next keystroke.
         let diffPalette = GitDiffPalette.make(from: theme)
         context.coordinator.gutter?.diffPalette = diffPalette
-        context.coordinator.conflictPalette = EditorConflictBandsView.Palette(
-            diff: diffPalette, theme: theme)
+        /// A theme change repaints the bands on the next layout, but the bars
+        /// carry their colours in their buttons and are only built when the
+        /// text moves — so the palette moving has to count as the text having
+        /// moved, or a reader who switches theme keeps the old theme's buttons
+        /// until their next keystroke.
+        let palette = EditorConflictBandsView.Palette(diff: diffPalette, theme: theme)
+        if context.coordinator.conflictPalette?.barBackground != palette.barBackground {
+            context.coordinator.conflictPalette = palette
+            context.coordinator.forgetConflictText()
+        }
 
         if context.coordinator.diffBaseline != diffBaseline {
             context.coordinator.diffBaseline = diffBaseline
@@ -1116,6 +1124,10 @@ struct CodeTextView: NSViewRepresentable {
             }
         }
 
+        /// Makes the next refresh rebuild rather than skip, for a change that
+        /// is not in the text.
+        func forgetConflictText() { appliedConflictText = nil }
+
         func refreshConflicts() {
             guard let textView else { return }
             let text = textView.string
@@ -1140,7 +1152,11 @@ struct CodeTextView: NSViewRepresentable {
             for bar in conflictBars { bar.removeFromSuperview() }
             conflictBars = found.map { conflict in
                 let barFont = textView.font ?? .monospacedSystemFont(ofSize: 12, weight: .regular)
-                let bar = EditorConflictBar(conflict: conflict, font: barFont) { [weak self] choice in
+                let bar = EditorConflictBar(
+                    conflict: conflict,
+                    font: barFont,
+                    palette: conflictPalette
+                ) { [weak self] choice in
                     self?.resolve(conflictID: conflict.id, with: choice)
                 }
                 textView.addSubview(bar)
@@ -1227,13 +1243,17 @@ struct CodeTextView: NSViewRepresentable {
                     bar.isHidden = true
                     continue
                 }
-                let size = bar.preferredSize
+                /// The whole row, because the bar is covering the line rather
+                /// than sitting beside it. Its height is the row's, so a
+                /// wrapped marker line — which git does not write, but a
+                /// narrow pane can produce — is covered to its full depth.
                 bar.isHidden = false
+                bar.paint(conflictPalette?.barBackground ?? textView.backgroundColor)
                 bar.frame = NSRect(
-                    x: textView.textContainerInset.width + 4,
-                    y: row.minY + ((row.height - size.height) / 2).rounded(),
-                    width: size.width,
-                    height: size.height
+                    x: 0,
+                    y: row.minY,
+                    width: textView.bounds.width,
+                    height: row.height
                 )
 
                 guard let palette, clip != nil else { continue }
