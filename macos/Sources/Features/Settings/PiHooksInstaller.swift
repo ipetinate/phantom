@@ -56,11 +56,19 @@ enum PiHooksInstaller {
     /// empty state — a tab with an agent in it that is doing nothing draws no
     /// indicator — and it is where the session id is captured.
     ///
-    /// The id is taken from the *file name* and never the path. Pi's
-    /// `--session` accepts either, but `AgentTabRecord.sanitized(sessionID:)`
-    /// refuses anything holding a slash, so a path would be written, refused on
-    /// read, and the tab would resume with `--continue` while its file looked
-    /// like it held an id.
+    /// The id is the **UUID inside** the session file's name, and getting
+    /// that wrong is how this first shipped broken.
+    ///
+    /// Pi names a session `<timestamp>_<uuid>.jsonl` and documents
+    /// `--session <path|id>` as taking a path or a partial UUID. The whole
+    /// stem is neither: `pi --session 2026-08-25T21-29-13-505Z_01a03…`
+    /// answers "No session found matching" and starts a fresh conversation, so
+    /// a restored tab silently lost its history.
+    ///
+    /// The path would work and cannot be used:
+    /// `AgentTabRecord.sanitized(sessionID:)` refuses anything holding a
+    /// slash, so it would be written, dropped on read, and the tab would
+    /// resume with `--continue` while its file looked like it held an id.
     static let source = #"""
     // Reports Pi session state to the Phantom sidebar.
     //
@@ -81,8 +89,20 @@ enum PiHooksInstaller {
         if (!file) return "";
         const base = String(file).split("/").pop() || "";
         const stem = base.replace(/\.[^.]*$/, "");
-        if (!stem || stem.startsWith("-")) return "";
-        return /^[A-Za-z0-9._-]+$/.test(stem) ? stem : "";
+        if (!stem) return "";
+
+        // The UUID pi will match on, wherever it sits in the name. Falling
+        // back to the whole stem rather than to nothing keeps a naming scheme
+        // this does not recognise working the way it did.
+        const uuid = stem.match(
+          /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
+        );
+        const id = uuid ? uuid[0] : stem;
+
+        // A leading dash is a flag rather than an id once it reaches
+        // `pi --session`.
+        if (id.startsWith("-")) return "";
+        return /^[A-Za-z0-9._-]+$/.test(id) ? id : "";
       };
 
       // A temp name private to this process, then a rename. A fixed name is one

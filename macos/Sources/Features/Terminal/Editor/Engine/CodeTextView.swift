@@ -164,6 +164,10 @@ struct CodeTextView: NSViewRepresentable {
     /// theme's dimmest colour.
     var blameGhost: String?
 
+    /// The branch `HEAD` is on, so a conflict marker can say which one that
+    /// is. Nil outside a repository, or before its status has arrived.
+    var currentBranch: String?
+
     /// Called with the whole text a resolution produces.
     ///
     /// Handed up rather than applied here, so a resolution takes the same
@@ -526,6 +530,10 @@ struct CodeTextView: NSViewRepresentable {
         context.coordinator.layoutConflictBars()
 
         context.coordinator.documentPath = documentPath
+        if context.coordinator.currentBranch != currentBranch {
+            context.coordinator.currentBranch = currentBranch
+            context.coordinator.forgetConflictText()
+        }
         context.coordinator.onResolveConflict = onResolveConflict
         context.coordinator.updateBlameGhost(
             blameGhost, theme: theme, font: configuration.font)
@@ -579,6 +587,7 @@ struct CodeTextView: NSViewRepresentable {
         /// The path and the ghost label, for the line history in the margin
         /// of the caret's own line.
         var documentPath: String?
+        var currentBranch: String?
         var onResolveConflict: ((String, String) -> Void)?
         weak var blameLabel: NSTextField?
         weak var conflictBands: EditorConflictBandsView?
@@ -1155,7 +1164,8 @@ struct CodeTextView: NSViewRepresentable {
                 let bar = EditorConflictBar(
                     conflict: conflict,
                     font: barFont,
-                    palette: conflictPalette
+                    palette: conflictPalette,
+                    currentBranch: currentBranch
                 ) { [weak self] choice in
                     self?.resolve(conflictID: conflict.id, with: choice)
                 }
@@ -1248,7 +1258,9 @@ struct CodeTextView: NSViewRepresentable {
                 /// wrapped marker line — which git does not write, but a
                 /// narrow pane can produce — is covered to its full depth.
                 bar.isHidden = false
-                bar.paint(conflictPalette?.barBackground ?? textView.backgroundColor)
+                bar.paint(
+                    conflictPalette?.barBackground ?? textView.backgroundColor,
+                    separator: conflictPalette?.separator ?? .separatorColor)
                 bar.frame = NSRect(
                     x: 0,
                     y: row.minY,
@@ -1267,6 +1279,20 @@ struct CodeTextView: NSViewRepresentable {
                 }
                 for line in sections.markerLines {
                     bands += self.bands(for: line..<(line + 1), color: palette.marker, in: textView)
+                }
+
+                /// A hairline under the closing marker, matching the one the
+                /// bar draws at the top. Without it the block's colour simply
+                /// stops, and where it stops is the one place a reader has to
+                /// be sure of — everything below it is code that was never in
+                /// the conflict.
+                if let end = Self.offset(ofLine: conflict.endLine, in: textView.string as NSString),
+                   let row = Self.lineRect(at: end, in: textView) {
+                    bands.append(EditorConflictBandsView.Band(
+                        rect: NSRect(
+                            x: 0, y: row.maxY - 1,
+                            width: textView.bounds.width, height: 1),
+                        color: palette.separator))
                 }
             }
 

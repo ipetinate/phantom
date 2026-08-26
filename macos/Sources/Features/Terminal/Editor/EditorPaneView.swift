@@ -465,6 +465,15 @@ private struct DocumentView: View {
     /// was a dead end. The file it will not diff is exactly the file whose
     /// conflicts the source view can resolve, so the presentation falls back
     /// to the source rather than to a sentence.
+    /// The branch this document's repository is on, for the conflict markers
+    /// that only say `HEAD`.
+    private var currentBranch: String? {
+        guard let root = EditorChangeLookup.owningRoot(
+            forPath: document.url.path, amongRoots: Array(git.statuses.keys))
+        else { return nil }
+        return git.status(forRoot: root)?.branch
+    }
+
     private var documentHasChanges: Bool {
         guard let context = gitContext else { return false }
         return !context.change.isUnmerged
@@ -825,6 +834,7 @@ private struct DocumentView: View {
             diffBaseline: baseline.baseline(for: document.url.path),
             documentPath: document.url.path,
             blameGhost: blame.current?.ghostText,
+            currentBranch: currentBranch,
             onResolveConflict: { resolved, name in
                 document.replaceText(resolved, named: name)
             },

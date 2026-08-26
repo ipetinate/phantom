@@ -141,6 +141,14 @@ struct KimiPiHooksInstallerTests {
         #expect(source.contains("startsWith(\"-\")"))
     }
 
+    /// The bug this shipped with. Pi names a session `<timestamp>_<uuid>` and
+    /// matches on the UUID, so passing the whole stem answered "No session
+    /// found matching" and started a fresh conversation — a restored tab
+    /// losing its history without saying so.
+    @Test func itTakesTheUuidOutOfPisSessionFileName() {
+        #expect(PiHooksInstaller.source.contains("[0-9a-fA-F]{8}-"))
+    }
+
     /// No import of Pi's own package, so the file cannot fail to resolve, and
     /// no npm entry is needed to ship it.
     @Test func itNeedsNothingInstalledToRun() {

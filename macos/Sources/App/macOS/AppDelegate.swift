@@ -239,12 +239,24 @@ class AppDelegate: NSObject,
         // existed therefore went on not capturing them — which looks exactly
         // like the resume being broken. These files are generated and never
         // hand-edited, so rewriting one costs nothing.
-        ClaudeHooksInstaller.repairIfStale()
-        CodexHooksInstaller.repairIfStale()
-        OpenCodeHooksInstaller.repairIfStale()
-        AntigravityHooksInstaller.repairIfStale()
-        KimiHooksInstaller.repairIfStale()
-        PiHooksInstaller.repairIfStale()
+        /// Not from a test host. `xcodebuild test` hosts the bundle inside the
+        /// app, so this runs during a suite — and every line of it writes into
+        /// the reader's own home: their agents' hook scripts, and below, their
+        /// MCP entries. A suite that rewrites somebody's configuration as a
+        /// side effect of running can break their setup while reporting green,
+        /// which is what the socket guard in `MCPServer` was added for and the
+        /// same reasoning applies here.
+        ///
+        /// Scoped to the writes rather than returning early: everything after
+        /// them is this app's own state, and a test host wants it.
+        if !MCPServer.isTesting {
+            ClaudeHooksInstaller.repairIfStale()
+            CodexHooksInstaller.repairIfStale()
+            OpenCodeHooksInstaller.repairIfStale()
+            AntigravityHooksInstaller.repairIfStale()
+            KimiHooksInstaller.repairIfStale()
+            PiHooksInstaller.repairIfStale()
+        }
 
         // The one object that puts the permission question on screen, and it
         // starts before the listener does: a question raised with nobody
@@ -263,7 +275,9 @@ class AppDelegate: NSObject,
         // never installed uninvited. The command it registers is this bundle's
         // own binary, so a Phantom that moved on disk leaves an entry pointing
         // at nothing until this rewrites it.
-        MCPServerRegistration.repairAll()
+        /// Behind the same guard, and for the same reason: this writes into
+        /// four other programs' configuration files.
+        if !MCPServer.isTesting { MCPServerRegistration.repairAll() }
 
         // Watching for the moments a window can become unreachable, before
         // any window exists to have them. Development builds only; see

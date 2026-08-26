@@ -52,6 +52,11 @@ final class EditorConflictBandsView: NSView {
         let base: NSColor
         let marker: NSColor
 
+        /// The hairline that closes a conflict block off from the code around
+        /// it. Strong enough to read as an edge and no stronger — it is a
+        /// boundary, not a rule.
+        let separator: NSColor
+
         /// What the action bar is painted with.
         ///
         /// Opaque, and built by compositing the marker wash onto the editor's
@@ -66,6 +71,7 @@ final class EditorConflictBandsView: NSView {
             base = theme.foreground.withAlphaComponent(0.06)
             marker = theme.foreground.withAlphaComponent(0.10)
             barBackground = Palette.opaque(marker, over: theme.background)
+            separator = theme.foreground.withAlphaComponent(0.22)
         }
 
         /// The colour a button takes to say which side it keeps.

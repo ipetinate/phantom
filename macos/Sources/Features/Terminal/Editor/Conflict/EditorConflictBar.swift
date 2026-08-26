@@ -26,12 +26,21 @@ final class EditorConflictBar: NSView {
 
     private let onChoose: (EditorConflict.Choice) -> Void
 
+    /// The branch `HEAD` is on, when the app knows it.
+    ///
+    /// Git writes `HEAD` into the marker rather than the branch name, which is
+    /// accurate and tells a reader nothing they did not already know. The name
+    /// comes from the status the sidebar already has.
+    private let currentBranch: String?
+
     init(
         conflict: EditorConflict,
         font: NSFont,
         palette: EditorConflictBandsView.Palette?,
+        currentBranch: String?,
         onChoose: @escaping (EditorConflict.Choice) -> Void
     ) {
+        self.currentBranch = currentBranch
         self.conflictID = conflict.id
         self.onChoose = onChoose
         super.init(frame: .zero)
@@ -42,7 +51,7 @@ final class EditorConflictBar: NSView {
 
         let stack = NSStackView()
         stack.orientation = .horizontal
-        stack.spacing = 6
+        stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         for choice in conflict.choices {
@@ -61,11 +70,18 @@ final class EditorConflictBar: NSView {
 
         addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.leadingInset),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
+
+    /// Where the buttons start.
+    ///
+    /// Aligned with the code rather than with the view's edge: the row is the
+    /// full width of the text view, and buttons beginning at zero would start
+    /// under the line numbers, left of every line of code around them.
+    static let leadingInset: CGFloat = 60
 
     /// Which side is which, in the words git wrote into the file.
     ///
@@ -73,15 +89,9 @@ final class EditorConflictBar: NSView {
     /// says and what every other git tool calls it, and a reader comparing
     /// this against `git status` should find the same word.
     private func labelText(for conflict: EditorConflict) -> String {
-        let current = conflict.currentLabel.isEmpty ? "current" : conflict.currentLabel
-        let incoming = conflict.incomingLabel.isEmpty ? "incoming" : conflict.incomingLabel
+        let current = named(conflict.currentLabel, fallback: "current")
+        let incoming = named(conflict.incomingLabel, fallback: "incoming")
         return "\(current) \u{2190} \(incoming)"
-    }
-
-    /// Painted here rather than by the caller, so the bar cannot be put on
-    /// screen without the background that makes it legible.
-    func paint(_ color: NSColor) {
-        layer?.backgroundColor = color.cgColor
     }
 
     @available(*, unavailable)
@@ -98,8 +108,11 @@ final class EditorConflictBar: NSView {
         let button = NSButton(title: choice.title, target: self, action: #selector(chose(_:)))
         button.toolTip = tooltip(for: choice, in: conflict)
         button.bezelStyle = .accessoryBarAction
-        button.controlSize = .small
-        button.font = .systemFont(ofSize: max(9, min(12, font.pointSize - 2)))
+        /// Mini rather than small, because the row this sits in is one line of
+        /// code tall — around 22 points at the default size — and a small
+        /// button fills it edge to edge with nothing left for margin.
+        button.controlSize = .mini
+        button.font = .systemFont(ofSize: max(9, min(11, font.pointSize - 3)))
         button.identifier = NSUserInterfaceItemIdentifier(choice.rawValue)
         button.setContentHuggingPriority(.required, for: .horizontal)
 
@@ -119,10 +132,8 @@ final class EditorConflictBar: NSView {
     /// conflicts deep has stopped tracking which branch is which — so the
     /// branch itself is one hover away rather than absent.
     private func tooltip(for choice: EditorConflict.Choice, in conflict: EditorConflict) -> String {
-        let current = conflict.currentLabel.isEmpty ? "the current branch" : conflict.currentLabel
-        let incoming = conflict.incomingLabel.isEmpty
-            ? "the incoming branch"
-            : conflict.incomingLabel
+        let current = named(conflict.currentLabel, fallback: "the current branch")
+        let incoming = named(conflict.incomingLabel, fallback: "the incoming branch")
 
         switch choice {
         case .current: return "Keep the version from \(current)"
@@ -132,11 +143,40 @@ final class EditorConflictBar: NSView {
         }
     }
 
+    /// A marker's label, with the branch behind `HEAD` spelled out.
+    ///
+    /// `HEAD (main)` rather than either alone: `HEAD` is what the file says and
+    /// what a reader comparing this against `git status` will find, and the
+    /// name in brackets is the thing they actually recognise. Only for `HEAD`,
+    /// since every other label already is a name.
+    private func named(_ label: String, fallback: String) -> String {
+        guard !label.isEmpty else { return fallback }
+        guard label == "HEAD", let currentBranch, !currentBranch.isEmpty else { return label }
+        return "HEAD (\(currentBranch))"
+    }
+
     @objc private func chose(_ sender: NSButton) {
         guard let raw = sender.identifier?.rawValue,
               let choice = EditorConflict.Choice(rawValue: raw)
         else { return }
         onChoose(choice)
+    }
+
+    /// A hairline under the row, so the block reads as starting here rather
+    /// than as a coloured line that happens to have buttons on it.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let rule = separatorColor else { return }
+        rule.setFill()
+        NSRect(x: 0, y: bounds.maxY - 1, width: bounds.width, height: 1).fill()
+    }
+
+    private var separatorColor: NSColor?
+
+    func paint(_ color: NSColor, separator: NSColor) {
+        layer?.backgroundColor = color.cgColor
+        separatorColor = separator
+        needsDisplay = true
     }
 
     /// The pointer over this is an arrow, not an I-beam.
