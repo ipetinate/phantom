@@ -92,6 +92,19 @@ final class EditorCenter: ObservableObject {
     /// offer the external editor instead.
     @Published var openFailure: OpenFailure?
 
+    /// The review screen, when one is open, and which work it is showing.
+    ///
+    /// A pane-level presentation rather than a tab, because it is not a file:
+    /// it has no path, nothing on disk changes when it closes, and the tab
+    /// model's every rule — reopening never duplicates, closing picks the
+    /// neighbour to the left — is about files. It takes the same area a file,
+    /// the terminal and the markdown preview take, which is what was asked
+    /// for; what it does not take is a place in the strip above them.
+    ///
+    /// One at a time per window. Two reviews side by side is a comparison
+    /// nobody asked for, and the screen is wide by nature.
+    @Published var review: GitReviewScope?
+
     struct OpenFailure: Identifiable {
         let id = UUID()
         let url: URL
@@ -691,6 +704,16 @@ final class EditorCenter: ObservableObject {
 
     /// Shows the terminal without closing anything, and moves focus to the
     /// cell it lives in — which is not necessarily the cell being worked in.
+    /// Puts the review screen on screen, or takes it down.
+    ///
+    /// Setting it does not close anything: the file underneath stays open and
+    /// comes back when the review is dismissed, which is what makes this
+    /// usable as a glance rather than as a place to go.
+    func showReview(_ scope: GitReviewScope?) {
+        guard review != scope else { return }
+        review = scope
+    }
+
     func selectTerminal() {
         guard let host = tree.terminalHost else { return }
         tree.update(host) { $0.tabs.selectTerminal() }

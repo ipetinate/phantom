@@ -13,6 +13,15 @@ import SwiftUI
 /// uncommitted work, not at their branch.
 struct GitBranchReviewView: View {
     let root: String
+
+    /// Opens the full-size review of this branch, and of one commit in it.
+    ///
+    /// Callbacks rather than this view reaching for the editor: the sidebar
+    /// does not own the pane the review appears in, and a view that could
+    /// reach across to it would be a view able to replace what the reader is
+    /// looking at from anywhere.
+    var onOpenReview: (() -> Void)?
+    var onOpenCommit: ((GitReviewCommit) -> Void)?
     let onOpenDiff: (GitReviewFile, GitReviewBase) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
@@ -55,6 +64,18 @@ struct GitBranchReviewView: View {
                 Spacer(minLength: 0)
 
                 if isExpanded {
+                    /// The way into the full-size review. Here rather than at
+                    /// the bottom of the list because it is the thing most
+                    /// readers open this section to do — the list is the
+                    /// summary, and the panel is the work.
+                    SidebarIconButton(help: "Review this branch") {
+                        onOpenReview?()
+                    } label: {
+                        Image(systemName: "rectangle.split.2x1")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+
                     SidebarIconButton(help: "Refresh Branch Review") { load() } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 10, weight: .semibold))
@@ -199,6 +220,12 @@ struct GitBranchReviewView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
+            /// The whole row, because every part of it identifies the same
+            /// commit. A hit target on the sha alone would be seven
+            /// characters wide.
+            .contentShape(Rectangle())
+            .onTapGesture { onOpenCommit?(commit) }
+            .help("Review \(commit.shortSha) \u{2014} \(commit.author)")
         }
 
         if review.hasMoreCommits {
@@ -326,16 +353,3 @@ private struct GitBranchReviewFileRow: View {
     }
 }
 
-private extension GitFileDiff.Status {
-    /// Git's own letter for a status, so a row in this list reads the same way
-    /// as a row in the working-tree sections above it.
-    var badge: String {
-        switch self {
-        case .added: "A"
-        case .deleted: "D"
-        case .modified: "M"
-        case .renamed: "R"
-        case .copied: "C"
-        }
-    }
-}

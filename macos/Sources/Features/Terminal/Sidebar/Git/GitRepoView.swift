@@ -441,7 +441,16 @@ struct GitRepoView: View {
             /// are about to open a pull request, and the sections below answer
             /// the one they have while working. Collapsed until asked.
             if let onOpenBranchDiff {
-                GitBranchReviewView(root: root) { file, base in
+                GitBranchReviewView(
+                    root: root,
+                    onOpenReview: { editorCenter.showReview(.branch(root: root)) },
+                    onOpenCommit: { commit in
+                        editorCenter.showReview(.commit(
+                            root: root,
+                            sha: commit.sha,
+                            subject: commit.subject))
+                    }
+                ) { file, base in
                     onOpenBranchDiff(
                         URL(fileURLWithPath: root).appendingPathComponent(file.path),
                         base.ref

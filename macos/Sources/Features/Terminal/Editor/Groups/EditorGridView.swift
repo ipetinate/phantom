@@ -98,6 +98,11 @@ private struct EditorGridNode: View {
 /// is what retires the inset the pane used to push the terminal's content
 /// down by — there is nothing to compensate for when the two do not overlap.
 private struct EditorGridCell: View {
+    /// The editor's own font size, for the review panel's diffs. Read from
+    /// the same key the panes read, so a reader who changes it once changes
+    /// it everywhere code is shown.
+    @AppStorage(EditorSettings.fontSizeKey) private var reviewFontSize
+        = EditorSettings.defaultFontSize
     let group: EditorGroup
     @ObservedObject var center: EditorCenter
     @ObservedObject var terminalDirectory: EditorTerminalDirectory
@@ -208,7 +213,37 @@ private struct EditorGridCell: View {
     /// paints there.
     @ViewBuilder
     private var surface: some View {
-        if group.tabs.showsTerminal {
+        /// The review takes the whole cell, over whatever it was showing.
+        ///
+        /// Over rather than instead of: the file or the terminal underneath is
+        /// untouched and comes back when the review closes, which is what
+        /// makes this usable as a glance at what is about to be pushed rather
+        /// than a place the reader has to navigate back from.
+        ///
+        /// In the cell that has focus, and only there. A review drawn in every
+        /// cell of a split would be the same screen three times, and drawing
+        /// it in one that is not focused would put it where nobody was looking.
+        if let review = center.review, group.id == center.activeGroupID {
+            GitReviewPanelView(
+                scope: review,
+                theme: EditorTheme.make(from: ThemePalette.shared),
+                font: EditorSettings.font(
+                    size: reviewFontSize,
+                    family: ThemePalette.shared.interfaceFontFamily),
+                onOpenFile: { path in
+                    center.showReview(nil)
+                    _ = center.open(URL(fileURLWithPath: path))
+                },
+                onClose: { center.showReview(nil) },
+                onOpenCommit: { commit in
+                    center.showReview(.commit(
+                        root: review.root,
+                        sha: commit.sha,
+                        subject: commit.subject))
+                }
+            )
+            .background(coat)
+        } else if group.tabs.showsTerminal {
             TerminalCellHost(terminal: terminal)
         } else {
             EditorPaneView(
