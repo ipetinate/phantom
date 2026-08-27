@@ -320,6 +320,14 @@ extension PrettierAttempt {
 }
 
 private struct DocumentView: View {
+    /// Whether the completion list keeps its documentation card open.
+    ///
+    /// Here rather than in the engine because the engine reads no
+    /// `UserDefaults` — `EditorEngineBoundaryTests` forbids it, so the value
+    /// crosses in and the change comes back out.
+    @AppStorage(EditorSettings.showsCompletionDocumentationKey)
+    private var showsCompletionDocumentation = false
+
     /// The switches for what the editor does unasked, observed so a change in
     /// the settings window reaches an open file without reopening it.
     ///
@@ -845,6 +853,12 @@ private struct DocumentView: View {
             completionProvider: { request in await completions(for: request) },
             completionDocProvider: { item in await documentation(for: item) },
             completionResolver: { item in await resolvedCompletion(for: item) },
+            /// Remembered across lists and across launches, because it is a
+            /// preference the reader expressed with a click and not a decision
+            /// about one completion.
+            showsCompletionDocumentation: showsCompletionDocumentation,
+            onCompletionDocumentationChanged: { showsCompletionDocumentation = $0 },
+            onDiagnosticNote: { WindowBreadcrumbs.note($0) },
             codeActionProvider: { range in await codeActions(in: range) },
             codeActionResolver: { item in await resolveCodeAction(item) },
             onRunCodeAction: { item in runCodeAction(item) },

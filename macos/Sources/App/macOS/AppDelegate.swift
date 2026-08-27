@@ -220,6 +220,10 @@ class AppDelegate: NSObject,
         /// — it sets a number on an AppKit object that dies with the process.
         /// A test host wants it too, because running it is what proves the
         /// private API it resolves has not gone away.
+        /// Before anything else that could fail. A crash during launch is the
+        /// one this cannot afford to be installed after.
+        CrashBreadcrumbs.install()
+
         ToolTipDelay.applyInitialDelay()
 
         /// Age out undo histories for files nobody has come back to. Off the

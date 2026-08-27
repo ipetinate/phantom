@@ -136,6 +136,16 @@ struct CodeTextView: NSViewRepresentable {
     /// "insert the row as it stands".
     var completionResolver: ((CodeCompletionItem) async -> CodeCompletionItem?)?
 
+    /// The reader's standing answer about the completion list's documentation
+    /// card, and the way back when they change it. See
+    /// ``CodeNSTextView/showsDocumentationByDefault``.
+    var showsCompletionDocumentation = false
+    var onCompletionDocumentationChanged: ((Bool) -> Void)?
+
+    /// Where the engine's diagnostic notes go. See
+    /// ``CodeNSTextView/onDiagnosticNote``.
+    var onDiagnosticNote: ((String) -> Void)?
+
     /// Asked what can be done about a range of this file — the quick fixes
     /// and refactors ⌃. offers.
     ///
@@ -476,6 +486,9 @@ struct CodeTextView: NSViewRepresentable {
         textView.completionProvider = completionProvider
         textView.completionDocProvider = completionDocProvider
         textView.completionResolver = completionResolver
+        textView.showsDocumentationByDefault = showsCompletionDocumentation
+        textView.onDocumentationPreferenceChanged = onCompletionDocumentationChanged
+        textView.onDiagnosticNote = onDiagnosticNote
         textView.codeActionProvider = codeActionProvider
         textView.codeActionResolver = codeActionResolver
         textView.onRunCodeAction = onRunCodeAction
@@ -535,6 +548,9 @@ struct CodeTextView: NSViewRepresentable {
             code.completionProvider = completionProvider
             code.completionDocProvider = completionDocProvider
             code.completionResolver = completionResolver
+            code.showsDocumentationByDefault = showsCompletionDocumentation
+            code.onDocumentationPreferenceChanged = onCompletionDocumentationChanged
+            code.onDiagnosticNote = onDiagnosticNote
             code.codeActionProvider = codeActionProvider
             code.codeActionResolver = codeActionResolver
             code.onRunCodeAction = onRunCodeAction
@@ -2248,6 +2264,28 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// own visibility because the card is legitimately empty for a server
     /// that answers no documentation, and "asked for and empty" has to
     /// survive the selection moving to a row that does have some.
+    /// Whether the completion list keeps its documentation card open.
+    ///
+    /// Seeded by the host and reported back when the reader turns it, rather
+    /// than read from `UserDefaults` here — the engine may not reach one, and
+    /// `EditorEngineBoundaryTests` holds that line. See
+    /// ``showsDocumentationByDefault`` and ``onDocumentationPreferenceChanged``.
+    /// The reader's standing answer about the documentation card.
+    ///
+    /// Set by the host from whatever it persists. Seeding rather than binding,
+    /// because the engine reads no `UserDefaults` — see
+    /// ``onDocumentationPreferenceChanged``.
+    var showsDocumentationByDefault = false
+
+    /// Reports the reader turning the card on or off, so the host can remember
+    /// it. Called only from the info glyph — a list closing is not an answer.
+    var onDocumentationPreferenceChanged: ((Bool) -> Void)?
+
+    /// A line for the log that survives the process, for the panel moments a
+    /// crash report did not describe. The host supplies it, because the engine
+    /// may not name the logger — see `EditorEngineBoundaryTests`.
+    var onDiagnosticNote: ((String) -> Void)?
+
     private var isShowingDocumentation = false
 
     /// How long the caret rests before the list asks for suggestions.
@@ -2623,6 +2661,8 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// report was about.
     private func showHover(_ info: CodeHoverInfo, at offset: Int) {
         guard !hoverHoldsPointer() else { return }
+        onDiagnosticNote?("hover: open at \(offset), completions="
+            + "\(completionSession != nil), doc=\(isShowingDocumentation)")
 
         let content = string as NSString
         guard content.length > 0 else { return }
@@ -3285,6 +3325,12 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
 
         completionSession = CompletionSession(items: ranked, selection: 0)
 
+        /// The reader's standing answer about the documentation card, applied
+        /// as the list opens. Read from the host rather than remembered here:
+        /// a text view is made and thrown away per pane, so a preference kept
+        /// on one would last exactly as long as the pane did.
+        isShowingDocumentation = showsDocumentationByDefault
+
         /// Anchored on the **start of the word**, not the caret, so the list
         /// lines up under what is being completed rather than drifting right
         /// as the reader types. A zero-height rect means TextKit has not laid
@@ -3646,11 +3692,19 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
 
     /// The info glyph is a toggle, not a one-way door: it is the same control
     /// for "show me this" and "that is enough".
+    ///
+    /// And the answer is remembered. Turning it on used to last until the list
+    /// closed, so a reader who wanted documentation had to say so again on the
+    /// next completion, and again after a relaunch — the same click answering
+    /// the same question forever. The host is told, and hands the answer back
+    /// when the next list opens.
     private func toggleDocumentation(for item: CodeCompletionItem) {
         if isShowingDocumentation {
             hideDocumentation()
+            onDocumentationPreferenceChanged?(false)
         } else {
             isShowingDocumentation = true
+            onDocumentationPreferenceChanged?(true)
             requestDocumentation(for: item)
         }
     }
