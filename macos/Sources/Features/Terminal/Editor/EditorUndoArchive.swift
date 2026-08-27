@@ -190,9 +190,25 @@ enum EditorUndoArchive {
     }
 
     /// Where a test points the archive so a run does not write the machine's
-    /// real history — the test bundle is hosted inside the app and shares its
-    /// bundle identifier, so without this the two would use the same folder.
+    /// real history.
+    ///
+    /// The test bundle is hosted inside the app and shares its bundle
+    /// identifier, so the two resolve to the same folder. Without this the
+    /// suite wrote records into the reader's own history — measured: a full
+    /// run left two files there, from suites that drive `EditorUndoCenter`
+    /// and never mention the archive at all.
+    ///
+    /// Setting it is therefore not what keeps a test out of that folder;
+    /// ``isTesting`` is. This says where a test that *wants* an archive
+    /// should put one.
     static var directoryOverride: URL?
+
+    /// Whether this process is a test run rather than the app.
+    ///
+    /// Read the same way `MCPServer` reads it, and used for the same reason:
+    /// a test host is indistinguishable from the app by bundle identifier, so
+    /// anything that writes into the reader's own state has to ask.
+    private static var isTesting: Bool { MCPServer.isTesting }
 
     private static func directory() -> URL? {
         if let directoryOverride {
@@ -202,6 +218,11 @@ enum EditorUndoArchive {
             }
             return directoryOverride
         }
+
+        /// A test that did not ask for an archive does not get one. Answering
+        /// nil here turns every entry point into a no-op, which is what a
+        /// suite driving the undo center should see.
+        guard !isTesting else { return nil }
 
         guard let support = try? FileManager.default.url(
             for: .applicationSupportDirectory,

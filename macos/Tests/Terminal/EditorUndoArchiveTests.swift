@@ -302,6 +302,21 @@ struct EditorUndoArchiveTests {
         }
     }
 
+    /// The suite must not write into the reader's own history. It did: a full
+    /// run left two records in Application Support, from suites that drive
+    /// `EditorUndoCenter` and never mention the archive.
+    @Test func aTestWithNoArchiveOfItsOwnWritesNothing() throws {
+        EditorUndoArchive.directoryOverride = nil
+
+        EditorUndoArchive.save(
+            path: "/tmp/leak.txt",
+            fingerprint: EditorUndoArchive.fingerprint(of: "x"),
+            steps: [step("x")])
+
+        #expect(EditorUndoArchive.url(for: "/tmp/leak.txt") == nil)
+        #expect(EditorUndoArchive.load(path: "/tmp/leak.txt", matching: "x") == nil)
+    }
+
     @Test func pruneRemovesOldRecords() throws {
         try withArchive { directory in
             EditorUndoArchive.save(
