@@ -31,9 +31,9 @@ struct EditorUndoArchiveTests {
     private func withArchive(_ body: (String) throws -> Void) rethrows {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("undo-archive-\(UUID().uuidString)")
-        EditorUndoArchive.directoryOverride = directory
+        EditorStateFolder.override = directory
         defer {
-            EditorUndoArchive.directoryOverride = nil
+            EditorStateFolder.override = nil
             try? FileManager.default.removeItem(at: directory)
         }
         try body(directory.path)
@@ -306,7 +306,7 @@ struct EditorUndoArchiveTests {
     /// run left two records in Application Support, from suites that drive
     /// `EditorUndoCenter` and never mention the archive.
     @Test func aTestWithNoArchiveOfItsOwnWritesNothing() throws {
-        EditorUndoArchive.directoryOverride = nil
+        EditorStateFolder.override = nil
 
         EditorUndoArchive.save(
             path: "/tmp/leak.txt",

@@ -132,11 +132,73 @@ final class EditorDocument: ObservableObject, Identifiable {
 
     private var watcher: DirectoryWatcher?
 
+    /// Writes the unsaved buffer down a moment after typing stops.
+    ///
+    /// Debounced rather than written per keystroke: the point is to survive a
+    /// crash or a quit, and a second of typing is the most that can cost. Per
+    /// keystroke it would be a file write in the middle of the typing path.
+    private var backupWorkItem: DispatchWorkItem?
+
+    /// How long typing has to stop before the buffer is written down.
+    static let backupDebounce: TimeInterval = 1
+
     init(url: URL, text: String) {
         self.url = url
         self.text = text
         self.diskText = text
         self.presentation = .opening(fileName: url.lastPathComponent)
+    }
+
+    // MARK: The unsaved buffer
+
+    /// Puts back what the reader had typed and never saved.
+    ///
+    /// Called by ``EditorCenter`` right after the document is made, before
+    /// anybody sees it, so the file appears the way it was left rather than
+    /// appearing clean and then changing under the reader.
+    ///
+    /// The buffer is restored even when the file on disk has moved on. It is
+    /// the reader's own work and this may not throw it away; what a moved
+    /// file gets is ``hasConflict``, the state the editor already has for
+    /// "neither version can be discarded without asking".
+    func restoreUnsavedBuffer() {
+        guard let restored = EditorBackupStore.load(path: url.path, diskText: diskText)
+        else { return }
+
+        liveText = restored.text
+        text = restored.text
+        revision += 1
+        isDirty = restored.text != diskText
+        hasConflict = restored.conflictsWithDisk
+    }
+
+    /// Writes the buffer down now, for the moments that cannot wait for the
+    /// debounce: the tab is closing, or the app is.
+    func flushBackup() {
+        backupWorkItem?.cancel()
+        backupWorkItem = nil
+        writeBackup()
+    }
+
+    /// Drops the record. For a save, a revert, and anything else that makes
+    /// the buffer and the file agree.
+    func discardBackup() {
+        backupWorkItem?.cancel()
+        backupWorkItem = nil
+        EditorBackupStore.forget(path: url.path)
+    }
+
+    private func scheduleBackup() {
+        backupWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.writeBackup() }
+        }
+        backupWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.backupDebounce, execute: work)
+    }
+
+    private func writeBackup() {
+        EditorBackupStore.save(path: url.path, text: currentText, diskText: diskText)
     }
 
     /// Reads the file, refusing anything the editor can't usefully show.
@@ -165,6 +227,12 @@ final class EditorDocument: ObservableObject, Identifiable {
         liveText = text
         let changed = text != diskText
         if isDirty != changed { isDirty = changed }
+
+        /// Every edit, dirty or not. Typing back to what the file holds has
+        /// to remove the record as surely as typing away from it writes one,
+        /// or a stale buffer would be restored over a file that already
+        /// matches it.
+        scheduleBackup()
 
         /// One keystroke is enough. This is the typing path, so the guard is
         /// what keeps it to an optional comparison — the write, and the publish
@@ -209,6 +277,11 @@ final class EditorDocument: ObservableObject, Identifiable {
         let changed = replacement != diskText
         if isDirty != changed { isDirty = changed }
 
+        /// A formatter and a rename are edits like any other and their result
+        /// has to survive a quit. A reload is not — it arrives with
+        /// `undoable: false` and clears the record through `revert()`.
+        if undoable { scheduleBackup() }
+
         /// The other half of the rule in ``agentMark``. A formatter, a rename
         /// and a reload all arrive here, and every one of them can move the line
         /// a mark names.
@@ -227,6 +300,7 @@ final class EditorDocument: ObservableObject, Identifiable {
             isDirty = false
             hasConflict = false
             loadError = nil
+            discardBackup()
             return true
         } catch {
             loadError = error.localizedDescription
@@ -261,6 +335,7 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.diskText = text
         isDirty = false
         hasConflict = false
+        discardBackup()
     }
 
     /// Watches for changes made outside the app.

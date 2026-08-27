@@ -437,12 +437,23 @@ final class EditorCenter: ObservableObject {
             if let showing { document.presentation = showing }
             document.reviewBase = reviewBase
 
+            /// Before anything renders, so a file with unsaved work appears
+            /// the way it was left rather than appearing clean and changing
+            /// under the reader a frame later.
+            document.restoreUnsavedBuffer()
+
             documents[path] = document
             document.startWatching()
             /// Before the tab exists, so the first render already has the
             /// timeline this file left behind — and so the disk check that
             /// may throw it away happens once, here, with the text that was
             /// just read rather than one the view guessed at.
+            ///
+            /// After the buffer is restored, and that order is the point: the
+            /// history was fingerprinted against the text the reader left,
+            /// which for a dirty file is the buffer and not the file. Passing
+            /// the disk text here would fail that check on exactly the files
+            /// whose history matters most.
             EditorUndoCenter.shared.attach(path: path, text: document.currentText)
             // The tab's dirty dot follows the document, and the document is
             // its own observable object — a change inside it doesn't reach
@@ -680,11 +691,33 @@ final class EditorCenter: ObservableObject {
         close(tabs(in: groupID).tabs.map(\.path))
     }
 
-    /// Closes the clean ones and answers with the dirty ones.
+    /// Closes them, and answers with the ones that still need an answer.
+    ///
+    /// Which is now almost none of them. A dirty buffer is written down at
+    /// ``close(_:)`` and put back when the file is opened again, so closing a
+    /// file with unsaved work is not a decision any more and the prompt that
+    /// used to make it one is gone — the same trade VS Code calls hot exit.
+    ///
+    /// What still comes back is the buffer that could not be written down:
+    /// past ``EditorBackupStore/maximumBytes``, or a write that failed. Those
+    /// keep the old behaviour, because for them "close" really does mean
+    /// "lose it", and that is the one case worth interrupting somebody for.
     private func close(_ paths: [String]) -> [String] {
-        let dirty = paths.filter { documents[$0]?.isDirty == true }
-        for path in paths where !dirty.contains(path) { close(path) }
-        return dirty
+        var unsafe: [String] = []
+        for path in paths {
+            guard let document = documents[path], document.isDirty else {
+                close(path)
+                continue
+            }
+
+            document.flushBackup()
+            if EditorBackupStore.hasBackup(path: path) {
+                close(path)
+            } else {
+                unsafe.append(path)
+            }
+        }
+        return unsafe
     }
 
     /// Saves and then closes, for the "Save" answer.
@@ -694,6 +727,10 @@ final class EditorCenter: ObservableObject {
 
     func close(_ path: String) {
         documents[path]?.stopWatching()
+        /// The buffer goes to disk before the document does. A file closed
+        /// from anywhere -- a tab's x, a group closing, a window going away --
+        /// reaches here, so this is the one place that has to be sure.
+        documents[path]?.flushBackup()
         /// Before the document goes, because what is being recorded is the
         /// text it holds: from here until the file is opened again, the only
         /// thing that can change it is the world outside this app, and that
@@ -896,6 +933,7 @@ final class EditorCenter: ObservableObject {
         /// the floor — and would leave a stale entry keyed to a path nothing
         /// will ask for again.
         EditorUndoCenter.shared.repath(from: oldPath, to: newPath)
+        EditorBackupStore.repath(from: oldPath, to: newPath)
 
         let moved = document.transferred(to: URL(fileURLWithPath: newPath))
         documents[newPath] = moved

@@ -227,7 +227,10 @@ class AppDelegate: NSObject,
         /// because the test bundle is hosted inside the app and would prune
         /// the real one.
         if !MCPServer.isTesting {
-            DispatchQueue.global(qos: .utility).async { EditorUndoArchive.prune() }
+            DispatchQueue.global(qos: .utility).async {
+                EditorUndoArchive.prune()
+                EditorBackupStore.prune()
+            }
         }
 
         // Put the chosen app icon back on. The override is in-memory only
@@ -584,6 +587,11 @@ class AppDelegate: NSObject,
         for controller in TerminalController.all {
             for (path, document) in controller.editorCenter.documents {
                 open[path] = document.currentText
+
+                // And the unsaved text itself, which the debounce may not have
+                // written yet. Quitting is the deadline the debounce exists to
+                // survive.
+                document.flushBackup()
             }
         }
         EditorUndoCenter.shared.persistOpenFiles(texts: open)

@@ -1,4 +1,4 @@
-import CryptoKit
+
 import Foundation
 import OSLog
 
@@ -100,10 +100,7 @@ enum EditorUndoArchive {
             written: Date())
 
         do {
-            let data = try JSONEncoder().encode(record)
-            try data.write(to: url, options: [.atomic])
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try EditorStateFolder.write(try JSONEncoder().encode(record), to: url)
         } catch {
             /// Nothing to recover here and nothing to tell the reader. Failing
             /// to write an undo history is not a condition their editing
@@ -142,109 +139,27 @@ enum EditorUndoArchive {
     }
 
     static func forget(path: String) {
-        guard let url = url(for: path) else { return }
-        try? FileManager.default.removeItem(at: url)
+        EditorStateFolder.remove(at: url(for: path))
     }
 
     /// Removes records that aged out and, past the cap, the oldest of what is
     /// left. Called once at launch, off whatever thread will have it.
     static func prune() {
-        guard let directory = directory() else { return }
-        let keys: [URLResourceKey] = [.contentModificationDateKey]
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: keys) else { return }
-
-        let now = Date()
-        var dated: [(URL, Date)] = []
-        for file in files where file.pathExtension == "json" {
-            let modified = (try? file.resourceValues(forKeys: Set(keys)))?
-                .contentModificationDate ?? .distantPast
-            if now.timeIntervalSince(modified) >= maximumAge {
-                try? FileManager.default.removeItem(at: file)
-            } else {
-                dated.append((file, modified))
-            }
-        }
-
-        guard dated.count > maximumFiles else { return }
-        for (file, _) in dated.sorted(by: { $0.1 < $1.1 }).prefix(dated.count - maximumFiles) {
-            try? FileManager.default.removeItem(at: file)
-        }
+        EditorStateFolder.prune(folder, maximumAge: maximumAge, maximumFiles: maximumFiles)
     }
 
     // MARK: Where it lives
 
-    /// One file per path, named after the SHA-256 of the path.
-    ///
-    /// A hash rather than the path itself because a path contains separators,
-    /// characters a filesystem will not take, and — often enough to matter —
-    /// the name of a client or a person. Hashing keeps the folder listing from
-    /// being a record of what the reader works on, which the contents already
-    /// are enough of.
+    /// One file per path, under ``EditorStateFolder`` — which is where the
+    /// naming, the permissions and the test-host guard are explained, and
+    /// which the unsaved-buffer store shares so the two cannot drift.
+    static let folder = "undo-history"
+
     static func url(for path: String) -> URL? {
-        guard !path.isEmpty, let directory = directory() else { return nil }
-        let name = SHA256.hash(data: Data(path.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return directory.appendingPathComponent("\(name).json")
-    }
-
-    /// Where a test points the archive so a run does not write the machine's
-    /// real history.
-    ///
-    /// The test bundle is hosted inside the app and shares its bundle
-    /// identifier, so the two resolve to the same folder. Without this the
-    /// suite wrote records into the reader's own history — measured: a full
-    /// run left two files there, from suites that drive `EditorUndoCenter`
-    /// and never mention the archive at all.
-    ///
-    /// Setting it is therefore not what keeps a test out of that folder;
-    /// ``isTesting`` is. This says where a test that *wants* an archive
-    /// should put one.
-    static var directoryOverride: URL?
-
-    /// Whether this process is a test run rather than the app.
-    ///
-    /// Read the same way `MCPServer` reads it, and used for the same reason:
-    /// a test host is indistinguishable from the app by bundle identifier, so
-    /// anything that writes into the reader's own state has to ask.
-    private static var isTesting: Bool { MCPServer.isTesting }
-
-    private static func directory() -> URL? {
-        if let directoryOverride {
-            if !FileManager.default.fileExists(atPath: directoryOverride.path) {
-                try? FileManager.default.createDirectory(
-                    at: directoryOverride, withIntermediateDirectories: true)
-            }
-            return directoryOverride
-        }
-
-        /// A test that did not ask for an archive does not get one. Answering
-        /// nil here turns every entry point into a no-op, which is what a
-        /// suite driving the undo center should see.
-        guard !isTesting else { return nil }
-
-        guard let support = try? FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true) else { return nil }
-
-        let bundle = Bundle.main.bundleIdentifier ?? "com.mitchellh.ghostty"
-        let directory = support
-            .appendingPathComponent(bundle, isDirectory: true)
-            .appendingPathComponent("undo-history", isDirectory: true)
-
-        if !FileManager.default.fileExists(atPath: directory.path) {
-            try? FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700])
-        }
-        return directory
+        EditorStateFolder.fileURL(for: path, in: folder)
     }
 
     static func fingerprint(of text: String) -> Data {
-        Data(SHA256.hash(data: Data(text.utf8)))
+        EditorStateFolder.fingerprint(of: text)
     }
 }
