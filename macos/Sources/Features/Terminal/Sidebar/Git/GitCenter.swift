@@ -240,7 +240,14 @@ final class GitCenter: ObservableObject {
     /// Built from `unstaged`, which by construction holds no unmerged entry —
     /// the parser files those under `unmerged` alone — so this is the whole
     /// list minus the conflicts without having to subtract anything.
-    private func safePathsToStage(in root: String) -> [String] {
+    ///
+    /// "Safe" here means only "git does not call it unmerged", and that is
+    /// less than it sounds: git stops reporting a path as unmerged the moment
+    /// it is staged once, markers or not. So this list can still hold a file
+    /// with `<<<<<<<` in it, and `GitConflictStaging.blockers(among:in:)` is
+    /// what looks. It is read from outside for that reason — the caller has to
+    /// see the same paths this would stage before it decides to stage them.
+    func safePathsToStage(in root: String) -> [String] {
         guard let status = statuses[root] else { return [] }
         var seen: Set<String> = []
         return status.unstaged.map(\.path).filter { seen.insert($0).inserted }

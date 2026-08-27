@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @testable import Ghostty
 import Testing
@@ -39,6 +40,39 @@ struct GitConflictStagingTests {
             let url = root.appendingPathComponent(name)
             try? bytes.write(to: url)
             return url
+        }
+
+        /// Makes the sandbox look like an ordinary checkout, and hands back
+        /// the directory git keeps its state in.
+        @discardableResult
+        func makeCheckout() -> URL {
+            let git = root.appendingPathComponent(".git")
+            try? FileManager.default.createDirectory(at: git, withIntermediateDirectories: true)
+            return git
+        }
+
+        /// Makes it look like a linked worktree instead: `.git` is a file
+        /// holding a `gitdir:` line, and the state lives where that points.
+        @discardableResult
+        func makeLinkedWorktree(relativePointer: Bool = false) -> URL {
+            let admin = root.appendingPathComponent("admin/worktrees/feature")
+            try? FileManager.default.createDirectory(at: admin, withIntermediateDirectories: true)
+
+            let target = relativePointer ? "admin/worktrees/feature" : admin.path
+            try? "gitdir: \(target)\n".write(
+                to: root.appendingPathComponent(".git"),
+                atomically: true,
+                encoding: .utf8
+            )
+            return admin
+        }
+
+        /// Writes one of git's stopped-operation files.
+        func mark(_ name: String, in directory: URL) {
+            FileManager.default.createFile(
+                atPath: directory.appendingPathComponent(name).path,
+                contents: nil
+            )
         }
     }
 
@@ -149,5 +183,143 @@ struct GitConflictStagingTests {
 
         #expect(text.contains("3 unresolved conflicts"))
         #expect(!text.contains("an unresolved conflict"))
+    }
+
+    // MARK: Whether git has anything stopped
+
+    @Test func anOrdinaryCheckoutHasNoUnfinishedMerge() {
+        let sandbox = Sandbox()
+        sandbox.makeCheckout()
+
+        #expect(!GitConflictStaging.hasUnfinishedMerge(at: sandbox.root.path))
+    }
+
+    @Test func aFolderThatIsNotARepositoryHasNoUnfinishedMerge() {
+        let sandbox = Sandbox()
+
+        #expect(!GitConflictStaging.hasUnfinishedMerge(at: sandbox.root.path))
+        #expect(GitConflictStaging.gitDirectory(at: sandbox.root.path) == nil)
+    }
+
+    /// All four, because each one leaves a working tree that can hold markers
+    /// and only the file's name differs.
+    @Test(arguments: ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"])
+    func aStoppedOperationIsAnUnfinishedMerge(_ marker: String) {
+        let sandbox = Sandbox()
+        sandbox.mark(marker, in: sandbox.makeCheckout())
+
+        #expect(GitConflictStaging.hasUnfinishedMerge(at: sandbox.root.path))
+    }
+
+    /// Git keeps `MERGE_HEAD` beside each worktree's own `HEAD`, so a linked
+    /// worktree's state has to be read through its `gitdir:` pointer. Reading
+    /// the family's main checkout instead would answer another worktree's
+    /// question.
+    @Test func aLinkedWorktreeIsReadThroughItsPointer() {
+        let sandbox = Sandbox()
+        let admin = sandbox.makeLinkedWorktree()
+
+        #expect(!GitConflictStaging.hasUnfinishedMerge(at: sandbox.root.path))
+
+        sandbox.mark("MERGE_HEAD", in: admin)
+        #expect(GitConflictStaging.hasUnfinishedMerge(at: sandbox.root.path))
+    }
+
+    /// Git writes the pointer relative to the working tree when the pair was
+    /// moved or `--relative-paths` was asked for.
+    @Test func aRelativePointerResolvesAgainstTheWorkingTree() {
+        let sandbox = Sandbox()
+        let admin = sandbox.makeLinkedWorktree(relativePointer: true)
+        sandbox.mark("CHERRY_PICK_HEAD", in: admin)
+
+        #expect(GitConflictStaging.hasUnfinishedMerge(at: sandbox.root.path))
+    }
+
+    // MARK: What a repository-wide stage asks about
+
+    /// The gate the whole design rests on. Markers exist only while git has an
+    /// operation stopped, so with nothing stopped this answers without reading
+    /// a file — the file below would block, and does in the next test.
+    @Test func nothingBlocksWhenGitHasNothingStopped() {
+        let sandbox = Sandbox()
+        sandbox.makeCheckout()
+        _ = sandbox.file("main.swift", Self.conflict)
+
+        #expect(GitConflictStaging.blockers(among: ["main.swift"], in: sandbox.root.path).isEmpty)
+    }
+
+    /// The gap this closes: the reader resolved one of three conflicts and
+    /// staged the file, so git no longer calls the path unmerged — but two
+    /// blocks are still in it, and Stage All would put them in the index.
+    @Test func aPartlyResolvedFileBlocksDuringAMerge() {
+        let sandbox = Sandbox()
+        sandbox.mark("MERGE_HEAD", in: sandbox.makeCheckout())
+        _ = sandbox.file("main.swift", Self.conflict + "\nfunc done() {}\n" + Self.conflict)
+
+        #expect(GitConflictStaging.blockers(among: ["main.swift"], in: sandbox.root.path)
+            == [GitConflictStaging.ConflictedFile(name: "main.swift", conflicts: 2)])
+    }
+
+    /// Only the files that still hold markers are named, and by the name the
+    /// panel's row shows rather than by the path git prints.
+    @Test func onlyTheFilesThatStillHoldMarkersAreNamed() {
+        let sandbox = Sandbox()
+        sandbox.mark("REBASE_HEAD", in: sandbox.makeCheckout())
+
+        let nested = sandbox.root.appendingPathComponent("src")
+        try? FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        _ = sandbox.file("src/main.swift", Self.conflict)
+        _ = sandbox.file("README.md", "# Title\n=======\nstill prose\n")
+
+        let blocked = GitConflictStaging.blockers(
+            among: ["src/main.swift", "README.md", "gone.swift"],
+            in: sandbox.root.path
+        )
+
+        #expect(blocked.map(\.name) == ["main.swift"])
+    }
+
+    // MARK: Answering
+
+    /// Cancelling stages nothing, and neither does a sheet that ends without
+    /// an answer because its window closed under it.
+    @Test func onlyTheFirstButtonStages() {
+        #expect(GitConflictStaging.stages(.alertFirstButtonReturn))
+        #expect(!GitConflictStaging.stages(.alertSecondButtonReturn))
+        #expect(!GitConflictStaging.stages(.cancel))
+        #expect(!GitConflictStaging.stages(.abort))
+    }
+
+    // MARK: What several files are called
+
+    @Test func theQuestionForSeveralFilesCountsThem() {
+        #expect(GitConflictStaging.question(fileCount: 4)
+            == "Stage 4 files that still hold conflict markers?")
+    }
+
+    @Test func twoNamesAreJoinedWithAnd() {
+        #expect(GitConflictStaging.listed(["a.swift", "b.swift"]) == "a.swift and b.swift")
+    }
+
+    @Test func threeNamesAreAList() {
+        #expect(GitConflictStaging.listed(["a.swift", "b.swift", "c.swift"])
+            == "a.swift, b.swift and c.swift")
+    }
+
+    /// Past the cap the alert counts instead of listing, so a merge that left
+    /// dozens does not produce a paragraph the reader skips.
+    @Test func pastTheCapTheRestAreCounted() {
+        let names = (1...9).map { "file\($0).swift" }
+
+        #expect(GitConflictStaging.listed(names)
+            == "file1.swift, file2.swift, file3.swift and 6 more")
+    }
+
+    @Test func theExplanationForSeveralFilesNamesThemAndTheCost() {
+        let text = GitConflictStaging.explanation(for: ["a.swift", "b.swift"])
+
+        #expect(text.hasPrefix("a.swift and b.swift still hold"))
+        #expect(text.contains("<<<<<<<"))
+        #expect(text.contains("the markers go into history"))
     }
 }

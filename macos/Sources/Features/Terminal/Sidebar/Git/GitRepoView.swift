@@ -513,7 +513,7 @@ struct GitRepoView: View {
                         if staged {
                             center.unstageAll(in: root)
                         } else {
-                            center.stageAll(in: root)
+                            stageAll()
                         }
                     } label: {
                         Image(systemName: staged ? "minus" : "plus")
@@ -555,6 +555,28 @@ struct GitRepoView: View {
     }
 
     // MARK: Actions
+
+    /// Stages everything, after one question about everything that still holds
+    /// markers.
+    ///
+    /// `GitCenter.stageAll(in:)` already refuses to `add -A` over a path git
+    /// calls unmerged, and it keeps doing that — this is a second check in
+    /// front of it, not a replacement. The two see different files: git stops
+    /// calling a path unmerged as soon as it is staged once, so a file the
+    /// reader resolved half of and staged is no longer unmerged and would go
+    /// straight back into the index with its remaining `<<<<<<<` blocks.
+    ///
+    /// The paths are asked of `GitCenter` rather than read off `status` here,
+    /// so the question is put about exactly the files the stage would touch.
+    private func stageAll() {
+        GitConflictStaging.confirmingAll(
+            center.safePathsToStage(in: root),
+            under: root,
+            in: selectedTab?.window
+        ) {
+            center.stageAll(in: root)
+        }
+    }
 
     /// The one gesture that can end a merge badly, which is why staging goes
     /// through `GitConflictStaging` and unstaging does not: `git add` on a file
