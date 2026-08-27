@@ -1418,10 +1418,26 @@ struct CodeTextView: NSViewRepresentable {
             guard text != appliedDiffText else { return }
             appliedDiffText = text
 
-            gutter.setDiffMarks(EditorDiffMarks.marks(
+            let marks = EditorDiffMarks.marks(
                 current: EditorDiffMarks.lines(of: text),
                 base: baseline
-            ))
+            )
+            gutter.setDiffMarks(marks)
+
+            /// The same marks, handed to the ghost text so it stays quiet on
+            /// a line the reader has changed. `git blame` reads the file on
+            /// disk and answers by line number, so on a changed line it names
+            /// whoever last touched that number in the committed file — a
+            /// real person with nothing to do with the line on screen.
+            ///
+            /// Only `.added`. A `-` marks a line that was *deleted*, so the
+            /// line carrying the mark is one that survived and git's answer
+            /// for it is still true.
+            if let documentPath {
+                EditorBlameCenter.shared.setLocallyChanged(
+                    Set(marks.filter { $0.value == .added }.keys),
+                    forPath: documentPath)
+            }
         }
 
         /// Rebuilds the minimap shortly, rather than now.
