@@ -16,6 +16,15 @@ struct GitDiffPalette {
     let addedEmphasis: NSColor
     let removedEmphasis: NSColor
 
+    /// A line that exists in both versions with different text.
+    ///
+    /// Blue rather than a third shade of green or red, and the reason is that
+    /// the reader already knows this vocabulary: VS Code, JetBrains and
+    /// Sublime all draw a modified line blue, between a green addition and a
+    /// red deletion. Inventing a hue here would mean teaching one, and the
+    /// margin has no room for a legend.
+    let changedEmphasis: NSColor
+
     /// The band marking lines the diff skipped over.
     let gapBackground: NSColor
     let gapForeground: NSColor
@@ -30,12 +39,14 @@ struct GitDiffPalette {
 
         let green = NSColor(srgbRed: 0.28, green: 0.72, blue: 0.35, alpha: 1)
         let red = NSColor(srgbRed: 0.88, green: 0.31, blue: 0.33, alpha: 1)
+        let blue = NSColor(srgbRed: 0.28, green: 0.56, blue: 0.90, alpha: 1)
 
         return GitDiffPalette(
             addedBackground: green.withAlphaComponent(base),
             removedBackground: red.withAlphaComponent(base),
             addedEmphasis: green.withAlphaComponent(emphasis),
             removedEmphasis: red.withAlphaComponent(emphasis),
+            changedEmphasis: blue.withAlphaComponent(emphasis),
             gapBackground: theme.foreground.withAlphaComponent(isDark ? 0.06 : 0.05),
             gapForeground: theme.lineNumber
         )

@@ -17,6 +17,14 @@ enum LSPServerCategory: String, CaseIterable, Hashable, Sendable, Identifiable {
     /// HTML, Markdown and friends — structured text for documents.
     case markup
 
+    /// The frameworks that put a language inside a file of their own —
+    /// `.vue`, `.svelte`, `.astro`. Their servers are not script servers
+    /// even though the file holds script: one file carries a template, a
+    /// style block and a script block, and it takes two processes to serve.
+    /// Filing them under Script hid the fact that they behave differently
+    /// from every row there.
+    case frontendFramework
+
     /// CSS and its preprocessors.
     case styles
 
@@ -36,6 +44,7 @@ enum LSPServerCategory: String, CaseIterable, Hashable, Sendable, Identifiable {
     var title: String {
         switch self {
         case .script: return "Script"
+        case .frontendFramework: return "Frontend Frameworks"
         case .compiled: return "Compiled"
         case .markup: return "Markup"
         case .styles: return "Styles"
@@ -49,6 +58,7 @@ enum LSPServerCategory: String, CaseIterable, Hashable, Sendable, Identifiable {
     var systemImage: String {
         switch self {
         case .script: return "chevron.left.forwardslash.chevron.right"
+        case .frontendFramework: return "square.stack.3d.up"
         case .compiled: return "hammer"
         case .markup: return "doc.richtext"
         case .styles: return "paintbrush"
@@ -121,10 +131,23 @@ struct LSPServerDefinition: Hashable, Sendable, Identifiable {
     /// in one place and can't disagree about it.
     var category: LSPServerCategory {
         switch command {
-        case "typescript-language-server", "tsc", "vue-language-server",
+        case "typescript-language-server", "tsc",
              "pyright-langserver", "bash-language-server",
              "intelephense", "ruby-lsp":
             return .script
+        case "vue-language-server":
+            /// Its own section rather than Script, even though a `.vue` holds
+            /// script. The row behaves unlike every other one under Script: a
+            /// single file carries a template, a style block and a script
+            /// block, and serving it takes two processes — this server and
+            /// `typescript-language-server` loading `@vue/typescript-plugin`.
+            /// Filing it with the script servers hid exactly the thing a
+            /// reader comes to this row to understand.
+            ///
+            /// `typescript-language-server` stays under Script even though it
+            /// is the second half of a `.vue`. It is keyed by command, as the
+            /// note above says, and its own home is TypeScript.
+            return .frontendFramework
         case "sourcekit-lsp", "kotlin-language-server", "rust-analyzer",
              "gopls", "zls", "jdtls", "clangd":
             return .compiled

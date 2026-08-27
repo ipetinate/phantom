@@ -2,7 +2,14 @@ import Foundation
 @testable import Ghostty
 import Testing
 
-/// The `+` and `-` beside the line numbers.
+/// The three marks beside the line numbers.
+///
+/// The fixtures here mostly use one-token lines, which is fine for the two
+/// states that are about *position* — added and removed. It is not enough for
+/// `changed`: telling a rewritten line from a new one that replaced a deleted
+/// one is done by comparing the two texts, and `"b"` against `"changed"`
+/// carries no signal either way. Those cases use real code, and the ambiguous
+/// one is pinned on purpose in `aWhollyDifferentReplacementReadsAsNew`.
 struct EditorDiffMarksTests {
     private func marks(
         _ current: [String],
@@ -29,10 +36,26 @@ struct EditorDiffMarksTests {
         #expect(marks(["a", "c"], was: ["a", "b", "c"]) == [2: .removed])
     }
 
-    /// `+` is new and `-` is what left or was altered, which makes a changed
-    /// line `-`: its old content is gone.
+    /// A line edited in place gets its own state. It used to get `.removed`,
+    /// which put a minus beside a line that was right there on screen.
     @Test func aChangedLineIsMarkedAsAltered() {
-        #expect(marks(["a", "changed", "c"], was: ["a", "b", "c"]) == [2: .removed])
+        #expect(marks(
+            ["let a = 1", "let total = sum(x)", "let c = 3"],
+            was: ["let a = 1", "let total = sum(y)", "let c = 3"]) == [2: .changed])
+    }
+
+    /// And when the replacement looks nothing like what it replaced, it reads
+    /// as **new** rather than as a change.
+    ///
+    /// Deliberate, and the direction matters. "This line is not in the commit"
+    /// is true of a rewrite as well as of an addition, so calling a rewrite
+    /// new costs the reader a shade of meaning. The opposite error — calling a
+    /// line the reader just typed a change to something they never saw — is
+    /// the one that was reported.
+    @Test func aWhollyDifferentReplacementReadsAsNew() {
+        #expect(marks(
+            ["<template>", "<WDrawer", "</template>"],
+            was: ["<template>", "  v-bind=\"form.value\"", "</template>"]) == [2: .added])
     }
 
     /// A line that replaces nothing is new, and stays `+`.
@@ -40,11 +63,13 @@ struct EditorDiffMarksTests {
         #expect(marks(["a", "b", "new"], was: ["a", "b"]) == [3: .added])
     }
 
-    /// The line after a change must not inherit the removal.
+    /// The line after a change must not inherit its mark.
     @Test func theLineAfterAChangeIsLeftAlone() {
-        let result = marks(["a", "changed", "c", "d"], was: ["a", "b", "c", "d"])
+        let result = marks(
+            ["let a = 1", "let total = sum(x)", "let c = 3", "let d = 4"],
+            was: ["let a = 1", "let total = sum(y)", "let c = 3", "let d = 4"])
 
-        #expect(result == [2: .removed])
+        #expect(result == [2: .changed])
         #expect(result[3] == nil)
     }
 
@@ -67,10 +92,12 @@ struct EditorDiffMarksTests {
     /// A replaced run is altered rather than new, line for line, and the
     /// line after it is left alone.
     @Test func aReplacedRunIsAlteredThroughout() {
-        let result = marks(["a", "x", "y", "d"], was: ["a", "b", "c", "d"])
+        let result = marks(
+            ["let a = 1", "let x = one(v)", "let y = two(v)", "let d = 4"],
+            was: ["let a = 1", "let x = one(w)", "let y = two(w)", "let d = 4"])
 
-        #expect(result[2] == .removed)
-        #expect(result[3] == .removed)
+        #expect(result[2] == .changed)
+        #expect(result[3] == .changed)
         #expect(result[4] == nil)
     }
 
@@ -86,11 +113,11 @@ struct EditorDiffMarksTests {
     }
 
     @Test func aFileAtTheBudgetIsStillCompared() {
-        let atLimit = (1...EditorDiffMarks.lineBudget).map(String.init)
+        let atLimit = (1...EditorDiffMarks.lineBudget).map { "line \($0) here" }
         var changed = atLimit
-        changed[0] = "changed"
+        changed[0] = "line 1 there"
 
-        #expect(EditorDiffMarks.marks(current: changed, base: atLimit) == [1: .removed])
+        #expect(EditorDiffMarks.marks(current: changed, base: atLimit) == [1: .changed])
     }
 
     // MARK: Splitting

@@ -19,15 +19,22 @@ struct EditorChangedLinesTests {
 
     // MARK: The case the ghost text got wrong
 
-    /// The reported bug, reduced. Line 2 is edited in place: the margin marks
-    /// it `-`, and it must still count as changed.
+    /// The reported bug, reduced: line 2 is edited in place and must count as
+    /// the reader's text.
+    ///
+    /// The second assertion used to read `.removed`, because that is what the
+    /// margin drew for a change in place when there were only two states, and
+    /// it was the reason the git lens went on naming a colleague beside an
+    /// edited line. The third state exists now and the glyph tells the truth
+    /// — but this function stays, because "which glyph is drawn" and "whose
+    /// text is this" are still two questions, and only one of them is safe to
+    /// answer from a drawing.
     @Test func aLineEditedInPlaceCounts() {
         let base = lines("one\ntwo\nthree\n")
         let current = lines("one\ntwo edited\nthree\n")
 
         #expect(EditorDiffMarks.changedLines(current: current, base: base) == [2])
-        #expect(EditorDiffMarks.marks(current: current, base: base)[2] == .removed,
-                "the glyph really is a minus — which is why the glyph cannot answer this")
+        #expect(EditorDiffMarks.marks(current: current, base: base)[2] == .changed)
     }
 
     @Test func aNewLineCounts() {
