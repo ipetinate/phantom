@@ -112,7 +112,7 @@ struct CodeTextView: NSViewRepresentable {
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
 
     /// Asked what to offer at an offset, for the completion list.
-    var completionProvider: ((Int) async -> CodeCompletionAnswer)?
+    var completionProvider: ((CodeCompletionRequest) async -> CodeCompletionAnswer)?
 
     /// Asked to describe the highlighted row, for the documentation card.
     ///
@@ -122,6 +122,19 @@ struct CodeTextView: NSViewRepresentable {
     /// asked about a specific item, which is a request per selection change
     /// rather than per keystroke.
     var completionDocProvider: ((CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome)?
+
+    /// Asked to finish the row the reader accepted, before it is inserted.
+    ///
+    /// The third question about a completion, and the one an auto-import
+    /// needs. Computing an import line for every row of a list is expensive,
+    /// so a producer is allowed to leave `additionalEdits` off all of them and
+    /// supply them only for the row that was chosen — which means a client
+    /// that never asks inserts the identifier and no import.
+    ///
+    /// The engine may not learn that a second request exists, so it hands over
+    /// a row and takes back a finished one. Nil, and a nil answer, both mean
+    /// "insert the row as it stands".
+    var completionResolver: ((CodeCompletionItem) async -> CodeCompletionItem?)?
 
     /// Whether a row gets an info glyph. See `CodeNSTextView` for why this is
     /// the host's question and not the item's.
@@ -398,6 +411,7 @@ struct CodeTextView: NSViewRepresentable {
         textView.hoverProvider = hoverProvider
         textView.completionProvider = completionProvider
         textView.completionDocProvider = completionDocProvider
+        textView.completionResolver = completionResolver
         textView.completionOffersDocumentation = completionOffersDocumentation
         textView.completionIconFont = completionIconFont
 
@@ -452,6 +466,7 @@ struct CodeTextView: NSViewRepresentable {
             code.hoverProvider = hoverProvider
             code.completionProvider = completionProvider
             code.completionDocProvider = completionDocProvider
+            code.completionResolver = completionResolver
             code.completionOffersDocumentation = completionOffersDocumentation
             code.completionIconFont = completionIconFont
         }
@@ -1418,24 +1433,24 @@ struct CodeTextView: NSViewRepresentable {
             guard text != appliedDiffText else { return }
             appliedDiffText = text
 
-            let marks = EditorDiffMarks.marks(
-                current: EditorDiffMarks.lines(of: text),
-                base: baseline
-            )
-            gutter.setDiffMarks(marks)
+            let lines = EditorDiffMarks.lines(of: text)
+            gutter.setDiffMarks(EditorDiffMarks.marks(current: lines, base: baseline))
 
-            /// The same marks, handed to the ghost text so it stays quiet on
-            /// a line the reader has changed. `git blame` reads the file on
-            /// disk and answers by line number, so on a changed line it names
-            /// whoever last touched that number in the committed file — a
-            /// real person with nothing to do with the line on screen.
+            /// Which lines the reader has changed, so the ghost text stays
+            /// quiet on them. `git blame` reads the file on disk and answers
+            /// by line number, so on a changed line it names whoever last
+            /// touched that number in the committed file.
             ///
-            /// Only `.added`. A `-` marks a line that was *deleted*, so the
-            /// line carrying the mark is one that survived and git's answer
-            /// for it is still true.
+            /// Asked of ``EditorDiffMarks/changedLines(current:base:)`` rather
+            /// than read off the glyphs. A `-` means two different things —
+            /// a line changed in place, and a line that survived a deletion —
+            /// and only the first is the reader's own text. Filtering the
+            /// marks for `.added` was the first version of this and it missed
+            /// every line edited in place, which is the case that was
+            /// reported.
             if let documentPath {
                 EditorBlameCenter.shared.setLocallyChanged(
-                    Set(marks.filter { $0.value == .added }.keys),
+                    EditorDiffMarks.changedLines(current: lines, base: baseline),
                     forPath: documentPath)
             }
         }
@@ -1988,8 +2003,13 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     var commandShortcuts: [String: [EditorShortcut]] = [:]
     var onJumpToDefinition: ((Int) -> Void)?
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
-    var completionProvider: ((Int) async -> CodeCompletionAnswer)?
+    var completionProvider: ((CodeCompletionRequest) async -> CodeCompletionAnswer)?
     var completionDocProvider: ((CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome)?
+
+    /// Asked to finish the accepted row before it is inserted. See the
+    /// property of the same name on `CodeTextView`, and `acceptCompletion`
+    /// for why the answer is waited for rather than applied after the fact.
+    var completionResolver: ((CodeCompletionItem) async -> CodeCompletionItem?)?
 
     /// Whether a row is worth offering an info glyph on.
     ///
@@ -2060,6 +2080,13 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
 
     /// The list currently on screen, if any.
     private var completionSession: CompletionSession?
+
+    /// Whether the answer on screen was one the producer called a guess.
+    ///
+    /// The producer asked to be asked again as the prefix grows, and the
+    /// next request has to say that it is that re-ask. Reset when the list
+    /// closes, because a fresh session is nobody's refinement.
+    private var lastAnswerWasIncomplete = false
 
     /// Built on first use and kept, so a burst of typing reuses one window
     /// rather than making and destroying one per keystroke.
@@ -2771,7 +2798,7 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         case .ignore:
             break
         case .open, .refilter:
-            requestCompletions(explicitly: false, immediate: isTrigger)
+            requestCompletions(explicitly: false, immediate: isTrigger, typed: typed)
         }
     }
 
@@ -2866,7 +2893,11 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// the main actor and re-check that the world has not moved — with one
     /// addition hover does not need: the buffer moves under a completion, so
     /// a generation counter guards it as well as the offset.
-    private func requestCompletions(explicitly: Bool, immediate: Bool = false) {
+    private func requestCompletions(
+        explicitly: Bool,
+        immediate: Bool = false,
+        typed: Character? = nil
+    ) {
         guard completionEnabled, let completionProvider else { return }
 
         completionGeneration += 1
@@ -2874,11 +2905,20 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         let offset = selectedRange().location
         let delay = immediate || explicitly ? Duration.zero : completionFetchDelay
 
+        /// Read here rather than inside the task, so it describes the answer
+        /// that was on screen when this keystroke landed rather than whatever
+        /// has replaced it by the time the request goes out.
+        let request = CodeCompletionRequest(
+            offset: offset,
+            typedCharacter: typed,
+            isRefiningIncompleteList: lastAnswerWasIncomplete
+        )
+
         completionTask?.cancel()
         completionTask = Task { [weak self, delay] in
             if delay > .zero { try? await Task.sleep(for: delay) }
             guard !Task.isCancelled else { return }
-            let answer = await completionProvider(offset)
+            let answer = await completionProvider(request)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.completionGeneration == generation else { return }
@@ -2886,7 +2926,8 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
                 /// The one case that must not reach `showCompletions`: it is
                 /// not an answer, so there is nothing to draw and — crucially
                 /// — nothing to clear.
-                guard case .items(let items) = answer else { return }
+                guard case .items(let items, let isIncomplete) = answer else { return }
+                self.lastAnswerWasIncomplete = isIncomplete
                 self.showCompletions(items, requestedAt: offset)
             }
         }
@@ -3333,10 +3374,81 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         documentationPanel?.dismiss()
     }
 
+    /// Accepting a row, with one round trip in the middle when the row's
+    /// producer may still be holding edits it has not sent.
+    ///
+    /// **The wait goes before the insertion, and moving it after would break
+    /// the feature silently.** The insertion is itself a change the producer
+    /// is told about, and `typescript-language-server` drops its completion
+    /// cache on that notification. A resolve sent afterwards is answered with
+    /// the item **unchanged and without an error** — so the import is simply
+    /// absent, nothing reports a failure, and the result is identical to a
+    /// server that had none to give. Inserting first and importing later
+    /// looks like the kinder order and is the one that cannot work.
+    ///
+    /// The wait is bounded by the host, at `completionResolveOnAccept`. When
+    /// it expires the name still goes in without its import, because a Return
+    /// that does nothing is worse than a missing import.
+    ///
+    /// The list closes first regardless, so no row sits highlighted while the
+    /// answer travels.
     private func acceptCompletion(_ item: CodeCompletionItem) {
         guard completionSession != nil else { return }
         dismissCompletions()
-        applyCompletion(item)
+
+        guard let completionResolver, item.mayHaveUnsentEdits else {
+            applyCompletion(item)
+            return
+        }
+
+        let asked = string
+
+        Task { [weak self] in
+            let finished = await completionResolver(item)
+            await MainActor.run {
+                guard let self else { return }
+                self.applyCompletion(Self.rowToApply(
+                    asked: item,
+                    finished: finished,
+                    textWhenAsked: asked,
+                    textNow: self.string
+                ))
+            }
+        }
+    }
+
+    /// Which row actually gets inserted once the answer arrives.
+    ///
+    /// **Every range a producer sends is an offset into the document it last
+    /// saw, and an offset only means something against the text it was
+    /// measured on.** If the reader typed, deleted, or accepted something
+    /// else while the answer travelled, the edits that come back describe a
+    /// document that no longer exists — so they are dropped and the row goes
+    /// in as it stood.
+    ///
+    /// Dropped rather than adjusted, deliberately. Losing an import costs the
+    /// reader a line they can type; placing one by arithmetic against text it
+    /// was never measured on writes an `import` into the middle of an
+    /// unrelated line. Same rule, and the same reasoning, as
+    /// `CompletionBridge.edits(_:using:)`.
+    ///
+    /// Note what this does **not** guard, because the insertion guards it
+    /// already: the row's own `replaceRange`. That one is re-derived from the
+    /// buffer at insertion time by `replacementRange`, which is why typing
+    /// ahead of an open list still works. This is only about the edits that
+    /// arrive from elsewhere, and it is the only part with no second chance.
+    ///
+    /// A static so the rule is assertable without a window, an event loop or
+    /// a server — the same shape `replacementRange` and `acceptChangesText`
+    /// are in, and for the same reason.
+    static func rowToApply(
+        asked: CodeCompletionItem,
+        finished: CodeCompletionItem?,
+        textWhenAsked: String,
+        textNow: String
+    ) -> CodeCompletionItem {
+        guard textWhenAsked == textNow else { return asked }
+        return asked.finished(by: finished)
     }
 
     /// The span an accepted row replaces.
@@ -3483,6 +3595,7 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         completionTask?.cancel()
         completionTask = nil
         completionSession = nil
+        lastAnswerWasIncomplete = false
         completionGeneration += 1
         completionPanel?.dismiss()
         hideDocumentation()

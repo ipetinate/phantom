@@ -194,10 +194,27 @@ enum LSPTimeout {
     /// ⌃Space. Somebody who asked out loud is willing to wait.
     static let completionExplicit: TimeInterval = 5
 
-    /// `completionItem/resolve`. Never on the typing path — it runs on a
-    /// selection settling or at accept time, where a person is already
-    /// paused.
+    /// `completionItem/resolve` for the documentation card. Never on the
+    /// typing path — it runs on a selection settling, where a person is
+    /// already paused and a slow answer costs them nothing.
     static let completionResolve: TimeInterval = 2
+
+    /// `completionItem/resolve` for the row being accepted, where the reader
+    /// is **not** paused: they pressed a key and are waiting for text.
+    ///
+    /// Deliberately far tighter than the settle case, and the number comes
+    /// from measurement rather than taste. On `typescript-language-server`
+    /// against a 1378-item list in a large monorepo, a resolve that computes
+    /// a real import costs 20–25 ms, median 22 ms. This leaves an order of
+    /// magnitude of room for a slower language server on a colder project
+    /// and still caps a hung one at a third of a second.
+    ///
+    /// What the reader gets when it expires: the name they chose, inserted
+    /// without its import — the behaviour they had before any of this
+    /// existed. What they must never get is a keystroke that does nothing,
+    /// which is what the two-second budget would have cost them on a server
+    /// that stopped answering.
+    static let completionResolveOnAccept: TimeInterval = 0.3
 
     /// `initialize`, formatting, rename: things a person waits for on
     /// purpose, and where giving up early is the failure.

@@ -54,7 +54,11 @@ final class CompletionBridge {
             /// An empty list, not `unchanged`: these mean the server has
             /// nothing to say, and a stale list left on screen would keep
             /// offering symbols from a file the reader has since left.
-            return .items([])
+            ///
+            /// Complete, because there is nothing to refine. Calling silence
+            /// a guess would ask the engine to keep re-requesting from a
+            /// server that is not answering.
+            return .items([], isIncomplete: false)
 
         case .list(let list):
             let index = LSPLineIndex(text)
@@ -82,7 +86,7 @@ final class CompletionBridge {
                 )
             }
 
-            return .items(items)
+            return .items(items, isIncomplete: list.isIncomplete)
         }
     }
 
@@ -90,6 +94,35 @@ final class CompletionBridge {
     func completion(for token: Int?) -> LSPCompletion? {
         guard let token else { return nil }
         return resolvable[token]
+    }
+
+    /// The accepted row, carrying whatever the server added when asked about
+    /// it — an `import` line, most of the time.
+    ///
+    /// The row that goes back out is the row that came in, with one property
+    /// filled: the token, the identity and the text the reader chose all
+    /// survive. Rebuilding it from the reply would be the mistake the
+    /// specification warns about — a resolve may complete the properties the
+    /// client declared it would wait for and may not change the rest, and a
+    /// reply routinely omits `sortText` and `filterText` altogether.
+    ///
+    /// Nil for every outcome that is not an answer, because the caller does
+    /// the same thing with all of them: insert the row as it stands. A server
+    /// that answers no resolve, one that timed out and one whose list has been
+    /// superseded differ in cause and not in consequence here.
+    func item(
+        _ item: CodeCompletionItem,
+        finishedBy outcome: LSPResolveOutcome,
+        in text: NSString
+    ) -> CodeCompletionItem? {
+        guard case .resolved(let completion) = outcome else { return nil }
+
+        var finished = item
+        finished.additionalEdits = Self.edits(
+            completion.additionalTextEdits,
+            using: LSPLineIndex(text)
+        )
+        return finished
     }
 
     func note(supportsResolve: Bool) {

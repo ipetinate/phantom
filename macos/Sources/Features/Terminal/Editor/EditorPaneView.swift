@@ -825,8 +825,9 @@ private struct DocumentView: View {
             },
             underlines: underlines,
             hoverProvider: { offset in await hoverInfo(at: offset) },
-            completionProvider: { offset in await completions(at: offset) },
+            completionProvider: { request in await completions(for: request) },
             completionDocProvider: { item in await documentation(for: item) },
+            completionResolver: { item in await resolvedCompletion(for: item) },
             completionOffersDocumentation: { item in offersDocumentation(item) },
             completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
             reveal: revealRange,
@@ -1111,12 +1112,27 @@ private struct DocumentView: View {
     /// cached because a server can finish starting between two keystrokes,
     /// and a `false` remembered from before it was ready would leave the
     /// documentation card permanently silent.
-    private func completions(at offset: Int) async -> CodeCompletionAnswer {
-        if let snippets = markdownSnippets(at: offset) { return .items(snippets) }
+    private func completions(for request: CodeCompletionRequest) async -> CodeCompletionAnswer {
+        if let snippets = markdownSnippets(at: request.offset) {
+            return .items(snippets, isIncomplete: false)
+        }
+
+        let support = lsp.completionSupport(forPath: document.url.path)
 
         let outcome = await lsp.completions(
             path: document.url.path,
-            position: position(at: offset)
+            position: position(at: request.offset),
+            /// The client advertises `contextSupport: true`, and this is
+            /// where that promise is kept. Sending no context is not a
+            /// dropped field a server can detect — it answers a different
+            /// question, silently: `typescript-language-server` reads the
+            /// trigger character to decide whether it is completing a member
+            /// access at all.
+            context: LSPCompletionContext.decide(
+                typedCharacter: request.typedCharacter,
+                isRefiningIncompleteList: request.isRefiningIncompleteList,
+                support: support
+            )
         )
 
         completionBridge.note(
@@ -1249,6 +1265,39 @@ private struct DocumentView: View {
             """
         )
         return CompletionBridge.outcome(of: outcome)
+    }
+
+    /// Asks the server to finish the row the reader accepted.
+    ///
+    /// The same lookup the documentation card does, for the same reason — the
+    /// server has to be handed back the object it sent — but after a different
+    /// half of the reply. The card wants the prose; this wants the edits that
+    /// put an `import` at the top of the file, and for
+    /// `typescript-language-server` and sourcekit-lsp those edits exist
+    /// nowhere else. Measured on a real project: a list of 1097 rows carries
+    /// the import on none of them, and the chosen row answers with one when
+    /// asked on its own.
+    ///
+    /// Nothing here is TypeScript's. Deferring `additionalTextEdits` to
+    /// `completionItem/resolve` is what the protocol allows, so this is the
+    /// auto-import for every language whose server takes that option.
+    ///
+    /// A tighter deadline than the card's, because the reader is waiting on a
+    /// keystroke rather than on a selection settling — see
+    /// ``LSPTimeout/completionResolveOnAccept``.
+    private func resolvedCompletion(for item: CodeCompletionItem) async -> CodeCompletionItem? {
+        guard let completion = completionBridge.completion(for: item.resolveToken) else { return nil }
+
+        let outcome = await lsp.resolve(
+            completion,
+            path: document.url.path,
+            timeout: LSPTimeout.completionResolveOnAccept
+        )
+        return completionBridge.item(
+            item,
+            finishedBy: outcome,
+            in: document.currentText as NSString
+        )
     }
 
     /// Temporary, for tracking down a documentation card that stuck on
