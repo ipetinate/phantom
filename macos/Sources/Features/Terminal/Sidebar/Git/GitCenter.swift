@@ -348,6 +348,53 @@ final class GitCenter: ObservableObject {
         perform("Fetch", in: root, arguments: ["fetch", "--prune"], timeout: GitCommand.networkTimeout)
     }
 
+    /// Brings the branch up to date with its own upstream.
+    ///
+    /// `--ff-only`, and that is the difference from ``pull(in:)``. This is the
+    /// button beside the "3 commits to pull" badge, and the reader pressing it
+    /// is saying "I am behind, catch me up" — not "invent a merge commit if my
+    /// history has diverged". A branch that cannot fast-forward has diverged,
+    /// which is a different situation and deserves to be refused with a
+    /// message rather than resolved silently.
+    func updateFromUpstream(in root: String) {
+        perform(
+            "Update Branch",
+            in: root,
+            arguments: ["pull", "--ff-only"],
+            timeout: GitCommand.networkTimeout
+        )
+    }
+
+    /// Merges `ref` into the current branch.
+    ///
+    /// `--no-edit` so the editor does not open behind the app for the message
+    /// git already wrote. A conflict leaves the working tree mid-merge, which
+    /// is the state the conflict resolver in the editor exists for — so a
+    /// failure here is not an error to hide but a screen to go to.
+    func merge(_ ref: String, in root: String) {
+        perform(
+            "Merge \(ref)",
+            in: root,
+            arguments: ["merge", "--no-edit", ref],
+            timeout: GitCommand.networkTimeout
+        )
+    }
+
+    /// Replays the branch's commits on top of `ref`.
+    ///
+    /// **Rewrites this branch's history**, so a branch that has been pushed
+    /// needs a force-push afterwards and anyone who pulled it has to recover.
+    /// The caller is responsible for saying so before calling this — see the
+    /// confirmation in the branch review's header.
+    func rebase(onto ref: String, in root: String) {
+        perform(
+            "Rebase onto \(ref)",
+            in: root,
+            arguments: ["rebase", ref],
+            timeout: GitCommand.networkTimeout
+        )
+    }
+
     func checkout(branch: String, in root: String) {
         perform("Switch Branch", in: root, arguments: ["checkout", branch], timeout: GitCommand.mutateTimeout)
     }

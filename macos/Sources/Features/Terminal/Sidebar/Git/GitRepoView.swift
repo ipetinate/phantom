@@ -251,13 +251,29 @@ struct GitRepoView: View {
     private var syncCounts: some View {
         if let status, status.hasUpstream, status.ahead + status.behind > 0 {
             HStack(spacing: 4) {
+                /// The counts are the buttons. A reader who has just read "3
+                /// commits to pull" is already pointing at the thing they want
+                /// to act on, and making them find the same action three
+                /// levels into a menu is asking them to say it twice.
                 if status.behind > 0 {
-                    SidebarCountBadge(count: status.behind, symbol: "arrow.down")
-                        .help("Commits to pull")
+                    Button {
+                        center.updateFromUpstream(in: root)
+                    } label: {
+                        SidebarCountBadge(count: status.behind, symbol: "arrow.down")
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(status.behind) commit\(status.behind == 1 ? "" : "s") to pull — "
+                        + "click to update this branch")
                 }
                 if status.ahead > 0 {
-                    SidebarCountBadge(count: status.ahead, symbol: "arrow.up")
-                        .help("Commits to push")
+                    Button {
+                        center.push(in: root)
+                    } label: {
+                        SidebarCountBadge(count: status.ahead, symbol: "arrow.up")
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(status.ahead) commit\(status.ahead == 1 ? "" : "s") to push — "
+                        + "click to push")
                 }
             }
         }

@@ -34,6 +34,9 @@ struct GitReviewPanelView: View {
     @State private var expanded: Set<String> = []
     @State private var isPickingTarget = false
 
+    /// The branch a rebase has been asked about and not yet confirmed.
+    @State private var rebaseTarget: String?
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -205,6 +208,7 @@ struct GitReviewPanelView: View {
                 .fixedSize(horizontal: true, vertical: false)
 
             if !scope.isCommit { targetPicker }
+            if !scope.isCommit { integrateMenu(context) }
 
             Spacer(minLength: 0)
         }
@@ -237,6 +241,60 @@ struct GitReviewPanelView: View {
             if center.branches[scope.root] == nil {
                 center.loadBranches(root: scope.root, fetching: false)
             }
+        }
+    }
+
+    /// Brings the target's commits into this branch, the reader choosing how.
+    ///
+    /// Beside the comparison rather than in the repository's menu, because
+    /// this is where somebody learns they are behind: the header says what the
+    /// target is and, right under it, that eight files would conflict. Making
+    /// them find the same action three levels into a menu somewhere else is
+    /// asking them to say it twice.
+    ///
+    /// **Merge and rebase are offered, never chosen for them.** They are not
+    /// two spellings of one act: a merge adds a commit and leaves every
+    /// existing one where it is; a rebase rewrites this branch's history, so a
+    /// branch that has been pushed needs a forced push afterwards and anybody
+    /// who pulled it has to recover their copy. A tool that picked one would
+    /// be picking somebody's team convention for them.
+    @ViewBuilder
+    private func integrateMenu(_ context: GitReviewContext) -> some View {
+        let target = context.target.ref
+
+        Menu {
+            Button("Merge \(target) into this branch") {
+                GitCenter.shared.merge(target, in: scope.root)
+            }
+            Button("Rebase this branch onto \(target)\u{2026}") {
+                rebaseTarget = target
+            }
+        } label: {
+            chip(icon: "arrow.triangle.merge", text: "Update from \(target)")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Brings \(target)'s commits into this branch")
+        .confirmationDialog(
+            "Rebase this branch onto \(rebaseTarget ?? target)?",
+            isPresented: Binding(
+                get: { rebaseTarget != nil },
+                set: { if !$0 { rebaseTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Rebase", role: .destructive) {
+                if let ref = rebaseTarget { GitCenter.shared.rebase(onto: ref, in: scope.root) }
+                rebaseTarget = nil
+            }
+            Button("Cancel", role: .cancel) { rebaseTarget = nil }
+        } message: {
+            Text(
+                """
+                This rewrites the commits on this branch. If it has been pushed, \
+                the next push has to be forced, and anyone who already pulled it \
+                will have to recover their copy.
+                """
+            )
         }
     }
 

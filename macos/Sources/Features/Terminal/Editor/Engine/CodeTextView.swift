@@ -106,7 +106,11 @@ struct CodeTextView: NSViewRepresentable {
 
     /// Ranges to underline, with the colour to use. Supplied as plain
     /// values so the engine never learns what a language server is.
-    var underlines: [(range: NSRange, color: NSColor)] = []
+    /// The diagnostics to draw, each carrying the message the card will show.
+    ///
+    /// The message travels with the range because both end up in one text
+    /// attribute — see ``CodeDiagnosticMark`` for why that matters.
+    var underlines: [(range: NSRange, mark: CodeDiagnosticMark)] = []
 
     /// Asked what to say when the pointer rests on an offset.
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
@@ -735,7 +739,7 @@ struct CodeTextView: NSViewRepresentable {
         /// here: a diagnostic comes from a language server and a line's
         /// history comes from git, and the engine is not allowed to know that
         /// either exists.
-        private var hostUnderlines: [(range: NSRange, color: NSColor)] = []
+        private var hostUnderlines: [(range: NSRange, mark: CodeDiagnosticMark)] = []
         private var hostBlameGhost: String?
 
         /// The wave under each problem. See `CodeSquiggleView`.
@@ -1687,7 +1691,7 @@ struct CodeTextView: NSViewRepresentable {
         /// of this editor is still on screen after an update, and a rule left
         /// under a word that no longer has a problem is a rule nothing would
         /// ever take away.
-        func applyUnderlines(_ underlines: [(range: NSRange, color: NSColor)]) {
+        func applyUnderlines(_ underlines: [(range: NSRange, mark: CodeDiagnosticMark)]) {
             hostUnderlines = underlines
             guard let textView, let storage = textView.textStorage else { return }
 
@@ -1710,7 +1714,7 @@ struct CodeTextView: NSViewRepresentable {
             for underline in wanted {
                 let clipped = NSIntersectionRange(underline.range, full)
                 guard clipped.length > 0 else { continue }
-                storage.addAttribute(.codeDiagnosticUnderline, value: underline.color, range: clipped)
+                storage.addAttribute(.codeDiagnosticUnderline, value: underline.mark, range: clipped)
             }
             storage.endEditing()
 
@@ -2636,13 +2640,59 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         hoverTask = Task { [weak self, hoverFetchDelay] in
             try? await Task.sleep(for: hoverFetchDelay)
             guard !Task.isCancelled else { return }
-            let info = await hoverProvider(offset)
-            guard !Task.isCancelled, let info, !info.isEmpty else { return }
+            let answered = await hoverProvider(offset)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.hoverOffset == offset else { return }
+
+                /// The host's answer, plus whatever the *text* says is wrong
+                /// here. The host resolved its list when the server last
+                /// spoke; the storage has been moving its marks with every
+                /// keystroke since. Merging is what stops an edited file from
+                /// showing a wave with no message behind it.
+                let info = self.withOwnDiagnostics(answered, at: offset)
+                guard !info.isEmpty else { return }
                 self.showHover(info, at: offset)
             }
         }
+    }
+
+    /// Adds the diagnostics the text itself carries to whatever the host
+    /// answered.
+    ///
+    /// Deduplicated on the message, because the two sources overlap: a
+    /// diagnostic with a span is in both, and the same sentence twice in one
+    /// card reads as two problems.
+    private func withOwnDiagnostics(_ answered: CodeHoverInfo?, at offset: Int) -> CodeHoverInfo {
+        var info = answered ?? CodeHoverInfo(problems: [])
+        var seen = Set(info.problems.map(\.message))
+
+        for mark in diagnostics(at: offset) where seen.insert(mark.message).inserted {
+            info.problems.append(CodeHoverInfo.Problem(
+                message: mark.message, source: mark.source, color: mark.color))
+        }
+        return info
+    }
+
+    /// The diagnostics under an offset, read from the text rather than from a
+    /// list.
+    ///
+    /// This is the whole point of putting the mark in an attribute: the
+    /// storage moves it with the text, so the answer is current between the
+    /// reader's edit and the server's next word. The list the host resolved
+    /// when the server last spoke is not.
+    func diagnostics(at offset: Int) -> [CodeDiagnosticMark] {
+        guard let storage = textStorage, offset >= 0, offset < storage.length else { return [] }
+
+        var found: [CodeDiagnosticMark] = []
+        /// The whole run, not just the character under the pointer: an offset
+        /// one past the end of a diagnostic is still on the word it marks as
+        /// far as a reader pointing at it is concerned.
+        let probe = NSRange(location: offset, length: 1)
+        storage.enumerateAttribute(.codeDiagnosticUnderline, in: probe, options: []) { value, _, _ in
+            if let mark = value as? CodeDiagnosticMark { found.append(mark) }
+        }
+        return found
     }
 
     /// Puts the card beside the hovered word.

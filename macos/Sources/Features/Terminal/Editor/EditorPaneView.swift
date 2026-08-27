@@ -419,7 +419,10 @@ private struct DocumentView: View {
     /// looked innocent was scanning the whole file once per diagnostic per
     /// character typed. They are recomputed when the server speaks, which
     /// is the only time they actually change.
-    @State private var underlines: [(range: NSRange, color: NSColor)] = []
+    /// The diagnostics handed to the engine to draw — each carrying the
+    /// message, because both the wave and the card are read from the one text
+    /// attribute they become. See ``CodeDiagnosticMark``.
+    @State private var underlines: [(range: NSRange, mark: CodeDiagnosticMark)] = []
 
     /// A diagnostic with its range already resolved against the document.
     private struct LocatedProblem {
@@ -1130,7 +1133,10 @@ private struct DocumentView: View {
         /// end of file — has something to say and nothing to underline.
         underlines = located.compactMap { found in
             guard found.range.length > 0 else { return nil }
-            return (found.range, found.problem.color)
+            return (found.range, CodeDiagnosticMark(
+                message: found.problem.message,
+                source: found.problem.source,
+                color: found.problem.color))
         }
     }
 

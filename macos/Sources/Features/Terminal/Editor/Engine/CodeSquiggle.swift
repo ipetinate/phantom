@@ -199,3 +199,29 @@ enum CodeSquiggle {
         return path
     }
 }
+
+/// A diagnostic, carried by the text itself.
+///
+/// **A reference type because it rides in a text attribute**, and it holds the
+/// problem rather than only its colour so that everything the editor says
+/// about a diagnostic comes from one moving source.
+///
+/// The alternative was a list of ranges resolved when the server last spoke,
+/// which is what the hover card used to read. `NSTextStorage` moves an
+/// attribute when the text under it moves; a list does not. So between an edit
+/// and the server's next answer the two disagreed — the wave stayed under the
+/// symbol and the card, asked about the same symbol, looked up a range that
+/// had shifted and found nothing. Reported as an error with an underline and
+/// no message, in a file that had been edited since the last diagnostics
+/// arrived.
+final class CodeDiagnosticMark: NSObject {
+    let message: String
+    let source: String?
+    let color: NSColor
+
+    init(message: String, source: String?, color: NSColor) {
+        self.message = message
+        self.source = source
+        self.color = color
+    }
+}

@@ -337,7 +337,18 @@ final class GitReviewCenter: ObservableObject {
             return .failed("This branch changes more than the reviewer will draw (\(bytes) bytes).")
         case .review(let review):
             let branch = review.branch ?? "HEAD"
-            let range = "\(target.ref)...\(branch)"
+            /// Two dots, not three. Three is the **symmetric difference** —
+            /// it includes the commits the target has and the branch does not,
+            /// so the header credited everyone who had worked on `main` since
+            /// the branch left it. Reported: four commits on screen, all by
+            /// one person, under a byline reading "Bernardo Hazin (25), Isac
+            /// Petinate (12), Jefferson Daniel (8), Karina Crispim (7)" — the
+            /// 63 commits of `main...HEAD`, exactly.
+            ///
+            /// `git log a...b` and `git diff a...b` do not mean the same
+            /// thing, which is the whole trap: for `diff` three dots means
+            /// "against the merge base", and that is the right one there.
+            let range = "\(target.ref)..\(branch)"
 
             let context = GitReviewContext(
                 branch: branch,

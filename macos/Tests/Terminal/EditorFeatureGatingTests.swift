@@ -44,8 +44,14 @@ struct EditorFeatureGatingTests {
         return (coordinator, textView)
     }
 
-    private func problem() -> [(range: NSRange, color: NSColor)] {
-        [(range: NSRange(location: 4, length: 1), color: severity)]
+    /// One diagnostic to draw. It carries the message as well as the colour,
+    /// because both the wave and the hover card are read out of the one text
+    /// attribute it becomes — see ``CodeDiagnosticMark``.
+    private func problem() -> [(range: NSRange, mark: CodeDiagnosticMark)] {
+        [(
+            range: NSRange(location: 4, length: 1),
+            mark: CodeDiagnosticMark(message: "cannot find type", source: "ts", color: severity)
+        )]
     }
 
     /// The mark that lands is this editor's own key and **not**
@@ -57,7 +63,8 @@ struct EditorFeatureGatingTests {
         coordinator.applyUnderlines(problem())
 
         let storage = textView.textStorage
-        #expect(storage?.attribute(.codeDiagnosticUnderline, at: 4, effectiveRange: nil) as? NSColor == severity)
+        let mark = storage?.attribute(.codeDiagnosticUnderline, at: 4, effectiveRange: nil)
+        #expect((mark as? CodeDiagnosticMark)?.color == severity)
         #expect(storage?.attribute(.underlineStyle, at: 4, effectiveRange: nil) == nil)
     }
 
@@ -113,8 +120,9 @@ struct EditorFeatureGatingTests {
         coordinator.apply(assistance: off, revision: 2)
         coordinator.apply(assistance: .all, revision: 3)
 
-        #expect(textView.textStorage?.attribute(
-            .codeDiagnosticUnderline, at: 4, effectiveRange: nil) as? NSColor == severity)
+        let mark = textView.textStorage?.attribute(
+            .codeDiagnosticUnderline, at: 4, effectiveRange: nil)
+        #expect((mark as? CodeDiagnosticMark)?.color == severity)
     }
 
     /// The revision is what makes this cheap. An update that changes nothing
@@ -148,7 +156,8 @@ struct EditorFeatureGatingTests {
         coordinator.storage.highlight(
             storage, in: NSRange(location: 0, length: storage.length))
 
-        #expect(storage.attribute(.codeDiagnosticUnderline, at: 4, effectiveRange: nil) as? NSColor == severity)
+        let mark = storage.attribute(.codeDiagnosticUnderline, at: 4, effectiveRange: nil)
+        #expect((mark as? CodeDiagnosticMark)?.color == severity)
     }
 
     // MARK: Auto-import

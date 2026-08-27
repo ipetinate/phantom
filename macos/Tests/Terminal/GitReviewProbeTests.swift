@@ -9,12 +9,23 @@ struct GitReviewProbeTests {
     /// `merge-tree` prints the tree it wrote first, then the paths. That first
     /// line is a path's shape as far as a string is concerned, so it has to be
     /// recognised rather than trusted.
+    /// The fixture used to put the paths *after* a blank line, which is the
+    /// layout the parser assumed and not the one git writes. Transcribed from
+    /// a live `git merge-tree --write-tree --name-only` on git 2.50.1: the
+    /// tree, then the paths, then a blank line, then the commentary.
+    ///
+    /// The invented layout is why the bug survived a test suite. Reading the
+    /// second block counted every conflicted file twice — once for its
+    /// `Auto-merging` line and once for its `CONFLICT` line — and the screen
+    /// reported eight files where git found four.
     @Test func theTreeObjectIsNotReportedAsAConflictedFile() {
         let output = """
             a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
-
             src/main.swift
             README.md
+
+            Auto-merging src/main.swift
+            CONFLICT (content): Merge conflict in src/main.swift
             """
 
         #expect(GitReviewProbe.conflictedPaths(in: output) == ["src/main.swift", "README.md"])
@@ -29,7 +40,7 @@ struct GitReviewProbeTests {
     /// A path with spaces is one path. Splitting on whitespace anywhere here
     /// would report two files that do not exist.
     @Test func aPathWithSpacesSurvives() {
-        let output = "abc\n\nsrc/My Folder/file name.ts"
+        let output = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0\nsrc/My Folder/file name.ts\n"
 
         #expect(GitReviewProbe.conflictedPaths(in: output) == ["src/My Folder/file name.ts"])
     }
