@@ -573,12 +573,9 @@ private struct LanguageServerOverrideForm: View {
                 /// case this whole popover exists for: `vue-language-server`
                 /// on `PATH` used to mean "Uninstall" and nothing else, with
                 /// `@vue/typescript-plugin` unreachable from any screen.
-                HStack(spacing: 8) {
-                    dependencyButton(plan)
-                    if isInstalled { uninstallButton }
-                }
+                dependencyButton(plan)
             } else if isInstalled {
-                uninstallButton
+                manageMenu
             } else {
                 Button {
                     runOperation(.installing)
@@ -602,11 +599,25 @@ private struct LanguageServerOverrideForm: View {
             : "Removes the server and its packages")
     }
 
-    /// Opens the per-package popover, labelled with what is actually wrong.
+    /// The row's one control, whose label **is** the state.
     ///
-    /// "Install" while nothing is there, a count once some of it is — because
-    /// a button that says "Install" beside an installed server reads as a
-    /// mistake, and the reader stops trusting the row.
+    /// There used to be two buttons side by side: a dependency button and
+    /// Uninstall. That was showing mechanism instead of state — the reader
+    /// looking at a row is asking one question, "does this need me", and two
+    /// buttons made them work out the answer. Worse, side by side in a narrow
+    /// pane the two truncated to "Instal…" and "Unin…", which put a
+    /// destructive action one mis-click from a routine one and gave it the
+    /// same visual weight.
+    ///
+    /// So: one primary control, and Uninstall moved inside it. Install and
+    /// Update are what you do now; Uninstall is a rare escape, and a rare
+    /// escape does not belong beside the common act.
+    ///
+    /// | state | control |
+    /// | --- | --- |
+    /// | nothing installed | **Install** |
+    /// | something missing or behind | **Update**, with the count |
+    /// | everything at the pinned version | a check, and **Manage** |
     private func dependencyButton(_ plan: LSPServerDependencyPlan) -> some View {
         let statuses = dependencies.statuses(
             for: plan,
@@ -615,37 +626,78 @@ private struct LanguageServerOverrideForm: View {
         )
         let outstanding = plan.packages.filter { (statuses[$0.id] ?? .unknown).needsInstall }
 
-        let title: String
-        let symbol: String
-        if outstanding.isEmpty {
-            title = "Dependencies"
-            symbol = "checklist"
-        } else if outstanding.count == plan.packages.count {
-            title = "Install"
-            symbol = "arrow.down.circle"
-        } else {
-            /// `verbatim`, because interpolating a number through
-            /// `LocalizedStringKey` formats it for the locale.
-            title = "Install \(outstanding.count) of \(plan.packages.count)"
-            symbol = "arrow.down.circle"
-        }
+        return HStack(spacing: 8) {
+            if outstanding.isEmpty {
+                readyBadge
+                manageMenu
+            } else {
+                Button {
+                    showDependencies = true
+                } label: {
+                    Label {
+                        /// `verbatim`, because interpolating a number through
+                        /// `LocalizedStringKey` formats it for the locale.
+                        Text(verbatim: outstanding.count == plan.packages.count
+                            ? "Install"
+                            : "Update \(outstanding.count) of \(plan.packages.count)")
+                    } icon: {
+                        Image(systemName: "arrow.down.circle")
+                    }
+                }
+                .help(outstanding.count == plan.packages.count
+                    ? "Installs this server and the packages it needs"
+                    : "Some of this server's packages are missing or behind the pinned version")
 
-        return Button {
-            showDependencies = true
-        } label: {
-            Label {
-                Text(verbatim: title)
-            } icon: {
-                Image(systemName: symbol)
+                if isInstalled { manageMenu }
             }
         }
-        .help("This server needs more than one package — choose which to install")
         .popover(isPresented: $showDependencies, arrowEdge: .bottom) {
             ServerDependencyPopover(server: server, plan: plan) { command in
                 showDependencies = false
                 run(.installing, command: command)
             }
         }
+    }
+
+    /// Says the row is finished, without offering anything.
+    ///
+    /// A row that needs nothing should have nothing to press. The check is the
+    /// whole message: an action button here would be a control whose only
+    /// honest label is "there is nothing to do".
+    private var readyBadge: some View {
+        Label {
+            Text("Ready")
+        } icon: {
+            Image(systemName: "checkmark.circle.fill")
+        }
+        .font(.callout)
+        .foregroundStyle(.green)
+        .help("This server and every package it needs are installed at the pinned version")
+    }
+
+    /// Everything that is not the thing to do now: the package list, and
+    /// removal.
+    ///
+    /// A menu rather than a row of buttons, so the destructive item is one
+    /// deliberate step away and the pane's width stops deciding how the
+    /// labels read.
+    private var manageMenu: some View {
+        Menu {
+            if server.dependencyPlan != nil {
+                Button("Packages…") { showDependencies = true }
+            }
+            if server.uninstallCommand != nil {
+                Divider()
+                Button("Uninstall…", role: .destructive) {
+                    showUninstallConfirmation = true
+                }
+            }
+        } label: {
+            Label("Manage", systemImage: "slider.horizontal.3")
+        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(server.dependencyPlan == nil && server.uninstallCommand == nil)
     }
 
     /// Whether the server's binary is on disk, which is the only thing the
@@ -810,6 +862,13 @@ private struct ServerDependencyPopover: View {
 
     @State private var selected: Set<String> = []
 
+    /// Whether the packages that need nothing are offered anyway.
+    ///
+    /// Off by default: the popover's job is to show what needs doing. On, for
+    /// the case that does not fit that — a package that is present and broken,
+    /// where reinstalling is the repair.
+    @State private var showsInstalled = false
+
     /// Seeded once, and only once both probes have answered.
     ///
     /// The popover can open before `npm root -g` returns, and re-seeding on
@@ -817,6 +876,16 @@ private struct ServerDependencyPopover: View {
     /// before the answer arrives would tick every line, which is the same
     /// wrong guess as showing "Install" for an installed server.
     @State private var didSeed = false
+
+    /// The packages that still need something done to them.
+    private var outstanding: [LSPServerDependency] {
+        plan.packages.filter { (statuses[$0.id] ?? .unknown).needsInstall }
+    }
+
+    private func isSatisfied(_ dependency: LSPServerDependency) -> Bool {
+        let status = statuses[dependency.id] ?? .unknown
+        return !status.needsInstall && status != .unknown
+    }
 
     private var statuses: [String: LSPDependencyStatus] {
         dependencies.statuses(
@@ -834,15 +903,27 @@ private struct ServerDependencyPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(verbatim: "Install \(server.displayName)")
+            /// The heading says what the popover is *for*, which is not always
+            /// installing. Opened on a server that needs nothing it used to be
+            /// headed "Install Vue Language Server" over three rows saying
+            /// Installed — a title arguing with its own contents.
+            Text(verbatim: outstanding.isEmpty
+                ? "\(server.displayName) packages"
+                : "Install \(server.displayName)")
                 .font(.headline)
 
             Text(
-                """
-                Ticked by default: what this machine is missing, or has at a \
-                version Phantom did not pin. Nothing here knows which project \
-                you mean — each line says when its package is needed.
-                """
+                outstanding.isEmpty
+                    ? """
+                      Every package this server needs is installed at the version \
+                      Phantom pins. Nothing here knows which project you mean — \
+                      each line says when its package is needed.
+                      """
+                    : """
+                      Ticked by default: what this machine is missing, or has at a \
+                      version Phantom did not pin. Nothing here knows which project \
+                      you mean — each line says when its package is needed.
+                      """
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -852,6 +933,18 @@ private struct ServerDependencyPopover: View {
                 ForEach(plan.packages) { dependency in
                     dependencyRow(dependency)
                 }
+            }
+
+            /// Only when there is something to reveal. A package that is
+            /// present and broken is repaired by reinstalling it, and this is
+            /// the way to that — out of the default view, because it is not
+            /// what the popover is normally about.
+            if !showsInstalled, plan.packages.contains(where: { isSatisfied($0) }) {
+                Button("Reinstall a package that is already installed…") {
+                    showsInstalled = true
+                }
+                .buttonStyle(.link)
+                .font(.caption)
             }
 
             if let note = plan.projectNote {
@@ -875,7 +968,9 @@ private struct ServerDependencyPopover: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text("Nothing selected.")
+                    Text(outstanding.isEmpty
+                        ? "Nothing to install."
+                        : "Nothing selected.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -901,28 +996,61 @@ private struct ServerDependencyPopover: View {
         .onChange(of: lsp.hasProbedInstalls) { _ in seedIfNeeded() }
     }
 
+    /// One package.
+    ///
+    /// **A satisfied package gets a check, not an unticked box.** An empty
+    /// checkbox means "you may choose this", and beside the word "Installed"
+    /// that reads as an omission — the reader sees a row that looks unselected
+    /// and wonders what is wrong with it. Reported exactly that way. Nothing
+    /// is being offered for a package that is already at the pinned version,
+    /// so nothing should look offerable.
+    ///
+    /// The ability to reinstall one is kept, because a package can be present
+    /// and broken, and it lives behind ``showsInstalled`` rather than in the
+    /// default view. What the popover shows first is what needs doing.
     private func dependencyRow(_ dependency: LSPServerDependency) -> some View {
         let status = statuses[dependency.id] ?? .unknown
+        let isSatisfied = !status.needsInstall && status != .unknown
 
-        return Toggle(isOn: binding(for: dependency.id)) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    /// `verbatim` for both: a package name contains `@` and
-                    /// `/`, and a purpose contains `<template>` — the
-                    /// interpolating initializer runs its argument through
-                    /// `LocalizedStringKey`, markdown and all.
-                    Text(verbatim: dependency.spec)
-                        .font(.system(size: 12, design: .monospaced))
-                    statusChip(status)
+        return Group {
+            if isSatisfied, !showsInstalled {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    label(for: dependency, status: status)
                 }
-                Text(verbatim: dependency.purpose)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Toggle(isOn: binding(for: dependency.id)) {
+                    label(for: dependency, status: status)
+                }
+                .toggleStyle(.checkbox)
             }
         }
-        .toggleStyle(.checkbox)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The package's name, its state and what it is for — the same in both
+    /// shapes of row, so a package reads identically whether it is being
+    /// offered or reported.
+    private func label(
+        for dependency: LSPServerDependency,
+        status: LSPDependencyStatus
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                /// `verbatim` for both: a package name contains `@` and
+                /// `/`, and a purpose contains `<template>` — the
+                /// interpolating initializer runs its argument through
+                /// `LocalizedStringKey`, markdown and all.
+                Text(verbatim: dependency.spec)
+                    .font(.system(size: 12, design: .monospaced))
+                statusChip(status)
+            }
+            Text(verbatim: dependency.purpose)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder
