@@ -3,6 +3,22 @@ import Foundation
 /// Runs short-lived commands that enrich sidebar metadata (`git`, `gh`,
 /// `ps`, `lsof`).
 enum ShellCommand {
+    /// How long to wait for the pipe readers once the child has exited.
+    ///
+    /// By then both write ends are closed, so a reader that gets a core
+    /// returns immediately and this costs nothing. What can be slow is the
+    /// *scheduling*: the readers run at utility quality of service, and a
+    /// machine with few cores, several subprocesses in flight and a caller
+    /// spinning on the main thread can leave them waiting seconds for one.
+    ///
+    /// This was two seconds, and a reader that missed it lost its output
+    /// while the exit status still said the command had succeeded — a
+    /// `git worktree list` that printed four hundred bytes arriving as a
+    /// repository with no worktrees. Long enough that only a genuinely
+    /// stuck reader reaches it, and a reader that does is now reported as
+    /// a failure rather than as a command that said nothing.
+    private static let drainGrace: TimeInterval = 15
+
     /// Collects stdout off the polling thread. Draining has to happen
     /// concurrently with the wait: a command whose output overflows the
     /// pipe buffer blocks writing until someone reads, so waiting first
@@ -293,10 +309,10 @@ enum ShellCommand {
             Self.kill(process)
         }
 
-        _ = group.wait(timeout: .now() + 2)
+        let drained = group.wait(timeout: .now() + Self.drainGrace) == .success
 
         return Result(
-            status: timedOut ? nil : process.terminationStatus,
+            status: timedOut || !drained ? nil : process.terminationStatus,
             stdout: String(data: outData.data, encoding: .utf8) ?? "",
             stderr: String(data: errData.data, encoding: .utf8) ?? ""
         )

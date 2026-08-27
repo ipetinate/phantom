@@ -104,9 +104,37 @@ struct WorktreeMutationTests {
             git("rev-parse", "--verify", "--quiet", "refs/heads/\(branch)").succeeded
         }
 
-        func paths() -> [String] {
-            (WorktreeCenter.loadList(commonRoot: root) ?? []).map(\.path)
+        /// Git's own answer, asked again until there is one.
+        ///
+        /// A read that failed used to arrive here as an empty list, and an
+        /// empty list is a claim — "this repository has no checkouts" —
+        /// that git never makes, since the main one is always in it. It
+        /// made every `contains` assertion below a coin flip and let every
+        /// `!contains` one pass without proving anything, both at once and
+        /// both invisibly.
+        ///
+        /// The read fails for a reason that has nothing to do with the
+        /// repository: a mutation forces three more git calls the moment
+        /// it finishes, and a machine with few cores can leave one of
+        /// their pipe readers unscheduled long enough to lose its output.
+        /// So the answer is asked for again, and a repository git never
+        /// answers about fails the test instead of reading as empty.
+        func list() -> [GitWorktree] {
+            for attempt in 1...Self.readAttempts {
+                if let list = WorktreeCenter.loadList(commonRoot: root) { return list }
+                if attempt < Self.readAttempts { Thread.sleep(forTimeInterval: 0.2) }
+            }
+
+            Issue.record("git never answered `worktree list` for \(root)")
+            return []
         }
+
+        func paths() -> [String] { list().map(\.path) }
+
+        /// Enough to outlast a machine too busy to schedule a pipe reader,
+        /// and few enough that a folder git really cannot read fails in
+        /// under a second rather than at some later assertion.
+        private static let readAttempts = 5
     }
 
     // MARK: Harness
@@ -394,7 +422,7 @@ struct WorktreeMutationTests {
         let repo = Repo()
         let path = repo.addWorktree("deleted", branch: "feat/x")
         try FileManager.default.removeItem(atPath: path)
-        #expect(WorktreeCenter.loadList(commonRoot: repo.root)?.contains { $0.isPrunable } == true)
+        #expect(repo.list().contains { $0.isPrunable })
 
         let center = WorktreeCenter.shared
         let succeeded = await mutate { done in
@@ -433,7 +461,7 @@ struct WorktreeMutationTests {
         }
         #expect(unlocked)
         #expect(center.lastError == nil)
-        #expect(WorktreeCenter.loadList(commonRoot: repo.root)?.contains { $0.isLocked } == false)
+        #expect(!repo.list().contains { $0.isLocked })
 
         let removed = await mutate { done in
             center.remove(path: path, force: false, commonRoot: repo.root, completion: done)
