@@ -54,8 +54,16 @@ final class LSPDependencyCenter: ObservableObject {
 
             guard let self else { return }
             self.isProbing = false
-            self.hasProbed = true
-            self.globalVersions = found
+
+            /// A probe that could not run leaves everything as it was. Writing
+            /// `[:]` here is what made a failed read look like a machine with
+            /// nothing installed — see `LSPDependencyCatalog.globalVersions`.
+            /// `hasProbed` stays false until one actually answers, so the pane
+            /// says `.unknown` instead of `.missing`.
+            if let found {
+                self.hasProbed = true
+                self.globalVersions = found
+            }
 
             guard self.probeRequestedAgain else { return }
             self.probeRequestedAgain = false

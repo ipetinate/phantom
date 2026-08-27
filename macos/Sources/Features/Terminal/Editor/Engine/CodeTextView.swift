@@ -2812,10 +2812,32 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
             )
         }
 
-        if window == nil {
-            hoverOffset = nil
-            hideHover()
-        }
+        if window == nil { dismissEverythingFloating() }
+    }
+
+    /// Closes every panel this view owns, because it no longer has a window
+    /// for one to be anchored to.
+    ///
+    /// **Each of these is a real `NSWindow`, added as a child of the editor's
+    /// window.** A child window does not go away because the view that
+    /// positioned it left — nothing in AppKit connects the two — so a panel
+    /// left open here stays on screen, over whatever the reader moves to, for
+    /// the life of the process.
+    ///
+    /// Reported from a demo: typing `cons`, the completion list open, and the
+    /// tab closed before the list was dismissed or a row accepted. The list
+    /// stayed exactly where it was until the app was quit.
+    ///
+    /// This used to close the hover card alone, which is why the card was the
+    /// one that behaved. Anything added here later that opens a window has to
+    /// be closed here too — the rule is the view's, not each panel's: no
+    /// window, no panels.
+    private func dismissEverythingFloating() {
+        hoverOffset = nil
+        hideHover()
+        dismissCompletions()
+        hideDocumentation()
+        hideNotice()
     }
 
     /// The editor's window losing focus closes the card, because the card is a

@@ -377,17 +377,42 @@ enum LSPDependencyCatalog {
     ///
     /// **Blocks on a subprocess**, so it belongs on a background task and
     /// never inside a view's `body` — see `LSPDependencyCenter.refresh()`.
-    static func globalVersions(of packages: [String]) -> [String: String] {
+    ///
+    /// **Nil when the probe could not run, and that is the point.** It used to
+    /// answer `[:]`, which is also what a machine with none of these packages
+    /// answers — so a probe that failed was indistinguishable from a truthful
+    /// "nothing is installed". Reported: right after installing the Vue pair,
+    /// the pane said the server was not installed, would not leave the Install
+    /// state, and offered to install `typescript-language-server`, which had
+    /// been there all along. `npm root -g` had simply not answered inside its
+    /// budget on a machine still busy from the install that had just finished.
+    ///
+    /// A failure to measure is not a measurement. The caller keeps its last
+    /// good answer and stays `.unknown` rather than claiming absence.
+    static func globalVersions(of packages: [String]) -> [String: String]? {
         guard !packages.isEmpty else { return [:] }
         let searchPath = LoginEnvironment.executableSearchPath()
-        guard let npm = LSPProcess.locate("npm", searchPath: searchPath),
-              let output = ShellCommand.run(npm, ["root", "-g"], timeout: 5)
-        else { return [:] }
+        guard let npm = LSPProcess.locate("npm", searchPath: searchPath) else { return nil }
+        guard let output = ShellCommand.run(npm, ["root", "-g"], timeout: probeTimeout)
+        else { return nil }
 
         let root = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !root.isEmpty else { return [:] }
+        guard !root.isEmpty else { return nil }
         return versions(of: packages, inNodeModules: root)
     }
+
+    /// How long `npm root -g` gets to answer.
+    ///
+    /// Twenty seconds, up from five. npm's own startup under a version manager
+    /// is most of a second when the machine is idle, and this probe runs at the
+    /// worst possible moment for it: immediately after an install, with the
+    /// disk still settling. Five seconds was measured being missed there.
+    ///
+    /// Generous rather than tight, because nothing waits on this. It runs on a
+    /// background task and the pane shows the previous answer until it lands —
+    /// so the cost of a long budget is a stale row for a few seconds, and the
+    /// cost of a short one is a row that lies.
+    static let probeTimeout: TimeInterval = 20
 }
 
 extension LSPServerDefinition {
