@@ -23,6 +23,41 @@ final class GitReviewCenter: ObservableObject {
     /// A target the reader chose, which outlives a reload of the review.
     private var chosen: [String: String] = [:]
 
+    /// Which reviews are open as tabs, per window, and which one each window
+    /// is looking at.
+    ///
+    /// Pushed in by every window's `EditorCenter` rather than read out of it.
+    /// The commit list that needs this is drawn deep in the sidebar and is
+    /// handed a repository root, not the window's editor, so this is the seam
+    /// where the two meet.
+    ///
+    /// It is what makes the list's highlight follow the *tab* rather than a
+    /// click the list remembers. With two commit tabs open, the row that
+    /// lights up is the one whose tab is in front, and it changes when the
+    /// reader switches tabs — a list holding its own `@State` would keep
+    /// pointing at the last row clicked, which is the thing that reads as
+    /// broken the moment a second tab exists.
+    ///
+    /// Per window, keyed weakly by the centre that reported it. One shared
+    /// entry would let a second window's empty report erase the first
+    /// window's marks; a weak owner lets a closed window's entry fall away on
+    /// the next report, which a `deinit` could not do — it cannot reach this
+    /// actor.
+    @Published private(set) var reviewTabs: [ObjectIdentifier: OpenReviewTabs] = [:]
+
+    /// One window's review tabs, as that window last reported them.
+    struct OpenReviewTabs {
+        /// The window that reported it, weakly, so a closed one stops
+        /// marking rows.
+        weak var owner: AnyObject?
+
+        /// Every review open in it, by ``GitReviewScope/id``.
+        var open: Set<String>
+
+        /// The one its focused cell is showing.
+        var front: String?
+    }
+
     enum State: Equatable {
         case loading
         case ready(GitReviewContext, GitBranchReview)
@@ -116,6 +151,54 @@ final class GitReviewCenter: ObservableObject {
                 ["branch", "--all", "--format=%(refname:short)"], in: root) ?? ""
             let names = GitReviewProbe.branchNames(in: listed)
             await MainActor.run { self.branches[root] = names }
+        }
+    }
+
+    // MARK: Which reviews are open as tabs
+
+    /// Records what one window has open, replacing whatever it reported
+    /// before and dropping the windows that have closed.
+    ///
+    /// Silent when nothing changed. Every mutation that touches a cell ends
+    /// here — a dirty dot included — and publishing on each of them would
+    /// redraw the Git panel while somebody is typing.
+    func noteReviewTabs(open: [String], front: String?, from owner: AnyObject) {
+        let key = ObjectIdentifier(owner)
+        var next = reviewTabs.filter { $0.key == key || $0.value.owner != nil }
+        next[key] = OpenReviewTabs(owner: owner, open: Set(open), front: front)
+
+        guard !Self.same(next, reviewTabs) else { return }
+        reviewTabs = next
+    }
+
+    /// Whether this review is open as a tab in some window.
+    func isOpen(_ scope: GitReviewScope) -> Bool {
+        live.contains { $0.open.contains(scope.id) }
+    }
+
+    /// Whether it is the tab a window is showing.
+    ///
+    /// Two windows on one repository can both answer yes, for two different
+    /// commits: the list that asks is drawn per window but reaches this
+    /// object knowing only a root. Marking a row in both is the harmless half
+    /// of that trade; the other half — one window's tabs erasing the other's
+    /// — is what keying by window prevents.
+    func isFront(_ scope: GitReviewScope) -> Bool {
+        live.contains { $0.front == scope.id }
+    }
+
+    private var live: [OpenReviewTabs] {
+        reviewTabs.values.filter { $0.owner != nil }
+    }
+
+    private static func same(
+        _ lhs: [ObjectIdentifier: OpenReviewTabs],
+        _ rhs: [ObjectIdentifier: OpenReviewTabs]
+    ) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return lhs.allSatisfy { key, value in
+            guard let other = rhs[key] else { return false }
+            return other.open == value.open && other.front == value.front
         }
     }
 

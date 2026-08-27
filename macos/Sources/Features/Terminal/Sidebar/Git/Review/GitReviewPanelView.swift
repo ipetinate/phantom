@@ -375,32 +375,23 @@ struct GitReviewPanelView: View {
             .foregroundStyle(.quaternary)
     }
 
-    /// The commits, each one a way into its own review.
+    /// The commits, each one a way into its own review, and each saying
+    /// whether it already has a tab.
     @ViewBuilder
     private func commitStrip(_ review: GitBranchReview) -> some View {
         if !review.commits.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(review.commits) { commit in
-                        Button {
-                            onOpenCommit(commit)
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(commit.shortSha)
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundStyle(.tertiary)
-                                Text(commit.subject)
-                                    .font(palette.font(size: 10))
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5)
-                                    .fill(Color.secondary.opacity(0.10)))
-                        }
-                        .buttonStyle(.plain)
-                        .help("\(commit.author) \u{2022} \(commit.relativeDate)")
+                        let opened = GitReviewScope.commit(
+                            root: scope.root, sha: commit.sha, subject: commit.subject)
+
+                        GitReviewCommitChip(
+                            commit: commit,
+                            isFront: center.isFront(opened),
+                            isOpen: center.isOpen(opened),
+                            onOpen: { onOpenCommit(commit) }
+                        )
                     }
                 }
             }
@@ -555,5 +546,71 @@ struct GitReviewPanelView: View {
                 .padding(24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// One commit in the branch review's strip, and whether it is open.
+///
+/// The same three states the Git panel's commit list draws, for the same
+/// reason: with a tab per commit, "open" and "in front" are different facts,
+/// and a strip that showed neither would leave a reader clicking a commit
+/// they already have on screen beside this one.
+private struct GitReviewCommitChip: View {
+    let commit: GitReviewCommit
+
+    /// Whether its tab is the one on screen.
+    let isFront: Bool
+
+    /// Whether it has a tab at all.
+    let isOpen: Bool
+
+    let onOpen: () -> Void
+
+    @ObservedObject private var palette: ThemePalette = .shared
+    @State private var isHovered = false
+
+    private var accent: Color { palette.accent ?? .accentColor }
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 4) {
+                Text(commit.shortSha)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(isFront ? AnyShapeStyle(accent) : AnyShapeStyle(.tertiary))
+
+                Text(commit.subject)
+                    .font(palette.font(size: 10, weight: isFront ? .medium : .regular))
+                    .foregroundStyle(isFront ? .primary : .secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 5).fill(fill))
+            .overlay(
+                /// A ring rather than a second fill: it says "this one has a
+                /// tab" without competing with the fill that says "this one
+                /// is the tab you are on".
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(
+                        isOpen && !isFront ? accent.opacity(0.55) : .clear,
+                        lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(help)
+    }
+
+    private var fill: Color {
+        if isFront { return accent.opacity(0.18) }
+        if isHovered { return Color.secondary.opacity(0.18) }
+        return Color.secondary.opacity(0.10)
+    }
+
+    private var help: String {
+        let who = "\(commit.author) \u{2022} \(commit.relativeDate)"
+        if isFront { return "\(who) \u{2014} the review you are looking at" }
+        if isOpen { return "\(who) \u{2014} already open in a tab" }
+        return who
     }
 }

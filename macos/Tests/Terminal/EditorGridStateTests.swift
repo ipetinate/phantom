@@ -113,7 +113,7 @@ struct EditorGridStateTests {
     @Test func aCellLeftOnTheReviewComesBackOnAFile() throws {
         var tabs = EditorTabSet()
         tabs.open("/a.ts")
-        tabs.selectReview()
+        tabs.openReview(.branch(root: "/repo"))
         let cell = EditorGroup(tabs: tabs, hostsTerminal: false)
         let terminal = group([], hostsTerminal: true)
         let tree = EditorGroupTree.split(.init(
