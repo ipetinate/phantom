@@ -44,7 +44,11 @@ struct EditorGroup: Identifiable, Equatable {
     /// grid — there is no surface to show and no tab to click. The tree
     /// removes these and gives the space to the sibling, which is what makes
     /// closing the last file in a split feel like closing the split.
-    var isVacant: Bool { tabs.isEmpty && !hostsTerminal }
+    ///
+    /// A cell holding only review tabs is **not** vacant. The reviews are its
+    /// content, and pruning it would take the commits the reader is comparing
+    /// with it — the feature failing at the moment it is being used.
+    var isVacant: Bool { tabs.isEmpty && tabs.reviews.isEmpty && !hostsTerminal }
 
     /// Whether this cell has the given file open.
     func holds(_ path: String) -> Bool {
