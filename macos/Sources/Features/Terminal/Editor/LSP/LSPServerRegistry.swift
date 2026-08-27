@@ -321,7 +321,10 @@ enum LSPServerRegistry {
             installHint: "npm i -g @vue/language-server",
             // Volar can't find TypeScript on its own the way an editor
             // that already indexed the project would; without this it
-            // stays silent on every .vue file's <script> block.
+            // stays silent on every .vue file's <script> block. Version 3
+            // reads the same path from `--tsdk` instead, and does not start
+            // serving without it — see
+            // `LSPInitializationOptions.vueTSDKArgument(tsdk:)`.
             initializationOptionsKind: .vueTypeScriptSDK
         ),
         LSPServerDefinition(
@@ -746,6 +749,11 @@ enum LSPServerRegistry {
     /// the document has to arrive announced as `vue` to match it. It also
     /// keeps this process on its own `LSPCenter.Key` — same language, same
     /// root, different command — instead of colliding with the Vue server.
+    ///
+    /// It serves the template too, indirectly: version 3 of the Vue server
+    /// asks *this* process every type-aware question it has, including the
+    /// one that offers a component the file has not imported. See
+    /// `LSPTSServerBridge`.
     static let vueTypeScriptServer = LSPServerDefinition(
         languageID: "vue",
         displayName: "TypeScript (npm)",

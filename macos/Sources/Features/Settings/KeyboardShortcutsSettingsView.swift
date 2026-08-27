@@ -152,7 +152,6 @@ struct KeyboardShortcutsSettingsView: View {
         }
     }
 
-
     /// The engine's shape for a chord, in the shape this window draws.
     ///
     /// Only for drawing: `PhantomShortcut` is what knows that a space is

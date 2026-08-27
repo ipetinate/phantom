@@ -417,6 +417,16 @@ private struct DocumentView: View {
     private struct LocatedProblem {
         let range: NSRange
         let problem: CodeHoverInfo.Problem
+
+        /// The server's own diagnostic, kept beside the located one.
+        ///
+        /// A quick fix is matched on the diagnostic's `code`, and a request
+        /// that omits it comes back with the refactors and **none** of the
+        /// fixes — measured on `typescript-language-server`: eighteen actions
+        /// with the code, seventeen without, and the one that disappeared was
+        /// the only quick fix. Nothing errors. So the caret's diagnostics have
+        /// to travel with a ⌃. request, and this is where they are kept.
+        let diagnostic: LSPDiagnostic
     }
 
     /// Every diagnostic, located once. The underlines are a subset of these
@@ -835,6 +845,9 @@ private struct DocumentView: View {
             completionProvider: { request in await completions(for: request) },
             completionDocProvider: { item in await documentation(for: item) },
             completionResolver: { item in await resolvedCompletion(for: item) },
+            codeActionProvider: { range in await codeActions(in: range) },
+            codeActionResolver: { item in await resolveCodeAction(item) },
+            onRunCodeAction: { item in runCodeAction(item) },
             completionOffersDocumentation: { item in offersDocumentation(item) },
             completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
             reveal: revealRange,
@@ -913,6 +926,15 @@ private struct DocumentView: View {
         .onAppear {
             lsp.didOpen(path: document.url.path, text: document.currentText)
             refreshUnderlines()
+
+            /// A server may ask to edit the buffer rather than answering with
+            /// the edit — `workspace/applyEdit`, which is how a command-driven
+            /// code action reaches the text. Set here because this is the pane
+            /// that owns a document; without it the server runs the command,
+            /// asks, is told "not applied", and nothing reaches the file.
+            lsp.applyEdit = { byFile, label in
+                applyWorkspaceEdits(byFile, named: label ?? "Code Action") > 0
+            }
 
             /// The model is fresh per tab; the preference is not. Read it
             /// back so a reader who chose stacked splits gets stacked
@@ -1083,7 +1105,8 @@ private struct DocumentView: View {
                     message: diagnostic.message,
                     source: diagnostic.source,
                     color: Self.color(for: diagnostic.severity)
-                )
+                ),
+                diagnostic: diagnostic
             )
         }
 
@@ -1099,6 +1122,131 @@ private struct DocumentView: View {
 
     private func position(at offset: Int) -> LSPPosition {
         LSPTextCoordinates.position(at: offset, in: document.currentText as NSString)
+    }
+
+    // MARK: Code actions
+
+    /// The server's own action behind each row the menu is showing.
+    ///
+    /// The same device `CompletionBridge` uses and for the same reason: the
+    /// engine may not hold an `LSPCodeAction`, so it is handed an integer and
+    /// this remembers what the integer meant. Replaced wholesale on each
+    /// request, because a menu that has closed can no longer be resolved from.
+    @State private var codeActionsByID: [Int: LSPCodeAction] = [:]
+
+    /// What ⌃. asks for at `range`.
+    ///
+    /// The diagnostics under the caret travel with the request. Without them
+    /// a server answers with its refactors and none of its quick fixes, and
+    /// answers *successfully* — see ``LocatedProblem/diagnostic``.
+    private func codeActions(in range: NSRange) async -> [CodeActionItem] {
+        let text = document.currentText as NSString
+        let lspRange = LSPRange(
+            start: position(at: range.location),
+            end: position(at: min(NSMaxRange(range), text.length)))
+
+        let touching = located
+            .filter { NSIntersectionRange($0.range, range).length > 0 || $0.range.location == range.location }
+            .map(\.diagnostic)
+
+        let actions = await lsp.codeActions(
+            path: document.url.path, range: lspRange, diagnostics: touching)
+
+        codeActionsByID = Dictionary(
+            actions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        let index = LSPLineIndex(text)
+        return actions.map { Self.item(for: $0, path: document.url.path, using: index) }
+    }
+
+    /// Asks the server to finish a row the reader chose.
+    private func resolveCodeAction(_ item: CodeActionItem) async -> CodeActionItem? {
+        guard let action = codeActionsByID[item.id],
+              let resolved = await lsp.resolveCodeAction(path: document.url.path, action: action)
+        else { return nil }
+
+        codeActionsByID[item.id] = resolved
+        return Self.item(
+            for: resolved,
+            path: document.url.path,
+            using: LSPLineIndex(document.currentText as NSString))
+    }
+
+    /// Carries out a row the engine could not: one that reaches another file,
+    /// or one that is a command.
+    ///
+    /// The protocol fixes the order and it is not a preference — an action
+    /// may carry an edit **and** a command, and a real quick fix from
+    /// `typescript-language-server` does. Applying one and not the other
+    /// performs half of what the reader chose.
+    private func runCodeAction(_ item: CodeActionItem) {
+        guard let action = codeActionsByID[item.id] else { return }
+
+        Task {
+            let finished = action.needsResolve
+                ? await lsp.resolveCodeAction(path: document.url.path, action: action) ?? action
+                : action
+
+            if !finished.edit.isEmpty {
+                applyWorkspaceEdits(finished.edit, named: finished.title)
+            }
+
+            if let invocation = finished.command {
+                _ = await lsp.executeCommand(
+                    path: document.url.path,
+                    command: invocation.command,
+                    arguments: invocation.arguments)
+            }
+        }
+    }
+
+    /// Applies a set of edits keyed by path, the way `rename` does.
+    ///
+    /// This file goes through the document so the change is one undo step and
+    /// the server is told; the others are re-read immediately before being
+    /// written, which is what makes them safe without a revision guard of
+    /// their own.
+    @discardableResult
+    private func applyWorkspaceEdits(_ byFile: [String: [LSPTextEdit]], named name: String) -> Int {
+        var changed = 0
+        for (path, edits) in byFile where !edits.isEmpty {
+            if path == document.url.path {
+                let updated = LSPTextEdit.apply(edits, to: document.currentText)
+                document.replaceText(updated, named: name)
+                lsp.didChange(path: path, text: updated)
+            } else if let existing = try? String(contentsOfFile: path, encoding: .utf8) {
+                let updated = LSPTextEdit.apply(edits, to: existing)
+                try? updated.write(toFile: path, atomically: true, encoding: .utf8)
+            } else {
+                continue
+            }
+            changed += 1
+        }
+        return changed
+    }
+
+    /// One `LSPCodeAction` in the engine's vocabulary.
+    ///
+    /// Only the edits to *this* file are handed over. Anything else makes the
+    /// row non-local, which is what sends it back here to be run.
+    private static func item(
+        for action: LSPCodeAction,
+        path: String,
+        using index: LSPLineIndex
+    ) -> CodeActionItem {
+        let mine = action.edit.first { LSPCodeAction.isSameFile($0.key, as: path) }?.value ?? []
+
+        return CodeActionItem(
+            id: action.id,
+            title: action.title,
+            kind: CodeActionItem.Kind(lspKind: action.kind),
+            isPreferred: action.isPreferred,
+            disabledReason: action.disabledReason,
+            edits: CompletionBridge.edits(mine, using: index)
+                .map { CodeActionEdit(range: $0.range, newText: $0.newText) },
+            touchesOtherFiles: action.edit.keys.contains { !LSPCodeAction.isSameFile($0, as: path) },
+            runsCommand: action.command != nil,
+            mayHaveUnsentEdits: action.needsResolve)
     }
 
     /// What the card shows: the problems reported here, then what the symbol

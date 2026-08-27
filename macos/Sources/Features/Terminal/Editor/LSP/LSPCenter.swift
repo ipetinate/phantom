@@ -38,6 +38,33 @@ final class LSPCenter: ObservableObject {
     /// see `republishDiagnostics(for:)`.
     private var diagnosticsByServer: [String: [Key: [LSPDiagnostic]]] = [:]
 
+    /// The same diagnostics **unparsed**, kept beside the parsed ones.
+    ///
+    /// A quick fix is matched to a diagnostic by fields `LSPDiagnostic` does
+    /// not keep: `typescript-language-server` looks at `code`, and several
+    /// servers carry a private `data`. Re-encoding a parsed diagnostic into
+    /// a `codeAction` request therefore asks for fixes to a problem no
+    /// server recognises — the request succeeds, the refactors come back,
+    /// and every quick fix is missing with nothing reported anywhere.
+    ///
+    /// Per server, for the same reason the parsed ones are: an action
+    /// request may only carry the diagnostics of the server it is sent to.
+    private var rawDiagnosticsByServer: [String: [Key: [LSPValue]]] = [:]
+
+    /// How an edit the *server* asks for reaches the buffer.
+    ///
+    /// `workspace/applyEdit` is a request rather than a notification: the
+    /// server waits to be told whether the edit was applied, and a code
+    /// action whose work happens through `workspace/executeCommand` — which
+    /// is most of what `jdtls` and `kotlin-language-server` offer — sends its
+    /// result back this way and no other. Refusing it, which is what this
+    /// client did before, makes those actions silently do nothing.
+    ///
+    /// Set by whoever owns the document; nil until then, which answers
+    /// "not applied" honestly rather than claiming an edit that went
+    /// nowhere.
+    var applyEdit: (@MainActor ([String: [LSPTextEdit]], String?) async -> Bool)?
+
     /// What each server is doing right now, keyed by (language, workspace
     /// root). See `LSPServerStatus` for why this replaced a plain
     /// "installed or not" flag.
@@ -615,6 +642,7 @@ final class LSPCenter: ObservableObject {
         versions.removeValue(forKey: path)
         diagnostics.removeValue(forKey: path)
         diagnosticsByServer.removeValue(forKey: path)
+        rawDiagnosticsByServer.removeValue(forKey: path)
 
         for key in keys {
             try? servers[key]?.notify("textDocument/didClose", params: [
@@ -873,7 +901,7 @@ final class LSPCenter: ObservableObject {
     /// arguments too, or none. `initializationOptionsKind` is untouched;
     /// an override's own `initializationOptionsJSON`, when present, is
     /// applied later, where a resolution failure can also be reported —
-    /// see `resolvedInitializationOptions`.
+    /// see `resolvedLaunchSettings`.
     static func effectiveDefinition(_ definition: LSPServerDefinition) -> LSPServerDefinition {
         guard let override = LSPServerOverrideStore.override(for: definition.command) else { return definition }
 
@@ -1028,7 +1056,7 @@ final class LSPCenter: ObservableObject {
                     timeout: timeout
                 )
                 noteRequestSucceeded(for: key)
-                lists.append(LSPCompletionList(result, epoch: epoch))
+                lists.append(LSPCompletionList(result, epoch: epoch).attributed(to: key.command))
             } catch {
                 noteRequestFailed(error, for: key)
                 failures.append(Self.failure(from: error))
@@ -1106,7 +1134,12 @@ final class LSPCenter: ObservableObject {
         path: String,
         timeout: TimeInterval
     ) async -> LSPResolveOutcome {
-        guard let key = key(forPath: path), let server = await runningServer(forPath: path) else {
+        /// Back to the server that made the item, not to the file's primary.
+        /// See `LSPCompletion.origin` for what the primary answered instead.
+        let live = await runningServers(forPath: path)
+        guard let command = Self.resolvingCommand(for: item, among: live.map(\.key.command)),
+              let (key, server) = live.first(where: { $0.key.command == command })
+        else {
             return .noServer
         }
 
@@ -1114,7 +1147,7 @@ final class LSPCenter: ObservableObject {
         /// until one is running there is no capability to read — and
         /// answering `.unsupported` for a server that is merely still
         /// starting would tell the caller never to ask again.
-        guard completionSupport(forPath: path)?.resolveProvider == true else { return .unsupported }
+        guard completionSupport[key]?.resolveProvider == true else { return .unsupported }
 
         let name = Self.name(of: path)
         Self.logger.debug("→ completionItem/resolve \(name)")
@@ -1164,6 +1197,29 @@ final class LSPCenter: ObservableObject {
         }
     }
 
+    /// Which server should answer a `completionItem/resolve`.
+    nonisolated static func resolvingCommand(
+        for item: LSPCompletion,
+        among commands: [String]
+    ) -> String? {
+        resolvingCommand(origin: item.origin, among: commands)
+    }
+
+    /// Which server should answer for something one of them produced.
+    ///
+    /// Its own server when that is still running, the file's primary
+    /// otherwise. The fallback covers two real cases and neither is an
+    /// error: a value parsed before this attribution existed, and a server
+    /// that has exited between the answer and the follow-up. Both are better
+    /// served by asking somebody than by refusing.
+    nonisolated static func resolvingCommand(
+        origin: String?,
+        among commands: [String]
+    ) -> String? {
+        guard let origin, commands.contains(origin) else { return commands.first }
+        return origin
+    }
+
     func formatting(path: String, tabSize: Int, insertSpaces: Bool) async -> [LSPTextEdit] {
         guard let key = key(forPath: path), let server = await runningServer(forPath: path) else { return [] }
         do {
@@ -1207,6 +1263,233 @@ final class LSPCenter: ObservableObject {
             let edits = Self.workspaceEdits(from: $0)
             return edits.isEmpty ? nil : edits
         } ?? [:]
+    }
+
+    /// What the file's servers offer to do here, as one menu.
+    ///
+    /// Fanned out and merged rather than asked of the primary, and the
+    /// reason is the same one that made hover silent in half a `.vue`: the
+    /// Vue server offers template actions and nothing for a `<script>`
+    /// block, and `typescript-language-server` offers the opposite. Either
+    /// alone is half a file. Unlike `firstAnswer`, both answers are kept —
+    /// two servers offering different actions is two menu entries, not a
+    /// disagreement to resolve.
+    ///
+    /// - Parameter range: The selection, or an empty range at the caret. A
+    ///   server decides what to offer from it, so a selection is what makes
+    ///   "extract to function" appear at all.
+    /// - Parameter diagnostics: The problems the caller believes are under
+    ///   that range. Used to pick which of a server's **own** unparsed
+    ///   diagnostics travel with the request — see `rawDiagnosticsByServer`,
+    ///   which is the field quick fixes live or die on.
+    func codeActions(
+        path: String,
+        range: LSPRange,
+        diagnostics: [LSPDiagnostic]
+    ) async -> [LSPCodeAction] {
+        let live = await runningServers(forPath: path)
+        guard !live.isEmpty else { return [] }
+
+        let name = Self.name(of: path)
+        Self.logger.debug("→ codeAction \(name) servers=\(live.count, privacy: .public)")
+
+        let started = Date()
+        var lists: [[LSPCodeAction]] = []
+
+        for (key, server) in live {
+            /// Asked unless the server refused outright. A server that
+            /// declared nothing is one that may register the feature later
+            /// through `client/registerCapability` — acknowledged here and
+            /// not recorded — and skipping it would skip it forever.
+            let capability = LSPCodeActionCapability(serverCapabilities[key])
+            guard capability.isWorthAsking else { continue }
+
+            let params: LSPValue = [
+                "textDocument": ["uri": .string(Self.uri(path))],
+                "range": range.value,
+                "context": LSPCodeAction.context(
+                    diagnostics: rawDiagnostics(for: path, from: key, matching: diagnostics)
+                ),
+            ]
+
+            do {
+                let result = try await server.request(
+                    "textDocument/codeAction",
+                    params: params,
+                    timeout: LSPTimeout.codeAction
+                )
+                noteRequestSucceeded(for: key)
+                lists.append(LSPCodeAction.list(
+                    from: result,
+                    canResolve: capability.resolveProvider,
+                    origin: key.command
+                ))
+            } catch {
+                noteRequestFailed(error, for: key)
+
+                /// A cancelled request is the reader having moved on — the
+                /// menu they asked for is not the menu they want any more,
+                /// and asking the next server is work for nobody. Every
+                /// other failure falls through, so one server being down
+                /// does not cost the file the other's actions.
+                if Self.failure(from: error) == .cancelled { return [] }
+            }
+        }
+
+        let merged = LSPCodeAction.merged(lists)
+        Self.logger.debug(
+            """
+            ← codeAction actions=\(merged.count, privacy: .public) \
+            from=\(lists.count, privacy: .public)/\(live.count, privacy: .public) \
+            in \(Self.milliseconds(since: started), privacy: .public)ms
+            """
+        )
+        return merged
+    }
+
+    /// Fills in the edit a server left out of the menu.
+    ///
+    /// Required rather than an optimisation: the protocol lets a server send
+    /// a title and no work at all, and compute the edit only for the action
+    /// the reader chose. Applying such an action unresolved does nothing —
+    /// there is no partial behaviour to fall back on, which is why this has a
+    /// far more generous budget than the completion resolve on accept.
+    ///
+    /// Back to the server that offered it, never the primary. See
+    /// `LSPCompletion.origin` for the measurement that rule came from.
+    ///
+    /// - Returns: The action with its work filled in, or nil when the server
+    ///   refused, timed out, or has no resolve to offer. Nil means "apply
+    ///   what you already had", which for an action with no work is
+    ///   correctly nothing.
+    func resolveCodeAction(path: String, action: LSPCodeAction) async -> LSPCodeAction? {
+        let live = await runningServers(forPath: path)
+        guard let command = Self.resolvingCommand(origin: action.origin, among: live.map(\.key.command)),
+              let (key, server) = live.first(where: { $0.key.command == command })
+        else {
+            return nil
+        }
+
+        guard LSPCodeActionCapability(serverCapabilities[key]).resolveProvider else { return nil }
+
+        do {
+            /// Echoed back exactly as it arrived — see `LSPCodeAction.raw`.
+            let result = try await server.request(
+                "codeAction/resolve",
+                params: action.raw,
+                timeout: LSPTimeout.codeActionResolve
+            )
+            noteRequestSucceeded(for: key)
+            return action.merging(resolved: result)
+        } catch {
+            noteRequestFailed(error, for: key)
+            Self.logger.debug(
+                "← codeAction/resolve \(Self.failure(from: error).summary, privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    /// Runs a command a code action asked for.
+    ///
+    /// The work happens on the server, and what comes back is not a return
+    /// value but a `workspace/applyEdit` request in the other direction —
+    /// see `applyEdit`. So a `true` here means the server accepted the
+    /// command, not that the buffer changed.
+    ///
+    /// Sent to the servers that **advertised** this command at `initialize`,
+    /// and to every server only when none advertised a list at all. That
+    /// filter is what stands in for an origin: the caller has a command name
+    /// and not the action it came from, and asking a server about a command
+    /// it never claimed is a guaranteed error with a side effect on whoever
+    /// answers next.
+    ///
+    /// Stops at the first server that accepts, so a command two servers both
+    /// claim runs once.
+    func executeCommand(path: String, command: String, arguments: [LSPValue]) async -> Bool {
+        let live = await runningServers(forPath: path)
+        guard !live.isEmpty else { return false }
+
+        let claimed = live.filter { key, _ in
+            let advertised = LSPCodeAction.executeCommands(in: serverCapabilities[key])
+            return advertised.isEmpty || advertised.contains(command)
+        }
+
+        let params: LSPValue = [
+            "command": .string(command),
+            "arguments": .array(arguments),
+        ]
+
+        for (key, server) in (claimed.isEmpty ? live : claimed) {
+            do {
+                _ = try await server.request(
+                    "workspace/executeCommand",
+                    params: params,
+                    timeout: LSPTimeout.deliberate
+                )
+                noteRequestSucceeded(for: key)
+                return true
+            } catch {
+                noteRequestFailed(error, for: key)
+                appendLog("[command] \(command): \(Self.failure(from: error).summary)", for: key)
+            }
+        }
+
+        return false
+    }
+
+    /// A server's own diagnostics, unparsed, narrowed to the ones the caller
+    /// named.
+    ///
+    /// Matched on `LSPDiagnostic.id` — line, character and message — because
+    /// that is the only identity the parsed form has and it is stable across
+    /// the parse. An empty request is answered empty rather than with
+    /// everything: no diagnostics means the reader asked for refactors, and
+    /// handing a server the whole file's problems would change what it
+    /// offers.
+    private func rawDiagnostics(
+        for path: String,
+        from key: Key,
+        matching wanted: [LSPDiagnostic]
+    ) -> [LSPValue] {
+        guard !wanted.isEmpty else { return [] }
+
+        let wantedIDs = Set(wanted.map(\.id))
+        return (rawDiagnosticsByServer[path]?[key] ?? []).filter { raw in
+            guard let parsed = LSPDiagnostic(raw) else { return false }
+            return wantedIDs.contains(parsed.id)
+        }
+    }
+
+    /// Answers a request the *server* made, for the one request this app has
+    /// something to say about.
+    ///
+    /// Everything else falls through to the transport's own housekeeping
+    /// answers. A server request that goes unanswered is a hang, not a
+    /// dropped message — see `LSPProcess.answer(_:)`.
+    private func answerServerRequest(
+        _ request: LSPRequest
+    ) async -> Result<LSPValue, LSPResponseError> {
+        guard request.method == "workspace/applyEdit" else {
+            return LSPProcess.defaultAnswer(to: request)
+        }
+
+        let edits = Self.workspaceEdits(from: request.params?["edit"] ?? .null)
+        guard !edits.isEmpty, let applyEdit else {
+            return .success(Self.applyEditResult(applied: false))
+        }
+
+        let applied = await applyEdit(edits, request.params?["label"]?.stringValue)
+        return .success(Self.applyEditResult(applied: applied))
+    }
+
+    /// The reply `workspace/applyEdit` requires.
+    ///
+    /// The field is not optional and its absence is not read as `false`: a
+    /// server that cannot find `applied` treats the exchange as failed, and
+    /// several then stop offering the action that produced it.
+    nonisolated static func applyEditResult(applied: Bool) -> LSPValue {
+        ["applied": .bool(applied)]
     }
 
     // MARK: Plumbing
@@ -1598,8 +1881,8 @@ final class LSPCenter: ObservableObject {
         consecutiveTimeouts[key] = 0
         status[key] = .starting
 
-        let initializationOptions: LSPValue?
-        switch await resolvedInitializationOptions(
+        let launch: LSPLaunchSettings
+        switch await resolvedLaunchSettings(
             for: definition,
             key: key,
             baseCommand: baseCommand,
@@ -1609,16 +1892,23 @@ final class LSPCenter: ObservableObject {
             status[key] = .failedToStart(reason: reason)
             return nil
         case .success(let value):
-            initializationOptions = value
+            launch = value
         }
 
-        let process = LSPProcess(definition: definition)
+        let process = LSPProcess(
+            definition: definition,
+            extraArguments: launch.arguments,
+            requestHandler: { [weak self] request in
+                guard let self else { return LSPProcess.defaultAnswer(to: request) }
+                return await self.answerServerRequest(request)
+            }
+        )
         do {
             try await process.start(workingDirectory: key.root)
             let result = try await process.initialize(
                 rootURI: Self.uri(key.root),
                 capabilities: Self.clientCapabilities,
-                initializationOptions: initializationOptions
+                initializationOptions: launch.initializationOptions
             )
             serverCapabilities[key] = result["capabilities"]
             completionSupport[key] = LSPCompletionCapability(result["capabilities"])
@@ -1647,9 +1937,16 @@ final class LSPCenter: ObservableObject {
         return process
     }
 
-    /// `initializationOptions` to send: a user override's raw JSON when
-    /// there is one, else the language's own resolution — Vue's `tsdk`
-    /// lookup today, nothing for everyone else.
+    /// What this workspace adds to one server's launch: the
+    /// `initializationOptions` to send, and the arguments to append.
+    ///
+    /// The options are a user override's raw JSON when there is one, else
+    /// the language's own resolution — Vue's `tsdk` lookup today, nothing
+    /// for everyone else. The arguments are the language's alone: an
+    /// override replaces what the server is *told*, not how it is *started*,
+    /// and for the Vue server the `--tsdk` argument is the difference
+    /// between a server that answers and one that hangs. See
+    /// `LSPInitializationOptions.vueTSDKArgument(tsdk:)`.
     ///
     /// The override lookup uses the *default* command for this language
     /// rather than `definition.command` — `definition` here may already be
@@ -1674,17 +1971,32 @@ final class LSPCenter: ObservableObject {
     /// redirect which code the server loads. Wiring them in is a change to
     /// what an approval *means*, so it belongs with a prompt that shows them
     /// and a `LanguageTrustStore.currentRecordVersion` bump, not here.
-    private func resolvedInitializationOptions(
+    private func resolvedLaunchSettings(
         for definition: LSPServerDefinition,
         key: Key,
         baseCommand: String,
         searchPath: String
-    ) async -> LSPOutcome<LSPValue?> {
+    ) async -> LSPOutcome<LSPLaunchSettings> {
+        /// Resolved once, before the override is read, because the same path
+        /// is needed twice — as the option version 2 of the Vue server reads
+        /// and as the argument version 3 reads — and the lookup can shell out
+        /// to `npm root -g` on a project without its own TypeScript.
+        let vueTSDK: LSPOutcome<String>? = await resolvedVueTypeScriptSDK(
+            for: definition,
+            root: key.root,
+            searchPath: searchPath
+        )
+        let vueArguments = (vueTSDK.flatMap { outcome -> String? in
+            guard case .success(let tsdk) = outcome else { return nil }
+            return LSPInitializationOptions.vueTSDKArgument(tsdk: tsdk)
+        }).map { [$0] } ?? []
+
         if let override = LSPServerOverrideStore.override(for: baseCommand) {
             let raw = override.initializationOptionsJSON.trimmingCharacters(in: .whitespacesAndNewlines)
             if !raw.isEmpty {
                 switch Self.parseInitializationOptions(raw) {
-                case .success(let value): return .success(value)
+                case .success(let value):
+                    return .success(LSPLaunchSettings(initializationOptions: value, arguments: vueArguments))
                 case .failure(let reason): return .failure(reason)
                 }
             }
@@ -1692,15 +2004,16 @@ final class LSPCenter: ObservableObject {
 
         switch definition.initializationOptionsKind {
         case .none:
-            return .success(nil)
+            return .success(LSPLaunchSettings())
         case .vueTypeScriptSDK:
-            let root = key.root
-            let resolved = await Task.detached(priority: .utility) {
-                LSPInitializationOptions.vueTypeScriptSDK(root: root, searchPath: searchPath)
-            }.value
-            switch resolved {
-            case .success(let tsdk): return .success(LSPInitializationOptions.vueValue(tsdk: tsdk))
+            switch vueTSDK {
+            case .success(let tsdk):
+                return .success(LSPLaunchSettings(
+                    initializationOptions: LSPInitializationOptions.vueValue(tsdk: tsdk),
+                    arguments: vueArguments
+                ))
             case .failure(let reason): return .failure(reason)
+            case nil: return .failure(LSPInitializationOptions.missingTypeScriptMessage)
             }
 
         case .vueTypeScriptPlugin:
@@ -1714,10 +2027,27 @@ final class LSPCenter: ObservableObject {
                 LSPInitializationOptions.vueTypeScriptPlugin(root: root, searchPath: searchPath)
             }.value
             switch resolved {
-            case .success(let value): return .success(value)
+            case .success(let value): return .success(LSPLaunchSettings(initializationOptions: value))
             case .failure(let reason): return .failure(reason)
             }
         }
+    }
+
+    /// Volar's TypeScript for this workspace, or nil for a server that does
+    /// not need one.
+    ///
+    /// Split out so the lookup — which touches the filesystem and may run
+    /// `npm` — happens once per launch no matter how many places want the
+    /// path, and off the main actor either way.
+    private func resolvedVueTypeScriptSDK(
+        for definition: LSPServerDefinition,
+        root: String,
+        searchPath: String
+    ) async -> LSPOutcome<String>? {
+        guard definition.initializationOptionsKind == .vueTypeScriptSDK else { return nil }
+        return await Task.detached(priority: .utility) {
+            LSPInitializationOptions.vueLoadableTypeScriptSDK(root: root, searchPath: searchPath)
+        }.value
     }
 
     /// Not private, because a tool that writes this field has to accept
@@ -1759,10 +2089,10 @@ final class LSPCenter: ObservableObject {
         switch notification.method {
         case "textDocument/publishDiagnostics":
             guard let uri = notification.params?["uri"]?.stringValue else { return }
-            let reported = (notification.params?["diagnostics"]?.arrayValue ?? [])
-                .compactMap(LSPDiagnostic.init)
+            let raw = notification.params?["diagnostics"]?.arrayValue ?? []
             let path = URL(string: uri)?.path ?? uri
-            diagnosticsByServer[path, default: [:]][key] = reported
+            diagnosticsByServer[path, default: [:]][key] = raw.compactMap(LSPDiagnostic.init)
+            rawDiagnosticsByServer[path, default: [:]][key] = raw
             republishDiagnostics(for: path)
 
         /// Where a server says the thing that answers "why are there no
@@ -1779,8 +2109,115 @@ final class LSPCenter: ObservableObject {
                 appendLog(line, for: key)
             }
 
+        /// The Vue server asking `tsserver` something LSP has no request
+        /// for. Answered off this call — the relay waits on another server,
+        /// and `handle` is on the main actor.
+        ///
+        /// The task is unstructured on purpose. It must outlive whatever
+        /// provoked the question: a completion abandoned by the next
+        /// keystroke is cancelled, and a relay cancelled with it would leave
+        /// the Vue server waiting on an answer that never comes. See
+        /// `LSPTSServerBridge`.
+        case LSPTSServerBridge.requestMethod:
+            guard let request = LSPTSServerBridge.request(in: notification) else { return }
+            Task { [weak self] in await self?.relayToTypeScript(request, from: key) }
+
         default:
             return
+        }
+    }
+
+    /// Carries one `tsserver` command from the Vue server to the process
+    /// that can run it, and the answer back.
+    ///
+    /// **Always answers.** A missing peer, a refusal, a timeout — each ends
+    /// in a null body rather than in silence, because silence is what the
+    /// Vue server cannot recover from: it caches the pending answer per file
+    /// and will never ask again. See `LSPTSServerBridge`.
+    private func relayToTypeScript(_ request: LSPTSServerBridge.Request, from key: Key) async {
+        var body = LSPValue.null
+
+        if let (peerKey, peer) = await typeScriptPeer(of: key) {
+            if let file = LSPTSServerBridge.fileName(in: request) {
+                await waitForAnnouncement(of: file, to: peerKey)
+            }
+
+            do {
+                let result = try await peer.request(
+                    "workspace/executeCommand",
+                    params: LSPTSServerBridge.executeCommandParams(for: request),
+                    timeout: LSPTimeout.tsserverRelay
+                )
+                body = LSPTSServerBridge.body(of: result)
+            } catch {
+                /// Logged rather than swallowed: an empty template completion
+                /// list has this as one of its causes, and it is the only one
+                /// that leaves no other trace.
+                appendLog("[relay] \(request.command): \(Self.failure(from: error).summary)", for: key)
+            }
+        } else {
+            appendLog("[relay] \(request.command): no TypeScript server for this workspace", for: key)
+        }
+
+        guard let vue = servers[key] else { return }
+        try? vue.notify(
+            LSPTSServerBridge.responseMethod,
+            params: LSPTSServerBridge.responseParams(id: request.id, body: body)
+        )
+    }
+
+    /// The other half of a `.vue` — the process that loads
+    /// `@vue/typescript-plugin` and therefore knows the `_vue:` commands.
+    ///
+    /// Named from the registry rather than found by scanning the running
+    /// servers, so the pairing is a stated fact and not a coincidence of
+    /// what happens to be up. `effectiveDefinition` because a user override
+    /// changes the command, and the key is keyed on the command after it.
+    ///
+    /// Waits, briefly, when the peer is still starting: both halves are
+    /// launched together by `didOpen`, and the Vue server asks its first
+    /// question the moment anything is requested of it — often before the
+    /// second process has finished its handshake.
+    private func typeScriptPeer(of key: Key) async -> (key: Key, server: LSPProcess)? {
+        let peer = Self.effectiveDefinition(LSPServerRegistry.vueTypeScriptServer)
+        let peerKey = Key(languageID: peer.languageID, root: key.root, command: peer.command)
+        guard peerKey != key else { return nil }
+
+        if servers[peerKey] == nil {
+            /// Bounded, and cancellation breaks out — `try?` on the sleep
+            /// swallows it, which would otherwise spin the remaining
+            /// iterations without sleeping.
+            for _ in 0..<60 {
+                guard starting.contains(peerKey), !Task.isCancelled else { break }
+                try? await Task.sleep(for: .milliseconds(250))
+                if servers[peerKey] != nil { break }
+            }
+        }
+
+        return servers[peerKey].map { (key: peerKey, server: $0) }
+    }
+
+    /// Holds a relay until the peer has been told the file exists.
+    ///
+    /// Both halves of a `.vue` are announced by the same `didOpen`, in
+    /// parallel tasks, so the peer's `textDocument/didOpen` can still be in
+    /// flight when the Vue server asks its first question about the file.
+    /// Asking about a document that server has not opened answers "No
+    /// Project." — and the Vue server **caches that per file**, then serves
+    /// the file for the rest of the session from a language service that
+    /// never read the project's `tsconfig`. The failure is silent and
+    /// permanent, which is what makes it worth waiting for.
+    ///
+    /// Waits only for a document this app knows is open. A path it has never
+    /// opened will never be announced, and waiting for it would trade a
+    /// silent degradation for a stall.
+    private func waitForAnnouncement(of path: String, to peerKey: Key) async {
+        guard openDocuments.contains(path) else { return }
+
+        for _ in 0..<20 {
+            if announced[path]?.contains(peerKey) == true { return }
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(for: .milliseconds(50))
         }
     }
 
@@ -1900,6 +2337,7 @@ final class LSPCenter: ObservableObject {
         /// the other's live ones, indistinguishable, and nothing ever removes
         /// them.
         for path in diagnosticsByServer.keys {
+            rawDiagnosticsByServer[path]?.removeValue(forKey: key)
             guard diagnosticsByServer[path]?.removeValue(forKey: key) != nil else { continue }
             republishDiagnostics(for: path)
         }
@@ -2134,6 +2572,18 @@ struct LSPCompletion: Identifiable, Equatable {
     /// resolve that answers about a list nobody is looking at any more. See
     /// `isCurrent(inEpoch:)`.
     let epoch: Int
+
+    /// Which of the file's servers offered this item, by command.
+    ///
+    /// Bookkeeping too, and it exists because a `.vue` file's list is two
+    /// servers' answers concatenated. `completionItem/resolve` has to go
+    /// back to the one that made the item: measured, sending
+    /// `typescript-language-server`'s item to the Vue server answers
+    /// `-32603 Cannot read properties of undefined`, so a `<script setup>`
+    /// auto-import was accepted with no import written. Filled in by
+    /// `LSPCompletionList.attributed(to:)` after parsing, so nothing on the
+    /// wire path has to know about it.
+    var origin: String?
 
     /// Stable within one list, which is all identity has to be here: a popup
     /// keeps its selection across a re-filter of the same answer and
@@ -2388,6 +2838,22 @@ struct LSPCompletionList: Equatable {
         self.itemDefaults = itemDefaults
     }
 
+    /// The same list, with every item marked as this server's.
+    ///
+    /// Applied before `merged(_:)` flattens the lists, which is the only
+    /// moment the answers are still told apart. See `LSPCompletion.origin`.
+    func attributed(to command: String) -> LSPCompletionList {
+        LSPCompletionList(
+            items: items.map {
+                var item = $0
+                item.origin = command
+                return item
+            },
+            isIncomplete: isIncomplete,
+            itemDefaults: itemDefaults
+        )
+    }
+
     /// A server answers with a bare array or with `{ items: [...] }`;
     /// handling only one of them silently offers nothing on half of them.
     ///
@@ -2546,7 +3012,69 @@ extension LSPCenter {
     /// promised here live in this file. It also keeps the block assertable
     /// without a process anywhere near the test.
     nonisolated static let clientCapabilities: LSPValue = LSPProcess.defaultCapabilities
-        .merging(["textDocument": ["completion": completionCapabilities]])
+        .merging([
+            "textDocument": [
+                "completion": completionCapabilities,
+                "codeAction": codeActionCapabilities,
+            ],
+            "workspace": [
+                /// Claimed because it is now answered — see
+                /// `LSPCenter.applyEdit`. A server that reads this as `false`
+                /// will not offer the actions whose result arrives that way,
+                /// and a server told `true` by a client that then refuses the
+                /// request is worse: the action runs and its result is
+                /// dropped.
+                "applyEdit": true,
+                "executeCommand": ["dynamicRegistration": false],
+            ],
+        ])
+
+    /// The code-action half.
+    ///
+    /// `codeActionLiteralSupport` is the load-bearing one. Without it a
+    /// server must fall back to the pre-3.8 `Command` form — a title and a
+    /// command name, no kind, no edit — so the menu cannot be grouped, the
+    /// preferred action cannot be marked, and nothing can be previewed
+    /// before it runs.
+    ///
+    /// The kinds are sent as the protocol's own hierarchical strings, empty
+    /// string included: it is the specification's way of saying "and kinds
+    /// this client has not heard of", which is what keeps a server's own
+    /// `refactor.rewrite.something` from being filtered out by a list
+    /// written before it existed.
+    ///
+    /// `resolveSupport` lists exactly what `LSPCodeAction.merging(resolved:)`
+    /// takes, and no more. A property listed here is a promise that its
+    /// absence from the first answer is fine, so listing one nothing reads
+    /// invites a server to withhold it.
+    nonisolated static let codeActionCapabilities: LSPValue = [
+        "dynamicRegistration": false,
+        "codeActionLiteralSupport": [
+            "codeActionKind": ["valueSet": .array(codeActionKinds.map(LSPValue.string))],
+        ],
+        "isPreferredSupport": true,
+        "disabledSupport": true,
+        "dataSupport": true,
+        "resolveSupport": ["properties": ["edit", "command"]],
+        /// Not claimed: a change annotation asks the client to confirm each
+        /// edit of a group separately, and nothing here does. A server told
+        /// otherwise may send an edit that expects a confirmation it will
+        /// never get.
+        "honorsChangeAnnotations": false,
+    ]
+
+    /// The kinds this client understands, in the protocol's spelling.
+    nonisolated static let codeActionKinds = [
+        "",
+        "quickfix",
+        "refactor",
+        "refactor.extract",
+        "refactor.inline",
+        "refactor.rewrite",
+        "source",
+        "source.organizeImports",
+        "source.fixAll",
+    ]
 
     /// The completion half, kept separate so a test can read it directly.
     ///

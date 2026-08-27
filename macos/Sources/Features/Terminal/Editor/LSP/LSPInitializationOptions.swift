@@ -75,9 +75,72 @@ enum LSPInitializationOptions {
         return fileManager.fileExists(atPath: candidate) ? candidate : nil
     }
 
+    /// The file every Vue server loads out of a `tsdk`, whichever way it was
+    /// told where the directory is.
+    static let tsdkEntryPoint = "typescript.js"
+
+    /// The reason a directory that exists is still not a usable `tsdk`.
+    ///
+    /// Names TypeScript 7 because that is what it is, on every machine this
+    /// fires on today: `npm i -g typescript` installs the native rewrite,
+    /// whose `lib` holds `tsc.js` and a version file and nothing a language
+    /// server can load. See `TypeScriptToolchain`.
+    static let unloadableTypeScriptMessage = """
+    The TypeScript found for this project has no library for a language \
+    server to load — TypeScript 7 is the native rewrite and ships none. \
+    Install one the Vue server can use with "npm i -D typescript@6" in the \
+    project.
+    """
+
+    /// The `tsdk` a Vue server can actually load, or the reason there is
+    /// none.
+    ///
+    /// The extra check exists because the path became a **launch argument**.
+    /// A directory that is there but empty of `typescript.js` used to make
+    /// the server report its own failure during `initialize`; version 3
+    /// resolves the file while it is still starting, so the same directory
+    /// now kills the process before it says anything at all. Answering here
+    /// keeps the sentence the reader needs.
+    static func vueLoadableTypeScriptSDK(
+        root: String,
+        searchPath: String,
+        fileManager: FileManager = .default
+    ) -> LSPOutcome<String> {
+        switch vueTypeScriptSDK(root: root, searchPath: searchPath, fileManager: fileManager) {
+        case .failure(let reason):
+            return .failure(reason)
+        case .success(let tsdk):
+            let entry = (tsdk as NSString).appendingPathComponent(tsdkEntryPoint)
+            guard fileManager.fileExists(atPath: entry) else {
+                return .failure(unloadableTypeScriptMessage)
+            }
+            return .success(tsdk)
+        }
+    }
+
     /// The value to send as `initializationOptions`, for a resolved `tsdk`.
     static func vueValue(tsdk: String) -> LSPValue {
         ["typescript": ["tsdk": .string(tsdk)]]
+    }
+
+    /// The same `tsdk`, on the command line, because version 3 of the Vue
+    /// server reads it **only** from there.
+    ///
+    /// Measured against `@vue/language-server` 3.3.10 and 3.3.11: its entry
+    /// point scans `process.argv` for `--tsdk=`, and falls back to
+    /// `require('typescript')` when there is none. That fallback resolves to
+    /// the peer copy npm installs beside the server, which today is
+    /// TypeScript 7 — the native rewrite, which has no `tsserver` for the
+    /// server to drive. The result is not an error: `initialize` answers
+    /// normally, and then every request hangs unanswered, because the server
+    /// never gets as far as asking `tsserver` which project the file belongs
+    /// to. Sending `initializationOptions.typescript.tsdk`, which version 2
+    /// read, changes nothing there — version 3 never looks at it.
+    ///
+    /// Both are sent. The option is what version 2 reads and the argument is
+    /// what version 3 reads, and a machine can have either installed.
+    static func vueTSDKArgument(tsdk: String) -> String {
+        "--tsdk=\(tsdk)"
     }
 
     /// Shown when a `.vue` is opened in a project whose TypeScript cannot

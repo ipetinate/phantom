@@ -460,7 +460,12 @@ struct LanguageTrustGatePlacementTests {
         /// belongs to this function alone.
         let start = try #require(center.range(of: "for key: Key,"))
         let body = center[start.upperBound...]
-        let construction = try #require(body.range(of: "LSPProcess(definition:"))
+        /// `LSPProcess(` alone, for the reason the paragraph above gives
+        /// about the other anchor. This one was `LSPProcess(definition:` and
+        /// broke the day that call wrapped its arguments across lines — the
+        /// gate had not moved, the formatting had. An anchor that includes a
+        /// parameter name is an anchor that fails for a reformat.
+        let construction = try #require(body.range(of: "LSPProcess("))
         let gate = try #require(body.range(of: "LanguageTrustGate.allowsLaunch"))
 
         #expect(

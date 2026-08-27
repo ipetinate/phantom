@@ -31,6 +31,19 @@ struct CodeActionItem: Identifiable, Equatable, Sendable {
         case refactor
         case source
         case other
+
+        /// The protocol's kind, which is a dotted string and open-ended:
+        /// `quickfix`, `refactor.extract.function`, `source.organizeImports.ts`.
+        /// Only the first segment decides the group, so a kind nobody has
+        /// heard of still lands beside its relatives instead of at the bottom.
+        init(lspKind: String?) {
+            switch lspKind?.split(separator: ".").first.map(String.init) {
+            case "quickfix": self = .quickFix
+            case "refactor": self = .refactor
+            case "source": self = .source
+            default: self = .other
+            }
+        }
     }
 
     /// The producer's handle for this row, opaque here.

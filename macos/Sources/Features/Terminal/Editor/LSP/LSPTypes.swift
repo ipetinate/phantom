@@ -183,6 +183,21 @@ struct LSPMarkupContent: Equatable, Sendable {
 /// it happens. A completion that arrives after the user has typed three more
 /// characters is worse than no completion at all, since by then it describes
 /// a prefix that is gone.
+/// What a workspace contributes to one server's launch, beyond the
+/// definition itself.
+///
+/// The two travel together because they are resolved together and are two
+/// halves of one answer. Splitting them let the Vue server be told where
+/// TypeScript is in a way version 3 of it does not read, while the way it
+/// does read went unsent — which is a server that starts and then answers
+/// nothing.
+struct LSPLaunchSettings: Equatable, Sendable {
+    var initializationOptions: LSPValue?
+
+    /// Appended to `LSPServerDefinition.arguments`.
+    var arguments: [String] = []
+}
+
 enum LSPTimeout {
     /// The typing path. Deliberately not tighter: measured, both
     /// `typescript-language-server` and `kotlin-language-server` need
@@ -219,6 +234,32 @@ enum LSPTimeout {
     /// `initialize`, formatting, rename: things a person waits for on
     /// purpose, and where giving up early is the failure.
     static let deliberate: TimeInterval = 30
+
+    /// The code-action menu, on ⌃. — somebody asked out loud and is
+    /// watching for it to open.
+    static let codeAction: TimeInterval = 3
+
+    /// `codeAction/resolve`, for the action being applied.
+    ///
+    /// Far more generous than the completion equivalent, and the asymmetry
+    /// is the point. A completion resolve that expires still inserts the
+    /// name the reader chose, without its import — degraded, but something.
+    /// An unresolved code action has **no** partial behaviour: the whole of
+    /// what it does is the edit that has not arrived, so giving up early
+    /// turns a chosen menu entry into a keystroke that did nothing.
+    static let codeActionResolve: TimeInterval = 5
+
+    /// One `tsserver` command relayed on the Vue server's behalf. See
+    /// `LSPTSServerBridge`.
+    ///
+    /// Generous, and it costs the reader nothing to be. The relay does not
+    /// hold the completion that provoked it: that request has its own,
+    /// tighter budget and gives up on its own. What this number protects is
+    /// the *server*, which caches the answer to `_vue:projectInfo` per file
+    /// and would cache a promise that never settles — wedging that file for
+    /// the rest of the session. So the relay outlives the completion and
+    /// still ends, in every case, with an answer.
+    static let tsserverRelay: TimeInterval = 15
 }
 
 /// The debounced `didChange` text waiting to be sent, per document.
