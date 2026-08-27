@@ -320,6 +320,13 @@ extension PrettierAttempt {
 }
 
 private struct DocumentView: View {
+    /// The switches for what the editor does unasked, observed so a change in
+    /// the settings window reaches an open file without reopening it.
+    ///
+    /// An `@ObservedObject` rather than six `@AppStorage` lines, because
+    /// `EditorFeatureSettings` already owns the reading of them — and because
+    /// what crosses into the engine is one value, not six preferences.
+    @ObservedObject private var editorFeatures = EditorFeatureSettings.shared
     @ObservedObject var document: EditorDocument
     let theme: CodeTheme
     let configuration: CodeEditorConfiguration
@@ -854,7 +861,19 @@ private struct DocumentView: View {
             onCloseTab: onCloseTab,
             onSearchWorkspace: onSearchWorkspace,
             onAttachLine: onAttachLine,
-            onAttachLinePicker: onAttachLinePicker
+            onAttachLinePicker: onAttachLinePicker,
+            /// The reader's preferences collapsed into the one value the
+            /// engine takes. It may not read them itself — see
+            /// `EditorAssistance` — so this is where the two vocabularies
+            /// meet.
+            assistance: EditorAssistance(
+                autoImport: editorFeatures.autoImport,
+                gitLens: editorFeatures.gitLens,
+                hoverCards: editorFeatures.hoverCards,
+                diffMarks: editorFeatures.diffMarks,
+                completionWhileTyping: editorFeatures.completionWhileTyping,
+                inlineDiagnostics: editorFeatures.inlineDiagnostics),
+            assistanceRevision: editorFeatures.revision
         )
     }
 
@@ -992,6 +1011,7 @@ private struct DocumentView: View {
     /// mark that could not be rendered is a mark not drawn, never a reveal that
     /// failed.
     private var gutterMark: CodeGutterView.Mark? {
+        guard EditorFeatureSettings.shared.agentGutterMark else { return nil }
         guard let mark = document.agentMark else { return nil }
         let size = CodeGutterView.markSize(for: configuration.font)
         guard let image = EditorAgentMarkImages.shared.image(for: mark.agent, size: size)
