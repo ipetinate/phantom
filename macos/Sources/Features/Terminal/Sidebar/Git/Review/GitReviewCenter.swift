@@ -69,6 +69,34 @@ final class GitReviewCenter: ObservableObject {
     /// The branch each root's state was read on, so a checkout can be noticed.
     private var branchesSeen: [String: String] = [:]
 
+    /// What the cached review was measured between, per repository.
+    ///
+    /// A review is a statement about two commits, and the branch's *name* is
+    /// not either of them. Keying the cache on the name alone meant a review
+    /// stayed on screen after both of its endpoints had moved — reported with
+    /// a header claiming 39 commits and 161 files for a pull request GitHub
+    /// showed as 5 and 4. The numbers were right when they were computed and
+    /// the base had been fetched forward since; nothing told the screen.
+    ///
+    /// Both ends move without the branch being renamed: a `fetch` or `pull`
+    /// moves the base, a commit or an amend moves HEAD. So both are recorded
+    /// and both are checked.
+    private var measuredBetween: [String: Measurement] = [:]
+
+    /// What a cached review was measured from, and between.
+    private struct Measurement {
+        /// The ref the comparison used, so the check re-reads the same one
+        /// rather than guessing at the default again.
+        let baseRef: String
+        let endpoints: Endpoints
+    }
+
+    /// The two commits a cached review describes.
+    private struct Endpoints: Equatable {
+        let head: String
+        let base: String
+    }
+
     private var subscription: AnyCancellable?
 
     private init() {
@@ -101,8 +129,74 @@ final class GitReviewCenter: ObservableObject {
             /// would compare a new branch against something picked for another
             /// one, which is worse than starting from the default again.
             chosen.removeValue(forKey: root)
-            states.removeValue(forKey: root)
+            forget(root)
         }
+
+        /// The other way a review goes stale, and the one that has no name
+        /// change to notice: the commits themselves moved.
+        dropReviewsWhoseEndpointsMoved(in: statuses.keys)
+    }
+
+    /// Throws away a cached review once either end of its comparison has
+    /// moved.
+    ///
+    /// Checked here rather than on a timer because this already runs whenever
+    /// `GitCenter` refreshes a root — which is on its own schedule and after
+    /// every git operation the app performs, including the fetch that moves a
+    /// base. One `rev-parse` per repository that has a review open, and none
+    /// at all for the ones that do not.
+    private func dropReviewsWhoseEndpointsMoved(in roots: some Sequence<String>) {
+        for root in roots {
+            guard let measured = measuredBetween[root], states[root] != nil else { continue }
+            guard let now = Self.endpoints(baseRef: measured.baseRef, in: root) else { continue }
+            guard now != measured.endpoints else { continue }
+            forget(root)
+        }
+    }
+
+    /// Drops everything cached about a repository's review, leaving the
+    /// reader's chosen target alone — that is a preference, not a measurement.
+    private func forget(_ root: String) {
+        states.removeValue(forKey: root)
+        measuredBetween.removeValue(forKey: root)
+    }
+
+    /// Where HEAD and the base point right now, in one call.
+    ///
+    /// **No `--verify`.** It takes one revision, and given two it prints
+    /// nothing at all and still exits zero — so the check silently answered
+    /// "cannot tell" every time and no review was ever invalidated. Caught by
+    /// the test rather than by the screen, which is the only reason it is not
+    /// in this comment as another reported bug.
+    ///
+    /// Both lines are checked for the shape of a hash instead. Without
+    /// `--verify`, an unresolvable ref makes git print the *good* one to
+    /// stdout and complain on stderr, so a count alone would take a partial
+    /// answer for a whole one.
+    ///
+    /// Nil means "cannot tell", never "moved": a base that has been deleted,
+    /// or a repository mid-rebase, must not throw the review away — that would
+    /// reload it on every status tick for as long as the ref stayed
+    /// unreadable.
+    nonisolated private static func endpoints(
+        baseRef: String,
+        in root: String
+    ) -> Endpoints? {
+        guard let output = GitCommand.output(["rev-parse", "HEAD", baseRef], in: root)
+        else { return nil }
+
+        let lines = output
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { isObjectName($0) }
+
+        guard lines.count == 2 else { return nil }
+        return Endpoints(head: lines[0], base: lines[1])
+    }
+
+    /// Whether a line is a full object name rather than git's commentary.
+    nonisolated private static func isObjectName(_ line: String) -> Bool {
+        line.count == 40 && line.allSatisfy(\.isHexDigit)
     }
 
     func state(for root: String) -> State? { states[root] }
@@ -123,9 +217,23 @@ final class GitReviewCenter: ObservableObject {
         let chosenTarget = chosen[root]
         Task.detached(priority: .userInitiated) {
             let outcome = Self.assemble(root: root, chosenTarget: chosenTarget)
+
+            /// Read *after* the review, so the pair recorded is the pair the
+            /// numbers describe. Reading it first would leave a window in
+            /// which a fetch landed between the two, and the review would then
+            /// be remembered as measuring something it did not.
+            let measurement: Measurement?
+            if case .ready(let context, _) = outcome,
+               let endpoints = Self.endpoints(baseRef: context.target.ref, in: root) {
+                measurement = Measurement(baseRef: context.target.ref, endpoints: endpoints)
+            } else {
+                measurement = nil
+            }
+
             await MainActor.run {
                 self.loading.remove(root)
                 self.states[root] = outcome
+                self.measuredBetween[root] = measurement
             }
         }
     }
