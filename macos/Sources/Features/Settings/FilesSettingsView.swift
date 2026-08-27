@@ -210,6 +210,12 @@ struct FilesSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            /// Above Completion, and next to Formatting, because that is the
+            /// order of the question: what does this editor do on its own,
+            /// and then how does the one behaviour with a table of its own
+            /// behave.
+            EditorFeatureSettingsSection()
+
             CompletionSettingsSection()
 
         }

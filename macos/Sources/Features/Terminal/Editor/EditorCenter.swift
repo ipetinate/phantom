@@ -526,9 +526,20 @@ final class EditorCenter: ObservableObject {
     /// A nil `agent` leaves an existing mark alone rather than clearing it. A
     /// reader jumping to a definition has not made the agent's line wrong; only
     /// an edit does that, and the document clears it there.
+    /// Both halves are the reader's to refuse — see ``EditorFeatureSettings``.
+    ///
+    /// The scroll is checked only for a reveal an *agent* asked for. The same
+    /// path carries a jump to a definition and a click on a search result, and
+    /// those the reader asked for in that moment; refusing them would be
+    /// refusing their own click. `agent == nil` is what tells the two apart.
     private func apply(_ reveal: LSPRange, markedBy agent: CodingAgent?, to document: EditorDocument) {
-        document.reveal = (id: UUID().uuidString, range: reveal)
-        if let agent { document.mark(agent, atLine: reveal.start.line + 1) }
+        let features = EditorFeatureSettings.shared
+        if agent == nil || features.agentReveal {
+            document.reveal = (id: UUID().uuidString, range: reveal)
+        }
+        if let agent, features.agentGutterMark {
+            document.mark(agent, atLine: reveal.start.line + 1)
+        }
     }
 
     /// Opens a media file: a tab, a viewer, and none of the machinery a text
