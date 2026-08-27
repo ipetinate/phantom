@@ -118,4 +118,57 @@ enum EditorDiffMarks {
         case .remove(let offset, _, _): return offset
         }
     }
+
+    /// The lines whose **text** differs from the committed file.
+    ///
+    /// Not derivable from ``marks(current:base:)``, and that is the whole
+    /// reason this exists. The glyph answers "what should the margin draw",
+    /// and it says `-` for two different things: a line that was changed in
+    /// place, and a line that survived a deletion which happened at it. The
+    /// first is the reader's own text; the second is somebody's committed
+    /// line, unchanged, wearing a mark about its neighbour.
+    ///
+    /// `git blame` has to tell those apart, because it answers by line
+    /// *number* against the file on disk: asked about a line the reader
+    /// changed, it names whoever last touched that number in the commit — a
+    /// real person with nothing to do with what is on screen. Asked about the
+    /// surviving line, it is still right.
+    ///
+    /// So this reports insertions and in-place changes and nothing else. An
+    /// earlier version of the ghost text filtered `marks` for `.added`, which
+    /// covered a line typed on a new row and missed every line edited in
+    /// place — the commonest case, and the one that was reported.
+    static func changedLines(current: [String], base: [String]) -> Set<Int> {
+        guard !base.isEmpty, current.count <= lineBudget, base.count <= lineBudget else {
+            return []
+        }
+
+        let difference = current.difference(from: base)
+        let inserted = Set(difference.insertions.map(offset))
+        let removed = Set(difference.removals.map(offset))
+
+        var changed: Set<Int> = []
+        var baseIndex = 0
+        var currentIndex = 0
+
+        while baseIndex < base.count || currentIndex < current.count {
+            let isRemoved = baseIndex < base.count && removed.contains(baseIndex)
+            let isInserted = currentIndex < current.count && inserted.contains(currentIndex)
+
+            switch (isRemoved, isInserted) {
+            case (true, true), (false, true):
+                changed.insert(currentIndex + 1)
+                if isRemoved { baseIndex += 1 }
+                currentIndex += 1
+
+            case (true, false):
+                baseIndex += 1
+
+            case (false, false):
+                baseIndex += 1
+                currentIndex += 1
+            }
+        }
+        return changed
+    }
 }

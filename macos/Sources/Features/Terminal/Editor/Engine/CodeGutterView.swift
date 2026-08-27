@@ -68,11 +68,20 @@ final class CodeGutterView: NSView {
     /// What happened to a line since the version this file is being compared
     /// against — `+` for one that entered, `-` for a place lines left from.
     ///
-    /// One case and not three. A *changed* line is a line that entered: what
-    /// sits in the file now is the new text, and marking it as anything else
-    /// would have the margin describe a line the reader cannot see. So `-`
-    /// means only what it says — a run was deleted here and nothing replaced
-    /// it — and where a change replaced lines in place, `+` wins.
+    /// One case and not three, and the split is not where an earlier version
+    /// of this comment claimed.
+    ///
+    /// `+` is a line that is **new**: it exists here and had no counterpart in
+    /// the committed file. `-` is a line that is **leaving or was altered** —
+    /// which covers both a run that was deleted outright and a line whose text
+    /// was changed in place. ``EditorDiffMarks`` is the authority and has
+    /// always behaved this way; this doc used to say the opposite, that `+`
+    /// won for a change in place, and something believed it: the git lens
+    /// filtered these marks for `.added` to decide which lines were the
+    /// reader's own, and so went on naming a colleague beside every line
+    /// edited in place. Read ``EditorDiffMarks/changedLines(current:base:)``
+    /// before deriving anything about *text* from a glyph — the two questions
+    /// are not the same one.
     enum DiffMark: Equatable {
         case added
         case removed
