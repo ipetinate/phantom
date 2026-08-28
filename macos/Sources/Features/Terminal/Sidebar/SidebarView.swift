@@ -202,11 +202,23 @@ struct SidebarView: View {
                 WorktreePanelView(
                     tabManager: tabManager,
                     editorCenter: editorCenter,
-                    onNewTerminal: layout.onNewWorktreeTab,
-                    onNewAgentTab: layout.onNewWorktreeAgentTab
+                    /// The panel follows one terminal, so that terminal's
+                    /// group is where a worktree opened from here belongs.
+                    onNewTerminal: { path in
+                        layout.onNewWorktreeTab(path, selectedGroupId)
+                    },
+                    onNewAgentTab: { path, agent in
+                        layout.onNewWorktreeAgentTab(path, agent, selectedGroupId)
+                    }
                 )
             }
         }
+    }
+
+    /// The group of the terminal the panels are following, if it is in one.
+    private var selectedGroupId: UUID? {
+        guard let tab = tabManager.models.first(where: { $0.isSelected }) else { return nil }
+        return store.resolveGroup(surfaceId: tab.surfaceId, pwd: tab.pwd)?.id
     }
 
     /// Built here rather than inline in `terminalList`.
@@ -349,6 +361,13 @@ struct SidebarTitlebarChrome: View {
         tabManager.models.first { $0.isSelected }
     }
 
+    /// That terminal's group, if it is in one. A worktree opened from up here
+    /// is opened about the terminal below, so it lands where that terminal is.
+    private var selectedGroupId: UUID? {
+        guard let tab = selectedTab else { return nil }
+        return store.resolveGroup(surfaceId: tab.surfaceId, pwd: tab.pwd)?.id
+    }
+
     private var visiblePane: SidebarPane {
         switch layout.selectedPane {
         case .files where !showFilesPane: return .terminals
@@ -474,7 +493,9 @@ struct SidebarTitlebarChrome: View {
                     editorCenter: editorCenter,
                     terminalPwds: tabManager.models.compactMap(\.pwd),
                     onMigrate: { _, _ in },
-                    onNewTerminal: layout.onNewWorktreeTab,
+                    onNewTerminal: { path in
+                        layout.onNewWorktreeTab(path, selectedGroupId)
+                    },
                     onCreateGroup: { worktree in groupingWorktree = worktree },
                     onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
                     isRevealed: true)
@@ -681,7 +702,7 @@ private struct SidebarGroupSection: View {
     /// view knows about either: a group header draws no documents and opens
     /// no terminals of its own beyond the one button below.
     @ObservedObject var editorCenter: EditorCenter
-    let onNewWorktreeTab: (String) -> Void
+    let onNewWorktreeTab: (String, UUID?) -> Void
 
     /// The header's own button, which must put the terminal *in this group*.
     /// Pressing a button on a group and watching the terminal appear at the
@@ -1359,7 +1380,7 @@ private struct SidebarTabRow: View {
     /// Opens a terminal in a directory — the worktree panel's own callback,
     /// reused so a new terminal started from a row lands the same way one
     /// started from the panel does.
-    let onNewWorktreeTab: (String) -> Void
+    let onNewWorktreeTab: (String, UUID?) -> Void
     @ObservedObject private var themePalette: ThemePalette = .shared
     @ObservedObject private var planCenter: ClaudePlanCenter = .shared
 
@@ -1605,7 +1626,9 @@ private struct SidebarTabRow: View {
                     WorktreeMigrate.perform(
                         to: worktree, plan: plan, tab: tab, editorCenter: tabEditorCenter)
                 },
-                onNewTerminal: onNewWorktreeTab,
+                /// This row's own group, so a worktree opened from a
+                /// terminal inside a group lands inside it.
+                onNewTerminal: { path in onNewWorktreeTab(path, groupId) },
                 onCreateGroup: { worktree in groupingWorktree = worktree },
                 onViewFile: { path in tabEditorCenter.open(URL(fileURLWithPath: path)) },
                 isRevealed: alwaysShowActions || isHovered)

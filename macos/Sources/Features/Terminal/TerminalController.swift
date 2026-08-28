@@ -1476,15 +1476,17 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         layout.onNewPiTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningAgent: .pi)
         }
-        layout.onNewWorktreeTab = { [weak self] directory in
-            self?.newSidebarTab(in: nil, workingDirectory: directory)
+        layout.onNewWorktreeTab = { [weak self] directory, groupId in
+            self?.newSidebarTab(
+                in: SidebarGroupStore.shared.group(groupId),
+                workingDirectory: directory)
         }
         layout.onNewWorktreeTabInGroup = { [weak self] group, directory in
             self?.newSidebarTab(in: group, workingDirectory: directory)
         }
-        layout.onNewWorktreeAgentTab = { [weak self] directory, agent in
+        layout.onNewWorktreeAgentTab = { [weak self] directory, agent, groupId in
             self?.newSidebarTab(
-                in: nil,
+                in: SidebarGroupStore.shared.group(groupId),
                 runningAgent: agent,
                 workingDirectory: directory)
         }
