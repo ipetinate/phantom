@@ -21,6 +21,7 @@ enum MCPGrantPhrase {
         /// this list is read months later: "Configure" alone would leave the
         /// reader guessing what they once allowed to be configured.
         case .configure: return "Change language server startup"
+        case .worktree: return "Create and remove git worktrees"
         }
     }
 
