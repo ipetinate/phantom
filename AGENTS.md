@@ -42,7 +42,11 @@ A file for [guiding coding agents](https://agents.md/).
 ## Issue and PR Guidelines
 
 - Open an issue or a pull request when asked to, and not otherwise.
-- This section used to forbid both outright, inherited from the upstream
-  Ghostty repository where it exists to keep agents from filing against
-  somebody else's project. This is a fork with its own owner, who has been
-  releasing through pull requests since 0.1.0.
+- **Always pass `--repo ipetinate/phantom`.** `gh` resolves this checkout to
+  `ghostty-org/ghostty` — `remote.upstream.gh-resolved` is set to `base` — so
+  a bare `gh pr create` aims at somebody else's project. It fails today only
+  because the branch does not exist there.
+- This section used to forbid both outright, inherited from upstream, where
+  the rule exists to stop exactly the mistake above. This fork has its own
+  owner and has released through pull requests since 0.1.0, so the
+  prohibition is gone and the aim is stated instead.
