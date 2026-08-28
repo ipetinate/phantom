@@ -12,14 +12,14 @@ struct WorktreeEntryRuleTests {
     private func action(
         _ entry: WorktreeEntry,
         enabled: Bool = true,
-        inRepository: Bool = true,
+        reach: WorktreeEntryReach = .repository,
         idle: Bool = true,
         agent: Bool = false
     ) -> WorktreeEntryAction? {
         WorktreeEntryRule.action(
             at: entry,
             isEnabled: enabled,
-            isInRepository: inRepository,
+            reach: reach,
             isIdle: idle,
             hasLiveAgent: agent)
     }
@@ -68,12 +68,97 @@ struct WorktreeEntryRuleTests {
 
     // MARK: Gates that apply everywhere
 
-    /// Outside a repository there is nothing to switch between, and an icon
+    /// With nothing to reach there is nothing to switch between, and an icon
     /// that opens an empty list is worse than no icon.
-    @Test func noPlaceOffersAnythingOutsideARepository() {
+    @Test func noPlaceOffersAnythingWithNothingToReach() {
         for entry in WorktreeEntry.allCases {
-            #expect(action(entry, inRepository: false) == nil, "\(entry.rawValue)")
+            #expect(action(entry, reach: .nothing) == nil, "\(entry.rawValue)")
         }
+    }
+
+    // MARK: A folder that holds repositories without being one
+
+    /// The bug this case exists for: a group header standing for
+    /// `~/Projects/Aurora` counted as "not in a repository", so the button
+    /// was handed the folder as a repository root and said it could not read
+    /// its worktrees — over six repositories that read fine.
+    @Test func aWorkspaceFolderOffersANewTerminalFromTheGroupHeaderAndTheChrome() {
+        #expect(action(.groupHeader, reach: .workspace) == .newTab)
+        #expect(action(.chrome, reach: .workspace) == .newTab)
+    }
+
+    /// Migrating needs a worktree to leave, and a folder that merely holds
+    /// repositories is not one. The group header one row up is where the
+    /// folder's repositories are offered.
+    @Test func aWorkspaceFolderOffersNothingOnATerminalsOwnRow() {
+        #expect(action(.tabRow, reach: .workspace) == nil)
+    }
+
+    /// A scan that has not answered has said nothing, and a button hidden on
+    /// the strength of nothing is a button missing exactly when the folder is
+    /// cold. It shows, and the popover says it is still looking.
+    @Test func aFolderStillBeingScannedKeepsTheButton() {
+        #expect(action(.groupHeader, reach: .searching) == .newTab)
+        #expect(action(.chrome, reach: .searching) == .newTab)
+    }
+
+    @Test func aFolderStillBeingScannedOffersNothingOnATerminalsOwnRow() {
+        #expect(action(.tabRow, reach: .searching) == nil)
+    }
+
+    // MARK: Resolving the reach
+
+    /// The enclosing repository is asked about first, and that order is the
+    /// point: a scan of a working directory inside a checkout could answer
+    /// with a vendored repository two folders down.
+    @Test func anEnclosingRepositoryWinsOverTheFolderBelowIt() {
+        let reach = WorktreeEntryReach.resolve(
+            repoRoot: "/repo",
+            scanRoot: "/repo/src",
+            discovered: ["/repo/src/vendor/other"])
+
+        #expect(reach == .repository)
+    }
+
+    @Test func aFolderHoldingRepositoriesResolvesToAWorkspace() {
+        let reach = WorktreeEntryReach.resolve(
+            repoRoot: nil,
+            scanRoot: "/Projects/Aurora",
+            discovered: ["/Projects/Aurora/front", "/Projects/Aurora/back"])
+
+        #expect(reach == .workspace)
+    }
+
+    /// One repository found by scanning is still a scan result. Which shape
+    /// the chooser takes is `WorktreeScope`'s decision, made from the roots.
+    @Test func oneRepositoryFoundByScanningIsStillAWorkspace() {
+        let reach = WorktreeEntryReach.resolve(
+            repoRoot: nil,
+            scanRoot: "/Projects/Aurora",
+            discovered: ["/Projects/Aurora/front"])
+
+        #expect(reach == .workspace)
+    }
+
+    /// The distinction the whole type exists for. Nil is "still looking" and
+    /// `[]` is "looked, found nothing" — collapsing them into one answer is
+    /// what would flash the button on screen, or hide it while it is cold.
+    @Test func nothingKnownYetIsNotTheSameAsNothingThere() {
+        #expect(
+            WorktreeEntryReach.resolve(
+                repoRoot: nil, scanRoot: "/Projects/Aurora", discovered: nil) == .searching)
+        #expect(
+            WorktreeEntryReach.resolve(
+                repoRoot: nil, scanRoot: "/Projects/Aurora", discovered: []) == .nothing)
+    }
+
+    /// A manual group names no repository and no folder, so there is nothing
+    /// to scan and nothing to show.
+    @Test func noFolderAtAllReachesNothing() {
+        #expect(
+            WorktreeEntryReach.resolve(repoRoot: nil, scanRoot: nil, discovered: nil) == .nothing)
+        #expect(
+            WorktreeEntryReach.resolve(repoRoot: "", scanRoot: "", discovered: nil) == .nothing)
     }
 
     @Test func theSettingHidesItsOwnPlaceAndOnlyThatPlace() {

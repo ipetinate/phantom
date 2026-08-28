@@ -381,6 +381,23 @@ struct SidebarTitlebarChrome: View {
         }
         .animation(.easeOut(duration: 0.15), value: collapse.isCollapsed)
         .onHover { isHovered = $0 }
+        /// Asked for here rather than from the button, which draws nothing
+        /// at all while the answer is "no repositories" — a view that is not
+        /// on screen cannot ask the question that would put it there.
+        /// `GitCenter` caches per folder and refuses folders too broad to
+        /// walk, so this is one scan per workspace per launch.
+        .task(id: workspaceScanRoot) {
+            guard let root = workspaceScanRoot else { return }
+            GitCenter.shared.requestWorkspaceRepos(root: root)
+        }
+    }
+
+    /// The selected terminal's folder, when the terminal is not inside a
+    /// repository. Nil is the answer that skips the scan entirely.
+    private var workspaceScanRoot: String? {
+        guard (selectedTab?.repoRoot ?? "").isEmpty else { return nil }
+        guard let pwd = selectedTab?.pwd, !pwd.isEmpty else { return nil }
+        return pwd
     }
 
     /// The buttons here belong to whichever panel is showing — creating a
@@ -445,6 +462,12 @@ struct SidebarTitlebarChrome: View {
                     entry: .chrome,
                     isEnabled: showWorktree,
                     repoRoot: selectedTab?.repoRoot,
+                    /// The folder the terminal is in, for when it is not a
+                    /// checkout itself: a workspace of repositories side by
+                    /// side is somewhere to open a worktree from, which is
+                    /// what the Worktrees panel has always said about the
+                    /// same terminal.
+                    scanRoot: selectedTab?.pwd,
                     currentPath: selectedTab?.pwd,
                     isIdle: true,
                     hasLiveAgent: false,
@@ -983,7 +1006,14 @@ private struct SidebarGroupSection: View {
             WorktreeEntryButton(
                 entry: .groupHeader,
                 isEnabled: showWorktree,
-                repoRoot: representativeTab?.repoRoot ?? group.projectRoot,
+                /// A project group's own root wins over the repository a tab
+                /// in it happens to sit in, and that is why this is nil when
+                /// the group declares one. The group stands for the whole
+                /// folder — `~/Projects/Aurora` and its six repositories —
+                /// so offering only the one repository the first tab is in
+                /// would answer a question nobody asked from a group header.
+                repoRoot: group.projectRoot == nil ? representativeTab?.repoRoot : nil,
+                scanRoot: group.projectRoot ?? representativeTab?.pwd,
                 currentPath: representativeTab?.pwd ?? group.projectRoot,
                 isIdle: true,
                 hasLiveAgent: false,
@@ -1025,6 +1055,15 @@ private struct SidebarGroupSection: View {
             NSItemProvider(object: "group:\(group.id.uuidString)" as NSString)
         }
         .contextMenu { groupMenu }
+        /// Which repositories the group's root holds, asked for once per
+        /// launch and cached by `GitCenter`. It is asked from here rather
+        /// than from the worktree button because the button draws nothing
+        /// while the answer is "none", and a view that is not on screen
+        /// cannot ask the question that would put it there.
+        .task(id: group.projectRoot) {
+            guard let root = group.projectRoot, !root.isEmpty else { return }
+            GitCenter.shared.requestWorkspaceRepos(root: root)
+        }
     }
 
     @ViewBuilder
@@ -1250,198 +1289,6 @@ private enum SidebarDragPayload {
             self = .tab(id)
         } else {
             return nil
-        }
-    }
-}
-
-/// Lists every open pull request of the repositories present in a
-/// group, fetched on demand — one click opens the PR in the browser.
-private struct GroupPRListView: View {
-    let group: SidebarGroup
-    let openTabRoots: [String]
-
-    @State private var roots: [String] = []
-    @ObservedObject private var gitCenter: GitStatusCenter = .shared
-    @ObservedObject private var palette: ThemePalette = .shared
-
-    /// Repos a tab happens to be open in, plus — for a project (workspace)
-    /// group — every repo discovered under its root, so one that nobody
-    /// has a tab open in still shows up.
-    private func resolveRoots() -> [String] {
-        var found = Set(openTabRoots)
-        if case .project(let root) = group.kind {
-            found.formUnion(SidebarGroup.discoverRepoRoots(under: root))
-        }
-        // By project name rather than full path: workspaces group repos
-        // that share a path prefix, but that's not guaranteed in general,
-        // and the name is what the section header actually shows.
-        return found.sorted {
-            ($0 as NSString).lastPathComponent.localizedCaseInsensitiveCompare(
-                ($1 as NSString).lastPathComponent
-            ) == .orderedAscending
-        }
-    }
-
-    /// Content taller than this scrolls instead of growing. A workspace
-    /// with a few busy repos produces a list longer than the screen, and a
-    /// popover that tall is both ugly and unusable — it covers the window
-    /// it belongs to and runs off the bottom.
-    ///
-    /// The 60% budget is for the *popover*, so the title, the padding and
-    /// the popover's own arrow come out of it instead of being added on
-    /// top — capping only the list left the whole thing a little over.
-    private var maxListHeight: CGFloat {
-        let screen = NSScreen.main?.visibleFrame.height ?? 800
-        return max(200, screen * 0.6 - 72)
-    }
-
-    /// Measured so the popover is only as tall as it needs to be. A bare
-    /// `maxHeight` won't do: a `ScrollView` takes everything it is offered
-    /// along its scroll axis, so two pull requests would get the same
-    /// full-height popover as fifty.
-    @State private var contentHeight: CGFloat?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Pull Requests")
-                .font(palette.headlineFont)
-
-            if roots.isEmpty {
-                Text("No repositories in this group.")
-                    .font(palette.captionFont)
-                    .foregroundStyle(.secondary)
-            }
-
-            ScrollView {
-                repoSections
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: PRListHeightKey.self,
-                                value: proxy.size.height
-                            )
-                        }
-                    )
-            }
-            .scrollIndicators(.automatic)
-            .onPreferenceChange(PRListHeightKey.self) { height in
-                contentHeight = height
-            }
-            .frame(height: contentHeight.map { min($0, maxListHeight) })
-        }
-        .padding(14)
-        .frame(width: 340)
-        .onAppear {
-            roots = resolveRoots()
-            roots.forEach { gitCenter.requestPRList(root: $0) }
-        }
-    }
-
-    private var repoSections: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(roots, id: \.self) { root in
-                VStack(alignment: .leading, spacing: 4) {
-                    if roots.count > 1 {
-                        Text((root as NSString).lastPathComponent)
-                            .font(palette.font(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                    }
-
-                    if let prs = gitCenter.repoPRLists[root] {
-                        if prs.isEmpty {
-                            Text("No open pull requests.")
-                                .font(palette.captionFont)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(prs) { pr in
-                                    PRRow(pr: pr, palette: palette) {
-                                        if let url = URL(string: pr.url) {
-                                            NSWorkspace.shared.open(url)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Loading…")
-                                .font(palette.captionFont)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct PRListHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-/// One PR in the group's list: hovering marks it clickable (pointer cursor,
-/// a tinted background) and a small person badge calls out a PR that's the
-/// signed-in user's own, so it doesn't take reading every row to spot.
-private struct PRRow: View {
-    let pr: GitStatusCenter.PullRequest
-    @ObservedObject var palette: ThemePalette
-    let action: () -> Void
-
-    @State private var isHovered = false
-
-    private var isMine: Bool {
-        guard let author = pr.author, let me = GitStatusCenter.currentUserLogin else { return false }
-        return author == me
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Text(verbatim: "#\(pr.number)")
-                    .font(palette.font(size: 11, weight: .medium))
-                    .foregroundStyle(palette.accent ?? .accentColor)
-
-                if isMine {
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 8))
-                        .foregroundStyle(palette.accent ?? .accentColor)
-                        .help("Your pull request")
-                }
-
-                Text(pr.title)
-                    .font(palette.font(size: 11))
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "arrow.up.forward")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(isHovered ? (palette.accent ?? .accentColor).opacity(0.12) : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            isHovered = hovering
-            if hovering {
-                NSCursor.pointingHand.set()
-            } else {
-                NSCursor.arrow.set()
-            }
         }
     }
 }

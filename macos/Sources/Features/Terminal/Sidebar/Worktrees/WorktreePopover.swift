@@ -14,7 +14,11 @@ struct WorktreePopover: View {
     /// about whether a terminal is busy.
     let action: WorktreeEntryAction
 
-    let commonRoot: String
+    /// One family, or several — the same distinction the panel draws, and
+    /// the same type drawing it. A group header standing for
+    /// `~/Projects/Aurora` reaches six repositories, and a chooser that can
+    /// only hold one was the reason that button had nothing to show.
+    let scope: WorktreeScope
 
     /// The worktree the terminal is in. Excluded from the list when
     /// migrating — "switch to where you already are" is not a choice — and
@@ -35,8 +39,10 @@ struct WorktreePopover: View {
 
     let onNewTerminal: (String) -> Void
 
-    /// Opens the create sheet, which is where every question lives.
-    let onNewWorktree: () -> Void
+    /// Opens the create sheet for one family, which is where every question
+    /// lives. The family is named rather than assumed: with several on
+    /// screen there is no "the" repository to create in.
+    let onNewWorktree: (String) -> Void
 
     /// Groups the terminals of one worktree together. Offered here because
     /// three terminals in one worktree usually *are* a group, and this is
@@ -71,6 +77,14 @@ struct WorktreePopover: View {
     /// change to its tab set.
     @State private var plan: [WorktreeDocumentMigration.Outcome] = []
 
+    /// Which repository sections are open, in the several-families case.
+    ///
+    /// Absence is what costs nothing: listing a family is a `git worktree
+    /// list`, and a folder of twenty repositories opened indiscriminately is
+    /// twenty subprocesses for a list nobody has looked at yet. Expanding one
+    /// is what buys it — the panel's rule, stated in `WorktreeScope.polled`.
+    @State private var expanded: Set<String> = []
+
     var body: some View {
         Group {
             if let target = confirming {
@@ -87,7 +101,9 @@ struct WorktreePopover: View {
         /// store's TTL is a no-op, so this costs nothing once the answer has
         /// landed.
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            center.requestList(commonRoot: commonRoot)
+            for root in scope.polled(expanded: expanded) {
+                center.requestList(commonRoot: root)
+            }
         }
     }
 
@@ -111,69 +127,224 @@ struct WorktreePopover: View {
             /// two rows that existed, had scrollers, and drew nothing. The
             /// floor is what makes the box the same size before and after
             /// the answer lands.
+            ///
+            /// It is also what lets a section be opened at all: the box is
+            /// the fixed thing and the sections scroll inside it, so
+            /// expanding one does not ask the popover to grow after the fact.
             ZStack(alignment: .topLeading) {
-                if offered.isEmpty {
-                    Text(emptyMessage)
-                        .font(palette.font(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 1) {
-                            ForEach(offered) { worktree in
-                                row(worktree)
-                            }
-                        }
-                    }
-                    .scrollIndicators(.automatic)
+                switch scope {
+                case .repository(let root):
+                    family(root)
+                case .workspace(let roots):
+                    sections(roots)
+                case .none:
+                    EmptyView()
                 }
             }
             .frame(height: listHeight, alignment: .topLeading)
 
-            Divider().padding(.vertical, 2)
+            if case .repository(let root) = scope {
+                Divider().padding(.vertical, 2)
 
-            Button {
-                leaving(onNewWorktree)
-            } label: {
-                Label("New Worktree…", systemImage: "plus")
-                    .font(palette.font(size: 11))
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 4)
-
-            /// Set apart by a gap rather than by a second box: it is a
-            /// different kind of action, but it is about the same thing the
-            /// reader is already looking at.
-            if let onCreateGroup, let groupable = currentWorktree ?? offered.first {
                 Button {
-                    leaving { onCreateGroup(groupable) }
+                    leaving { onNewWorktree(root) }
                 } label: {
-                    Label("Create Group from Worktree", systemImage: "folder.badge.plus")
-                        .font(palette.font(size: 10.5))
-                        .foregroundStyle(.secondary)
+                    Label("New Worktree…", systemImage: "plus")
+                        .font(palette.font(size: 11))
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 4)
-                .padding(.top, 2)
+
+                /// Set apart by a gap rather than by a second box: it is a
+                /// different kind of action, but it is about the same thing
+                /// the reader is already looking at.
+                ///
+                /// One family only. It needs a single worktree to be about,
+                /// and a list of repositories is not one — from a workspace
+                /// the reader has not yet said which repository they mean.
+                if let onCreateGroup, let groupable = currentWorktree ?? offered(in: root).first {
+                    Button {
+                        leaving { onCreateGroup(groupable) }
+                    } label: {
+                        Label("Create Group from Worktree", systemImage: "folder.badge.plus")
+                            .font(palette.font(size: 10.5))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 2)
+                }
             }
         }
         .padding(8)
-        .frame(width: 260)
+        .frame(width: width)
         /// Forced, because the answer may be a cached empty one: the store
         /// stamps its check time even when git failed, so an unforced
         /// request inside the TTL would decline to ask again and the chooser
         /// would stay empty on the strength of one bad answer.
-        .onAppear { center.requestList(commonRoot: commonRoot, force: true) }
+        .onAppear { openingSections() }
+    }
+
+    /// Wider with sections than without: a repository name and a branch name
+    /// on the same 260 points leaves neither of them readable.
+    private var width: CGFloat {
+        switch scope {
+        case .workspace: return 320
+        default: return 260
+        }
     }
 
     /// Room for three rows even when there are none yet, and never more
     /// than six — past that the list scrolls rather than the popover growing
     /// down the screen.
+    ///
+    /// Fixed at the ceiling for sections, because that is the case where the
+    /// content changes size after the popover is up.
     private var listHeight: CGFloat {
-        CGFloat(min(max(offered.count, 3), 6)) * 28
+        switch scope {
+        case .repository(let root):
+            return CGFloat(min(max(offered(in: root).count, 3), 6)) * 28
+        case .workspace:
+            return 6 * 28
+        case .none:
+            return 28
+        }
     }
+
+    // MARK: One family
+
+    private func family(_ root: String) -> some View {
+        let list = offered(in: root)
+        return Group {
+            if list.isEmpty {
+                Text(emptyMessage(for: root))
+                    .font(palette.font(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(list) { worktree in
+                            row(worktree)
+                        }
+                    }
+                }
+                .scrollIndicators(.automatic)
+            }
+        }
+    }
+
+    // MARK: Several families
+
+    private func sections(_ roots: [String]) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 1) {
+                ForEach(roots, id: \.self) { root in
+                    section(root)
+                }
+            }
+        }
+        .scrollIndicators(.automatic)
+    }
+
+    @ViewBuilder
+    private func section(_ root: String) -> some View {
+        let isOpen = expanded.contains(root)
+
+        Button {
+            toggle(root)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 9)
+
+                Text((root as NSString).lastPathComponent)
+                    .font(palette.font(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 4)
+
+                /// Only once the list is in. Asking for a count is asking
+                /// for the list, and a collapsed section is a section that
+                /// has deliberately not asked.
+                let known = offered(in: root).count
+                if known > 0 {
+                    Text(verbatim: "\(known)")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(WorktreePopoverRowStyle())
+
+        if isOpen {
+            let list = offered(in: root)
+            Group {
+                if list.isEmpty {
+                    Text(emptyMessage(for: root))
+                        .font(palette.font(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 2)
+                } else {
+                    ForEach(list) { worktree in
+                        row(worktree)
+                    }
+                }
+
+                Button {
+                    leaving { onNewWorktree(root) }
+                } label: {
+                    Label("New Worktree…", systemImage: "plus")
+                        .font(palette.font(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(WorktreePopoverRowStyle())
+            }
+            .padding(.leading, 14)
+        }
+    }
+
+    /// Opening a section is what pays for its list, so the request goes here
+    /// rather than waiting for the next tick: a second of an empty section
+    /// after a click reads as a click that missed.
+    private func toggle(_ root: String) {
+        if expanded.contains(root) {
+            expanded.remove(root)
+        } else {
+            expanded.insert(root)
+            center.requestList(commonRoot: root, force: true)
+        }
+    }
+
+    /// Which sections start open, and what that costs.
+    ///
+    /// One or two families are opened for the reader: two lists is the same
+    /// pair of subprocesses the flat chooser has always paid for, and asking
+    /// somebody to click twice to reach a branch they can see the repository
+    /// of is a click for nothing. Three or more stay shut.
+    private func openingSections() {
+        let roots = scope.roots
+        if case .workspace = scope, roots.count <= 2 {
+            expanded = Set(roots)
+        }
+        for root in scope.polled(expanded: expanded) {
+            center.requestList(commonRoot: root, force: true)
+        }
+    }
+
+    // MARK: Rows
 
     private func row(_ worktree: GitWorktree) -> some View {
         Button {
@@ -227,8 +398,8 @@ struct WorktreePopover: View {
     /// Bare and prunable entries are dropped: one has no working tree to
     /// `cd` into, the other's folder is already gone. Offering either would
     /// be offering a destination that does not exist.
-    private var offered: [GitWorktree] {
-        center.list(forRoot: commonRoot).filter { worktree in
+    private func offered(in root: String) -> [GitWorktree] {
+        center.list(forRoot: root).filter { worktree in
             guard !worktree.isBare, !worktree.isPrunable else { return false }
             guard action == .migrate else { return true }
             return !GitWorktreeMembership.contains(pwd: currentPath, root: worktree.path)
@@ -236,17 +407,22 @@ struct WorktreePopover: View {
     }
 
     private var currentWorktree: GitWorktree? {
-        center.list(forRoot: commonRoot).first {
-            GitWorktreeMembership.contains(pwd: currentPath, root: $0.path)
+        for root in scope.roots {
+            if let here = center.list(forRoot: root).first(where: {
+                GitWorktreeMembership.contains(pwd: currentPath, root: $0.path)
+            }) {
+                return here
+            }
         }
+        return nil
     }
 
     /// Two different situations, and they need different sentences: a
     /// repository whose only checkout is the one you are in has somewhere to
     /// go once you make it, and a list that has not arrived yet has not said
     /// anything.
-    private var emptyMessage: String {
-        center.list(forRoot: commonRoot).isEmpty
+    private func emptyMessage(for root: String) -> String {
+        center.list(forRoot: root).isEmpty
             ? "Reading this repository's worktrees…"
             : "This is the only worktree. Create one to work on another branch in parallel."
     }
