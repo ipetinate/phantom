@@ -38,29 +38,78 @@ struct PrettierProjectTests {
         #expect(!PrettierProject.handles(fileNamed: "main.py", hasConfiguration: true, hasLocalBinary: true))
     }
 
-    /// No extension at all, which is a whole category of files people keep
-    /// beside their JavaScript.
-    @Test func aFileWithNoExtensionIsDeclined() {
+    /// A name with nothing after the dot is not a name Prettier knows, and
+    /// most files with no extension at all are nobody's to format.
+    @Test func aFileWithNoRecognisedNameIsDeclined() {
         #expect(!PrettierProject.handles(fileNamed: "Makefile", hasConfiguration: true, hasLocalBinary: true))
         #expect(!PrettierProject.handles(fileNamed: "LICENSE", hasConfiguration: true, hasLocalBinary: true))
+        #expect(!PrettierProject.handles(fileNamed: "Dockerfile", hasConfiguration: true, hasLocalBinary: true))
     }
 
-    /// A leading dot makes a name hidden rather than an extension, so
-    /// `.prettierrc` reports no extension — the right answer, and worth
-    /// pinning because it arrives by an indirect route.
-    @Test func aDotfileIsDeclined() {
-        #expect(!PrettierProject.handles(fileNamed: ".prettierrc", hasConfiguration: true, hasLocalBinary: true))
+    /// The exceptions to the line above, and they are Prettier's, not ours:
+    /// `README` with nothing after it is Markdown, and `Jakefile` is
+    /// JavaScript. Both measured with `--file-info`.
+    @Test func theExtensionlessNamesPrettierKnowsAreHandled() {
+        for name in ["README", "readme", "Jakefile", "contents.lr"] {
+            #expect(
+                PrettierProject.handles(fileNamed: name, hasConfiguration: true, hasLocalBinary: false),
+                "\(name)")
+        }
+    }
+
+    /// The rule that was wrong rather than merely narrow. A leading dot leaves
+    /// `NSString.pathExtension` empty, so every dotfile was declined — and
+    /// Prettier formats a good many of them: `.prettierrc` and `.stylelintrc`
+    /// as YAML, `.babelrc` and `.swcrc` as JSON.
+    @Test func theDotfilesPrettierKnowsAreHandled() {
+        for name in [".prettierrc", ".PRETTIERRC", ".stylelintrc", ".lintstagedrc",
+                     ".babelrc", ".swcrc", ".nycrc", ".clang-format", ".gemrc"] {
+            #expect(
+                PrettierProject.handles(fileNamed: name, hasConfiguration: true, hasLocalBinary: false),
+                "\(name)")
+        }
+    }
+
+    /// The dotfiles it does not know stay declined, which is most of them.
+    @Test func anUnknownDotfileIsStillDeclined() {
         #expect(!PrettierProject.handles(fileNamed: ".gitignore", hasConfiguration: true, hasLocalBinary: true))
+        #expect(!PrettierProject.handles(fileNamed: ".env", hasConfiguration: true, hasLocalBinary: true))
+        #expect(!PrettierProject.handles(fileNamed: ".zshrc", hasConfiguration: true, hasLocalBinary: true))
     }
 
-    @Test func theExtensionMatchIsCaseInsensitive() {
+    /// Prettier lowercases the name before it compares, so the case of what
+    /// the reader typed never decides this.
+    @Test func theNameMatchIsCaseInsensitive() {
         #expect(PrettierProject.handles(fileNamed: "Component.TSX", hasConfiguration: true, hasLocalBinary: false))
         #expect(PrettierProject.handles(fileNamed: "README.MD", hasConfiguration: true, hasLocalBinary: false))
+        #expect(PrettierProject.handles(fileNamed: "CITATION.cff", hasConfiguration: true, hasLocalBinary: false))
     }
 
     /// `component.spec.ts` is TypeScript, not a `.spec.ts` language.
-    @Test func aCompoundNameUsesItsLastExtension() {
+    @Test func anUnknownCompoundNameFallsBackToItsLastExtension() {
         #expect(PrettierProject.handles(fileNamed: "component.spec.ts", hasConfiguration: true, hasLocalBinary: false))
+    }
+
+    /// The compound names that are their own language, and the reason the
+    /// match is on suffixes at all: not one of these can be answered by
+    /// looking at the last dotted component. `.flow`, `.backup`, `.example`,
+    /// `.sed` and `.mysql` are not languages.
+    @Test func theCompoundSuffixesThatAreTheirOwnLanguageAreHandled() {
+        for name in ["types.js.flow", "main.tfstate.backup", "config.json.example",
+                     "rules.yaml.sed", "schema.yml.mysql", "page.component.html",
+                     "theme.html.hl"] {
+            #expect(
+                PrettierProject.handles(fileNamed: name, hasConfiguration: true, hasLocalBinary: false),
+                "\(name)")
+        }
+    }
+
+    /// Suffix matching is more precise than the last extension, not less.
+    /// Prettier knows `.start.frag` and `.end.frag`; a GLSL fragment shader is
+    /// neither, and `--file-info shader.frag` infers nothing.
+    @Test func aSuffixDoesNotClaimTheExtensionItEndsWith() {
+        #expect(PrettierProject.handles(fileNamed: "app.start.frag", hasConfiguration: true, hasLocalBinary: false))
+        #expect(!PrettierProject.handles(fileNamed: "shader.frag", hasConfiguration: true, hasLocalBinary: false))
     }
 
     /// The module variants and aliases are the ones a hand-written list
@@ -72,6 +121,50 @@ struct PrettierProjectTests {
                      "a.geojson", "a.webmanifest", "phantom.code-workspace"] {
             #expect(PrettierProject.handles(fileNamed: name, hasConfiguration: true, hasLocalBinary: false), "\(name)")
         }
+    }
+
+    /// The rest of what Prettier answers for, by language, so a file type
+    /// dropping out of the list is a failing test rather than a save that
+    /// quietly stops formatting.
+    @Test func everyLanguagePrettierShipsAParserForIsCovered() {
+        for name in ["a.css", "a.wxss", "a.scss", "a.less", "a.postcss",
+                     "a.html", "a.htm", "a.xht", "a.xhtml", "a.hta",
+                     "a.js", "a.es6", "a.jsx", "a.wxs", "a.pac",
+                     "a.ts", "a.tsx", "a.vue", "a.mjml",
+                     "a.json", "a.har", "a.avsc", "a.gltf", "a.sarif",
+                     "a.topojson", "a.webapp", "a.yy", "a.yyp", "a.importmap",
+                     "a.sublime-project", "a.sublime_session", "a.code-snippets",
+                     "a.md", "a.mdown", "a.mdwn", "a.mkd", "a.mkdn", "a.mkdown",
+                     "a.livemd", "a.ronn", "a.workbook", "a.mdx",
+                     "a.yaml", "a.yml", "a.mir", "a.reek", "a.rviz",
+                     "a.sublime-syntax", "a.yaml-tmlanguage",
+                     "a.graphql", "a.handlebars"] {
+            #expect(
+                PrettierProject.handles(fileNamed: name, hasConfiguration: true, hasLocalBinary: false),
+                "\(name)")
+        }
+    }
+
+    /// `--support-info` lists these three, and Prettier can never infer a
+    /// parser for any of them: it lowercases the name and compares the
+    /// extensions as written. Measured both ways — `x.4DForm` and `x.4dform`
+    /// both infer nothing — so copying them here would claim files Prettier
+    /// then refuses, which is an error banner on every save.
+    @Test func theMixedCaseEntriesPrettierCanNeverMatchAreNotClaimed() {
+        for name in ["form.4DForm", "form.4dform", "a.4DProject", "a.JSON-tmLanguage",
+                     "a.json-tmlanguage"] {
+            #expect(
+                !PrettierProject.handles(fileNamed: name, hasConfiguration: true, hasLocalBinary: true),
+                "\(name)")
+        }
+    }
+
+    /// The one place where matching Prettier exactly is worse than declining.
+    /// linguist calls `.inc` HTML and the world uses it for PHP and ASP
+    /// includes — and the HTML parser does not refuse a PHP include, it
+    /// rewrites it.
+    @Test func incIsDeclinedEvenThoughPrettierWouldFormatIt() {
+        #expect(!PrettierProject.handles(fileNamed: "header.inc", hasConfiguration: true, hasLocalBinary: true))
     }
 
     /// Svelte needs `prettier-plugin-svelte`, and core Prettier handed a

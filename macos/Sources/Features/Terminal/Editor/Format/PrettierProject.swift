@@ -52,16 +52,24 @@ struct PrettierProject: Equatable, Sendable {
 extension PrettierProject {
     // MARK: The decision
 
-    /// Extensions Prettier can format without a plugin.
+    /// Every file name Prettier can infer a parser for without a plugin, as
+    /// name suffixes.
     ///
-    /// Taken from a real `prettier --support-info` run — Prettier 3.9.6,
+    /// Generated from a real `prettier --support-info` run — Prettier 3.9.6,
     /// installed clean — and not from the docs, which list the supported
     /// *languages* and never their extensions. Prettier builds this mapping at
     /// runtime from the `linguist-languages` package, filtered and extended per
     /// language in `src/*/languages.evaluate.js`, so `--support-info` is the
-    /// only place the real answer exists. This is that set restricted to the
-    /// extensions a person is plausibly editing in this app; every entry was
-    /// checked against the run rather than recalled.
+    /// only place the real answer exists.
+    ///
+    /// **Suffixes, not extensions.** Prettier matches the lowercased base name
+    /// against each entry with `endsWith`, which is the only way the compound
+    /// ones can work: `.js.flow` is Flow, `.tfstate.backup` and `.json.example`
+    /// are JSON, `.yaml.sed` and `.yml.mysql` are YAML, `.component.html` is
+    /// Angular. Matching only the last dotted component — what this list did
+    /// before — missed every one of them, and would have claimed `shader.frag`
+    /// on the strength of `.start.frag`, which Prettier does not touch
+    /// (measured: `--file-info shader.frag` infers nothing).
     ///
     /// Extensions Prettier supports and this list leaves out are a
     /// *conservative* failure — the file is simply not offered formatting. The
@@ -76,17 +84,79 @@ extension PrettierProject {
     /// project's config loads that plugin, and reading the config is the one
     /// thing this type will not do; see the note above. A Svelte project
     /// therefore gets no formatting from us rather than an error on every save.
-    static let supportedExtensions: Set<String> = [
-        "js", "jsx", "mjs", "cjs",
-        "ts", "tsx", "mts", "cts",
-        "json", "jsonc", "json5", "geojson", "webmanifest",
-        "code-workspace", "code-snippets",
-        "css", "scss", "less", "pcss", "postcss",
-        "html", "htm", "xhtml", "vue", "mjml",
-        "handlebars", "hbs",
-        "yaml", "yml",
-        "md", "mdx", "markdown",
-        "graphql", "graphqls", "gql",
+    ///
+    /// Two sets of entries from `--support-info` are deliberately absent:
+    ///
+    /// - `.4DForm`, `.4DProject` and `.JSON-tmLanguage`, because Prettier
+    ///   lowercases the name before comparing and never lowercases these — so
+    ///   Prettier itself can infer no parser for them. Measured both ways:
+    ///   `x.4DForm` and `x.4dform` both infer nothing. Copying them here would
+    ///   claim files Prettier then refuses, which is the error banner above.
+    /// - `.inc`, which linguist calls HTML and the world uses for PHP and ASP
+    ///   includes. Prettier would format one as HTML — and the HTML parser does
+    ///   not refuse a PHP include, it rewrites it. This is the one place where
+    ///   matching Prettier exactly is worse than declining, so it declines.
+    static let supportedSuffixes: Set<String> = [
+        /* Angular */ ".component.html",
+        /* CSS */ ".css", ".wxss",
+        /* Flow */ ".js.flow",
+        /* GraphQL */ ".graphql", ".gql", ".graphqls",
+        /* Handlebars */ ".handlebars", ".hbs",
+        /* HTML */ ".html", ".hta", ".htm", ".html.hl", ".xht", ".xhtml",
+        /* JavaScript */ ".js", "._js", ".bones", ".cjs", ".es", ".es6", ".gs",
+        ".jake", ".javascript", ".jsb", ".jscad", ".jsfl", ".jslib", ".jsm",
+        ".jspre", ".jss", ".mjs", ".njs", ".pac", ".sjs", ".ssjs", ".xsjs",
+        ".xsjslib", ".start.frag", ".end.frag", ".wxs",
+        /* JSON */ ".json", ".avsc", ".geojson", ".gltf", ".har", ".ice",
+        ".json.example", ".mcmeta", ".sarif", ".slnlaunch", ".tact", ".tfstate",
+        ".tfstate.backup", ".topojson", ".webapp", ".webmanifest", ".yy", ".yyp",
+        /* JSON with Comments */ ".jsonc", ".code-snippets", ".code-workspace",
+        ".sublime-build", ".sublime-color-scheme", ".sublime-commands",
+        ".sublime-completions", ".sublime-keymap", ".sublime-macro",
+        ".sublime-menu", ".sublime-mousemap", ".sublime-project",
+        ".sublime-settings", ".sublime-theme", ".sublime-workspace",
+        ".sublime_metrics", ".sublime_session",
+        /* JSON.stringify */ ".importmap",
+        /* JSON5 */ ".json5",
+        /* JSX */ ".jsx",
+        /* Less */ ".less",
+        /* Markdown */ ".md", ".livemd", ".markdown", ".mdown", ".mdwn", ".mkd",
+        ".mkdn", ".mkdown", ".ronn", ".scd", ".workbook",
+        /* MDX */ ".mdx",
+        /* MJML */ ".mjml",
+        /* PostCSS */ ".pcss", ".postcss",
+        /* SCSS */ ".scss",
+        /* TSX */ ".tsx",
+        /* TypeScript */ ".ts", ".cts", ".mts",
+        /* Vue */ ".vue",
+        /* YAML */ ".yml", ".mir", ".reek", ".rviz", ".sublime-syntax",
+        ".syntax", ".yaml", ".yaml-tmlanguage", ".yaml.sed", ".yml.mysql",
+    ]
+
+    /// The whole file names Prettier recognises, lowercased.
+    ///
+    /// A second list because they are matched differently — whole name, not
+    /// suffix — and because the ones that matter have no extension to match on:
+    /// `.prettierrc` and `.stylelintrc` are YAML, `.babelrc` and `.swcrc` are
+    /// JSON, `README` with nothing after it is Markdown. Prettier compares
+    /// these case-insensitively, which is why they are stored lowercased and
+    /// the name is lowercased before the lookup.
+    ///
+    /// This is also where the old rule was wrong rather than merely narrow. It
+    /// declined every dotfile on the grounds that a leading dot leaves no
+    /// extension behind — true of `NSString.pathExtension`, and not what
+    /// Prettier does with the same name.
+    static let supportedFilenames: Set<String> = [
+        /* JavaScript */ "jakefile", "start.frag", "end.frag",
+        /* JSON */ ".all-contributorsrc", ".arcconfig", ".auto-changelog",
+        ".c8rc", ".htmlhintrc", ".imgbotconfig", ".nycrc", ".tern-config",
+        ".tern-project", ".watchmanconfig", ".babelrc", ".jscsrc", ".jshintrc",
+        ".jslintrc", ".swcrc",
+        /* JSON.stringify */ "package.json", "package-lock.json", "composer.json",
+        /* Markdown */ "contents.lr", "readme",
+        /* YAML */ ".clang-format", ".clang-tidy", ".clangd", ".gemrc",
+        "citation.cff", "glide.lock", "pixi.lock", ".prettierrc",
+        ".stylelintrc", ".lintstagedrc",
     ]
 
     /// Does Prettier own this file?
@@ -107,18 +177,21 @@ extension PrettierProject {
         hasLocalBinary: Bool
     ) -> Bool {
         guard hasConfiguration || hasLocalBinary else { return false }
-        return handlesExtension(of: name)
+        return parserCanBeInferred(for: name)
     }
 
-    /// The extension half of `handles`, on its own.
+    /// Whether Prettier would infer a parser for this name, by Prettier's own
+    /// rule: lowercase the base name, try the whole names, then try the
+    /// suffixes.
     ///
-    /// A leading dot makes a name hidden rather than an extension —
-    /// `.prettierrc` has no extension and is not formattable, which is the
-    /// right answer for the wrong-looking reason.
-    static func handlesExtension(of name: String) -> Bool {
-        let ext = (name as NSString).pathExtension.lowercased()
-        guard !ext.isEmpty else { return false }
-        return supportedExtensions.contains(ext)
+    /// The lowercasing is Prettier's, not a convenience of ours, and it is what
+    /// makes `README.MD` and `.PRETTIERRC` work — both measured against
+    /// `--file-info`.
+    static func parserCanBeInferred(for name: String) -> Bool {
+        let base = ((name as NSString).lastPathComponent).lowercased()
+        guard !base.isEmpty else { return false }
+        if supportedFilenames.contains(base) { return true }
+        return supportedSuffixes.contains { base.hasSuffix($0) }
     }
 
     /// `handles`, asked of a discovered project.
