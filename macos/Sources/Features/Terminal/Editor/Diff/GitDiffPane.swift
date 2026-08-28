@@ -9,7 +9,11 @@ import SwiftUI
 /// and keeping them in step is a matter of matching offsets rather than of
 /// mapping one file's line numbers onto the other's.
 struct GitDiffPane: View {
-    let rows: [GitDiffRow]
+    /// The whole document rather than its rows, for one number: the longest
+    /// line, which the document measured once when it was parsed. Computing it
+    /// here meant walking every row of a twelve-thousand-line diff on every
+    /// render pass.
+    let document: GitDiffDocument
     let side: GitDiffPaneSide
     let theme: CodeTheme
     let palette: GitDiffPalette
@@ -30,17 +34,7 @@ struct GitDiffPane: View {
     /// off a row that has nothing left to reveal.
     var onExpandGap: (() -> Void)?
 
-    /// Uniform, and deliberately not measured per row.
-    ///
-    /// Diff rows are single lines of monospaced text with no wrapping, so
-    /// they are all the same height anyway — and a uniform height is what
-    /// lets the two panes stay aligned without either of them asking the
-    /// other how tall its content turned out.
-    var rowHeight: CGFloat { ceil(font.ascender - font.descender + font.leading) + 2 }
-
-    /// Wide enough for a five-digit line number, which covers every file
-    /// anyone reads and stops the gutter twitching as it scrolls.
-    private var gutterWidth: CGFloat { ceil(font.maximumAdvancement.width * 5) + 12 }
+    private var rows: [GitDiffRow] { document.rows }
 
     /// How wide the widest line makes this pane.
     ///
@@ -51,12 +45,12 @@ struct GitDiffPane: View {
     /// the scroll view should be — and `LazyVStack` cannot answer it
     /// either, because the whole point of it is that it has not looked at
     /// the rows below the fold.
-    private var contentWidth: CGFloat {
-        let longest = rows.reduce(0) { widest, row in
-            let line = side == .left ? row.left : row.right
-            return max(widest, line?.displayText.count ?? 0)
-        }
-        return gutterWidth + 8 + CGFloat(longest) * font.maximumAdvancement.width + 24
+    ///
+    /// The character count comes from the document, which measured it when it
+    /// was parsed. See `GitDiffDocument.widestLeft`.
+    private func contentWidth(_ metrics: GitDiffPaneMetrics) -> CGFloat {
+        let longest = side == .left ? document.widestLeft : document.widestRight
+        return metrics.gutterWidth + 8 + CGFloat(longest) * font.maximumAdvancement.width + 24
     }
 
     /// Paints no base colour of its own, deliberately.
@@ -75,12 +69,18 @@ struct GitDiffPane: View {
     /// over whatever is behind, which is now the same thing the source pane
     /// sits on.
     var body: some View {
-        GeometryReader { viewport in
+        /// Once per pane, not once per row. Every one of these depends on the
+        /// font alone, and `signWidth` measures two strings to get there — so
+        /// reading them from inside the row builder measured two strings for
+        /// every row the reader scrolled past.
+        let metrics = GitDiffPaneMetrics(font: font)
+
+        return GeometryReader { viewport in
             ScrollView([.vertical, .horizontal]) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(rows) { row in
-                        rowView(row)
-                            .frame(height: rowHeight)
+                        rowView(row, metrics)
+                            .frame(height: metrics.rowHeight)
                     }
                 }
                 /// Both dimensions are floored at the viewport's, for two
@@ -92,7 +92,7 @@ struct GitDiffPane: View {
                 /// content smaller than itself, and a diff of nine lines
                 /// would otherwise float in the middle of the pane.
                 .frame(
-                    width: max(contentWidth, viewport.size.width),
+                    width: max(contentWidth(metrics), viewport.size.width),
                     alignment: .leading
                 )
                 .frame(minHeight: viewport.size.height, alignment: .top)
@@ -107,17 +107,17 @@ struct GitDiffPane: View {
     }
 
     @ViewBuilder
-    private func rowView(_ row: GitDiffRow) -> some View {
+    private func rowView(_ row: GitDiffRow, _ metrics: GitDiffPaneMetrics) -> some View {
         switch row.content {
         case .gap(let header):
-            gapRow(header)
+            gapRow(header, metrics)
 
         case .lines(let left, let right, let inline):
             let line = side == .left ? left : right
             let spans = side == .left ? inline?.removed : inline?.added
 
             if let line {
-                lineRow(line, emphasis: spans)
+                lineRow(line, emphasis: spans, metrics)
             } else {
                 /// Filler. The other side has a line here and this one does
                 /// not, so the band is drawn empty rather than skipped —
@@ -129,12 +129,12 @@ struct GitDiffPane: View {
     }
 
     @ViewBuilder
-    private func gapRow(_ header: GitDiffHunk.Header) -> some View {
+    private func gapRow(_ header: GitDiffHunk.Header, _ metrics: GitDiffPaneMetrics) -> some View {
         let label = HStack(spacing: 0) {
             Text(gapLabel(header))
                 .font(Font(font))
                 .foregroundStyle(Color(nsColor: palette.gapForeground))
-                .padding(.leading, gutterWidth + signWidth + 4)
+                .padding(.leading, metrics.gutterWidth + metrics.signWidth + 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: palette.gapBackground))
@@ -173,28 +173,22 @@ struct GitDiffPane: View {
         }
     }
 
-    /// Wide enough for either sign at this font, measured rather than guessed:
-    /// a `-` and a `+` are not the same width, and the reader can change the
-    /// font.
-    private var signWidth: CGFloat {
-        let attributes: [NSAttributedString.Key: Any] = [.font: font]
-        let plus = ("+" as NSString).size(withAttributes: attributes).width
-        let minus = ("\u{2212}" as NSString).size(withAttributes: attributes).width
-        return ceil(max(plus, minus)) + 4
-    }
-
     private func gapLabel(_ header: GitDiffHunk.Header) -> String {
         let start = side == .left ? header.oldStart : header.newStart
         let count = side == .left ? header.oldCount : header.newCount
         return count == 0 ? "⋯" : "⋯ \(start)–\(start + count - 1)"
     }
 
-    private func lineRow(_ line: GitDiffLine, emphasis: [NSRange]?) -> some View {
+    private func lineRow(
+        _ line: GitDiffLine,
+        emphasis: [NSRange]?,
+        _ metrics: GitDiffPaneMetrics
+    ) -> some View {
         HStack(spacing: 0) {
             Text(number(of: line).map(String.init) ?? "")
                 .font(Font(font))
                 .foregroundStyle(Color(nsColor: theme.lineNumber))
-                .frame(width: gutterWidth, alignment: .trailing)
+                .frame(width: metrics.gutterWidth, alignment: .trailing)
 
             /// The sign, between the number and the text.
             ///
@@ -209,7 +203,7 @@ struct GitDiffPane: View {
             Text(sign(of: line))
                 .font(Font(font))
                 .foregroundStyle(Color(nsColor: signColor(of: line)))
-                .frame(width: signWidth, alignment: .center)
+                .frame(width: metrics.signWidth, alignment: .center)
                 .padding(.trailing, 4)
 
             Text(text(of: line, emphasis: emphasis))
@@ -286,4 +280,40 @@ struct GitDiffPane: View {
 enum GitDiffPaneSide: Equatable {
     case left
     case right
+}
+
+/// The font-derived measurements a diff pane draws with.
+///
+/// One value taken once per render, rather than three computed properties read
+/// once per row. `signWidth` in particular measures two strings with
+/// `NSString.size(withAttributes:)`, and reading it from inside the row builder
+/// measured two strings for every row a reader scrolled past — for a number
+/// that depends on nothing but the font.
+struct GitDiffPaneMetrics {
+    /// Uniform, and deliberately not measured per row.
+    ///
+    /// Diff rows are single lines of monospaced text with no wrapping, so
+    /// they are all the same height anyway — and a uniform height is what
+    /// lets the two panes stay aligned without either of them asking the
+    /// other how tall its content turned out.
+    let rowHeight: CGFloat
+
+    /// Wide enough for a five-digit line number, which covers every file
+    /// anyone reads and stops the gutter twitching as it scrolls.
+    let gutterWidth: CGFloat
+
+    /// Wide enough for either sign at this font, measured rather than guessed:
+    /// a `-` and a `+` are not the same width, and the reader can change the
+    /// font.
+    let signWidth: CGFloat
+
+    init(font: NSFont) {
+        rowHeight = ceil(font.ascender - font.descender + font.leading) + 2
+        gutterWidth = ceil(font.maximumAdvancement.width * 5) + 12
+
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let plus = ("+" as NSString).size(withAttributes: attributes).width
+        let minus = ("\u{2212}" as NSString).size(withAttributes: attributes).width
+        signWidth = ceil(max(plus, minus)) + 4
+    }
 }

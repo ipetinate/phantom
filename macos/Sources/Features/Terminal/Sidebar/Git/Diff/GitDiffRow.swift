@@ -142,8 +142,31 @@ struct GitDiffDocument: Equatable {
     let file: GitFileDiff
     let rows: [GitDiffRow]
 
+    /// The longest line on each side, in characters.
+    ///
+    /// Measured once, here, because the pane that draws it measured it in
+    /// `body`: a walk of every row of both sides, counting the characters of
+    /// each, on every render pass — for a number that cannot change once the
+    /// diff is parsed. A document is built off the main actor; `body` is not,
+    /// and runs again for every scroll, hover and publish that reaches the
+    /// card the diff sits in.
+    let widestLeft: Int
+    let widestRight: Int
+
     init(file: GitFileDiff) {
         self.file = file
-        self.rows = GitDiffAlignment.rows(for: file)
+        let rows = GitDiffAlignment.rows(for: file)
+        self.rows = rows
+        self.widestLeft = Self.widest(of: rows, \.left)
+        self.widestRight = Self.widest(of: rows, \.right)
+    }
+
+    private static func widest(
+        of rows: [GitDiffRow],
+        _ side: (GitDiffRow) -> GitDiffLine?
+    ) -> Int {
+        rows.reduce(0) { widest, row in
+            max(widest, side(row)?.displayText.count ?? 0)
+        }
     }
 }
