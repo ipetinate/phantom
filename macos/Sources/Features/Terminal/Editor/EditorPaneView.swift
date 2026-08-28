@@ -1585,6 +1585,7 @@ private struct DocumentView: View {
         /// the file from underneath the banner saying it cannot be edited.
         guard divergence?.isReadOnly != true else { return }
         if await formatWithPrettier(trigger) { return }
+        if await formatWithPrettierFromPath(trigger) { return }
         await formatWithLanguageServer(trigger)
     }
 
@@ -1640,6 +1641,62 @@ private struct DocumentView: View {
             }
         }.value
 
+        return apply(outcome, trigger: trigger, at: path, to: text, since: revision)
+    }
+
+    /// Prettier when the project did not ask for it.
+    ///
+    /// Returns false when this route does not apply, leaving the language
+    /// server to answer and to say what it has to say. See
+    /// `EditorFormatRoute.usesPrettierFromPath` for when it does.
+    private func formatWithPrettierFromPath(_ trigger: EditorFormatTrigger) async -> Bool {
+        guard usesPrettier else { return false }
+
+        let path = document.url.path
+        let name = (path as NSString).lastPathComponent
+        guard EditorFormatRoute.usesPrettierFromPath(
+            trigger: trigger,
+            prettierKnowsTheFile: PrettierProject.parserCanBeInferred(for: name),
+            server: lsp.status(forPath: path),
+            serverFormats: lsp.hasCapability("documentFormattingProvider", forPath: path))
+        else { return false }
+
+        let revision = document.revision
+        let text = document.currentText
+
+        let outcome = await Task.detached(priority: .userInitiated) {
+            /// The project is still discovered, and still not asked to declare
+            /// Prettier: what it contributes here is the directory to run in
+            /// and, where there is one, the Prettier installed into it. A
+            /// project with neither falls through to the login shell's `PATH`,
+            /// which is what `PrettierFormatter.binary` already does.
+            let project = PrettierProject.discover(forFile: path)
+            do {
+                return PrettierAttempt.answered(
+                    try PrettierFormatter.edit(for: text, at: path, in: project))
+            } catch {
+                return PrettierAttempt.failed(error.localizedDescription)
+            }
+        }.value
+
+        return apply(outcome, trigger: trigger, at: path, to: text, since: revision)
+    }
+
+    /// What to do with the buffer, and what to say — one copy for both
+    /// Prettier routes, because they differ in who may run Prettier and in
+    /// nothing else.
+    ///
+    /// - Parameters:
+    ///   - text: the buffer as it was when the run started. The edit was
+    ///     measured against it.
+    ///   - revision: the document revision at the same moment.
+    private func apply(
+        _ outcome: PrettierAttempt,
+        trigger: EditorFormatTrigger,
+        at path: String,
+        to text: String,
+        since revision: Int
+    ) -> Bool {
         /// One place decides what is worth saying, so the branches below are
         /// left deciding only what to do with the buffer.
         if let message = outcome.notice(for: trigger) {
