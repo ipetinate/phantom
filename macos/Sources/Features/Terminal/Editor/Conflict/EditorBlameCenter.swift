@@ -38,12 +38,55 @@ final class EditorBlameCenter: ObservableObject {
 
     private init() {}
 
+    /// The lines the reader has changed since the last commit, per file.
+    ///
+    /// Kept here because it is the answer to a question `git blame` cannot be
+    /// asked. See ``request(path:line:isLocallyChanged:)``.
+    private var locallyChanged: [String: Set<Int>] = [:]
+
+    /// Records which lines of `path` differ from the committed file.
+    ///
+    /// Called by the editor with the same marks it draws in the gutter, so
+    /// the `+` beside a line and the absence of somebody else's name beside
+    /// it are one fact rather than two that can disagree.
+    func setLocallyChanged(_ lines: Set<Int>, forPath path: String) {
+        guard locallyChanged[path] != lines else { return }
+        locallyChanged[path] = lines
+
+        /// A line that just became changed may be the one on screen, still
+        /// showing the name `git blame` gave it a moment ago.
+        if let key = currentKey, key.path == path, lines.contains(key.line) {
+            current = nil
+        }
+    }
+
     /// Asks about a line, and publishes the answer when it arrives.
     ///
     /// Passing nil is how the caret leaving a file takes the ghost text down.
+    ///
+    /// **A line the reader has changed is never asked about.** `git blame -L n,n`
+    /// reads the file *on disk*, and it answers by line *number*. Type a new
+    /// line into an unsaved buffer and git looks at whatever number that is in
+    /// the saved file and names whoever last touched it — a real person, a
+    /// real commit, and nothing to do with the line on screen. Reported from
+    /// a `.vue` file where a freshly typed line was credited to a colleague's
+    /// commit from a week before.
+    ///
+    /// So a changed line answers with nothing rather than with somebody
+    /// else's name. Being told who wrote a line you are in the middle of
+    /// writing is not information; being told the wrong person wrote it is
+    /// worse than silence. Once the change is committed the line stops being
+    /// marked and git answers for it again, which is the same moment the `+`
+    /// leaves the gutter.
     func request(path: String?, line: Int?) {
         guard let path, let line, line > 0 else {
             currentKey = nil
+            current = nil
+            return
+        }
+
+        guard locallyChanged[path]?.contains(line) != true else {
+            currentKey = Key(path: path, line: line)
             current = nil
             return
         }
@@ -87,6 +130,10 @@ final class EditorBlameCenter: ObservableObject {
     /// pointing at the wrong line.
     func invalidate(path: String) {
         cache = cache.filter { $0.key.path != path }
+        /// The marks are not dropped with the cache. They are recomputed from
+        /// the same edit that invalidated it and arrive a moment later, and
+        /// clearing them here would let one caret move in between ask git
+        /// about a line the reader had just changed.
         if currentKey?.path == path {
             currentKey = nil
             current = nil

@@ -66,21 +66,42 @@ final class CodeGutterView: NSView {
     private var mark: Mark?
 
     /// What happened to a line since the version this file is being compared
-    /// against — `+` for one that entered, `-` for a place lines left from.
+    /// against.
     ///
-    /// One case and not three. A *changed* line is a line that entered: what
-    /// sits in the file now is the new text, and marking it as anything else
-    /// would have the margin describe a line the reader cannot see. So `-`
-    /// means only what it says — a run was deleted here and nothing replaced
-    /// it — and where a change replaced lines in place, `+` wins.
+    /// **Three cases, and the third exists because two could not tell the
+    /// truth.** With only `added` and `removed`, a line whose text was edited
+    /// in place had to be filed as one of them, and it was filed as removed —
+    /// so a reformat that joined seven lines into two put a minus sign beside
+    /// two lines that were right there on screen. Reported, and the reporter
+    /// was right: a minus next to a line a reader can see is a lie about that
+    /// line.
+    ///
+    /// - `added`: the line is new. Its text has no counterpart in the
+    ///   committed file.
+    /// - `changed`: the line exists in both, with different text.
+    /// - `removed`: lines left from **between** two surviving lines and
+    ///   nothing replaced them. This is the only case that describes a place
+    ///   rather than a line, which is why it is drawn as a wedge on the
+    ///   boundary instead of a glyph beside a line number.
+    ///
+    /// Do not derive anything about *whose* text a line is from these. That
+    /// question has its own answer in
+    /// ``EditorDiffMarks/changedLines(current:base:)``, and conflating the two
+    /// is how the git lens came to name a colleague beside lines the reader
+    /// had just edited.
     enum DiffMark: Equatable {
         case added
+        case changed
         case removed
 
-        var glyph: String {
+        /// What the margin draws, or nil for a case that has no line of its
+        /// own. `removed` is a boundary; a glyph would attach it to a line
+        /// that survived.
+        var glyph: String? {
             switch self {
             case .added: return "+"
-            case .removed: return "\u{2212}"
+            case .changed: return "\u{2223}"
+            case .removed: return nil
             }
         }
     }
@@ -383,22 +404,34 @@ final class CodeGutterView: NSView {
         mark.image.draw(in: Self.markRect(in: row, size: markSize))
     }
 
-    /// One `+` or `-`, in the column the numbers leave for it.
+    /// One mark, in the column the numbers leave for it.
     ///
     /// Nothing at all for an unchanged line, which is almost every line of
     /// almost every file: the column stays empty rather than carrying a
     /// placeholder, so the eye finds the changes by their being the only
     /// things there.
+    ///
+    /// And nothing for `removed`, which has no glyph. It marks the boundary
+    /// two surviving lines now sit against, so it is drawn by
+    /// ``drawRemovalWedge(at:after:)`` on the edge between them rather than
+    /// beside either one of them — a `-` on a line the reader can see is a
+    /// claim about that line, and the line is right there.
     private func draw(_ diffMark: DiffMark?, in row: NSRect, after numbersEnd: CGFloat) {
         guard let diffMark, let palette = diffPalette else { return }
 
         let color: NSColor
         switch diffMark {
         case .added: color = palette.addedEmphasis
+        case .changed: color = palette.changedEmphasis
         case .removed: color = palette.removedEmphasis
         }
 
-        let glyph = diffMark.glyph as NSString
+        guard let glyphText = diffMark.glyph else {
+            drawRemovalWedge(at: row, after: numbersEnd, color: color)
+            return
+        }
+
+        let glyph = glyphText as NSString
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: color,
@@ -412,6 +445,33 @@ final class CodeGutterView: NSView {
             withAttributes: attributes
         )
     }
+
+    /// The mark for lines that left, drawn on the top edge of the line that
+    /// followed them.
+    ///
+    /// A small triangle pointing into the margin, the shape VS Code and
+    /// JetBrains both use for this. It sits on the boundary because that is
+    /// what it describes: the lines it refers to are not on screen, and the
+    /// line that is on screen survived unchanged. Marking that line instead
+    /// was the bug this replaces.
+    private func drawRemovalWedge(at row: NSRect, after numbersEnd: CGFloat, color: NSColor) {
+        let width = Self.removalWedgeWidth
+        let height = width * 0.7
+        let x = numbersEnd + Self.diffTrailingGap
+
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: x, y: row.minY))
+        path.line(to: NSPoint(x: x + width, y: row.minY))
+        path.line(to: NSPoint(x: x + width / 2, y: row.minY + height))
+        path.close()
+
+        color.setFill()
+        path.fill()
+    }
+
+    /// How wide the removal wedge is. Narrower than a `+` so it reads as a
+    /// boundary rather than as another character in the column.
+    private static let removalWedgeWidth: CGFloat = 7
 
     /// The empty line TextKit appends to a document that ends in a newline,
     /// or nil for every other fragment.

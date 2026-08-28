@@ -251,13 +251,29 @@ struct GitRepoView: View {
     private var syncCounts: some View {
         if let status, status.hasUpstream, status.ahead + status.behind > 0 {
             HStack(spacing: 4) {
+                /// The counts are the buttons. A reader who has just read "3
+                /// commits to pull" is already pointing at the thing they want
+                /// to act on, and making them find the same action three
+                /// levels into a menu is asking them to say it twice.
                 if status.behind > 0 {
-                    SidebarCountBadge(count: status.behind, symbol: "arrow.down")
-                        .help("Commits to pull")
+                    Button {
+                        center.updateFromUpstream(in: root)
+                    } label: {
+                        SidebarCountBadge(count: status.behind, symbol: "arrow.down")
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(status.behind) commit\(status.behind == 1 ? "" : "s") to pull — "
+                        + "click to update this branch")
                 }
                 if status.ahead > 0 {
-                    SidebarCountBadge(count: status.ahead, symbol: "arrow.up")
-                        .help("Commits to push")
+                    Button {
+                        center.push(in: root)
+                    } label: {
+                        SidebarCountBadge(count: status.ahead, symbol: "arrow.up")
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(status.ahead) commit\(status.ahead == 1 ? "" : "s") to push — "
+                        + "click to push")
                 }
             }
         }
@@ -513,7 +529,7 @@ struct GitRepoView: View {
                         if staged {
                             center.unstageAll(in: root)
                         } else {
-                            center.stageAll(in: root)
+                            stageAll()
                         }
                     } label: {
                         Image(systemName: staged ? "minus" : "plus")
@@ -556,11 +572,45 @@ struct GitRepoView: View {
 
     // MARK: Actions
 
+    /// Stages everything, after one question about everything that still holds
+    /// markers.
+    ///
+    /// `GitCenter.stageAll(in:)` already refuses to `add -A` over a path git
+    /// calls unmerged, and it keeps doing that — this is a second check in
+    /// front of it, not a replacement. The two see different files: git stops
+    /// calling a path unmerged as soon as it is staged once, so a file the
+    /// reader resolved half of and staged is no longer unmerged and would go
+    /// straight back into the index with its remaining `<<<<<<<` blocks.
+    ///
+    /// The paths are asked of `GitCenter` rather than read off `status` here,
+    /// so the question is put about exactly the files the stage would touch.
+    private func stageAll() {
+        GitConflictStaging.confirmingAll(
+            center.safePathsToStage(in: root),
+            under: root,
+            in: selectedTab?.window
+        ) {
+            center.stageAll(in: root)
+        }
+    }
+
+    /// The one gesture that can end a merge badly, which is why staging goes
+    /// through `GitConflictStaging` and unstaging does not: `git add` on a file
+    /// with markers still in it tells git the conflict is resolved, and git's
+    /// refusal to commit unmerged paths was the last thing in the way. Both the
+    /// row's `+` button and the menu's Stage item arrive here, so guarding this
+    /// guards both.
     private func toggleStage(_ change: GitFileChange, staged: Bool) {
         if staged {
             center.unstage([change.path], in: root)
         } else {
-            center.stage([change.path], in: root)
+            GitConflictStaging.confirming(
+                change,
+                at: url(for: change),
+                in: selectedTab?.window
+            ) {
+                center.stage([change.path], in: root)
+            }
         }
     }
 

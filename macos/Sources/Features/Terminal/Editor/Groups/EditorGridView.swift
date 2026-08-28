@@ -221,7 +221,7 @@ private struct EditorGridCell: View {
         /// selection is the same mechanism the terminal uses, and it answers
         /// "which of these am I looking at" — which is the question a panel
         /// laid over the others cannot answer.
-        if let review = center.review, group.tabs.showsReview {
+        if let review = group.tabs.selectedReview {
             GitReviewPanelView(
                 scope: review,
                 theme: EditorTheme.make(from: ThemePalette.shared),
@@ -240,9 +240,9 @@ private struct EditorGridCell: View {
                 /// aside on its own — the reader sees the file rather than a
                 /// tab appearing behind a screen that did not move.
                 onOpenFile: { path in _ = center.open(URL(fileURLWithPath: path)) },
-                onClose: { center.closeReview() },
+                onClose: { center.closeReview(review.id) },
                 onOpenCommit: { commit in
-                    center.showReview(.commit(
+                    center.openReview(.commit(
                         root: review.root,
                         sha: commit.sha,
                         subject: commit.subject))

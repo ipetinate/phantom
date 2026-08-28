@@ -70,17 +70,28 @@ final class CodeTextStorage {
     ///
     /// That reset is right for every attribute this pass owns and wrong for
     /// every attribute it doesn't, which is what `preserving` is for. A
-    /// diagnostic underline belongs to another pass entirely, and editing a
-    /// line wiped it: the recolour of the edited region took the underline
-    /// style with it and, worse, the underline *colour*, which is the whole
-    /// of the severity — a warning and an error look the same once the colour
-    /// is gone. The keys arrive as a value rather than as knowledge, so this
-    /// type still knows nothing about diagnostics: only that some attributes
-    /// in the range are somebody else's, and are to be put back.
+    /// diagnostic mark belongs to another pass entirely, and editing a line
+    /// wiped it: the recolour of the edited region took the mark with it and,
+    /// worse, took its *colour*, which is the whole of the severity — a
+    /// warning and an error look the same once the colour is gone. The keys
+    /// arrive as a value rather than as knowledge, so this type still knows
+    /// nothing about diagnostics: only that some attributes in the range are
+    /// somebody else's, and are to be put back.
+    ///
+    /// Three keys in the default rather than one. `codeDiagnosticUnderline`
+    /// is what a problem is marked with now — a wave, drawn by
+    /// `CodeSquiggleView`, because `NSUnderlineStyle` has no wave. The two
+    /// straight-underline keys stay in the set because a buffer marked up by
+    /// an earlier build can still be on screen when this one runs, and a rule
+    /// half-erased by a recolour is worse than one left whole.
     func highlight(
         _ storage: NSTextStorage,
         in range: NSRange,
-        preserving: Set<NSAttributedString.Key> = [.underlineStyle, .underlineColor]
+        preserving: Set<NSAttributedString.Key> = [
+            .codeDiagnosticUnderline,
+            .underlineStyle,
+            .underlineColor,
+        ]
     ) {
         let safe = NSIntersectionRange(range, NSRange(location: 0, length: storage.length))
         guard safe.length > 0 else { return }

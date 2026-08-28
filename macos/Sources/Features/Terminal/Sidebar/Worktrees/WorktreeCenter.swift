@@ -202,10 +202,19 @@ final class WorktreeCenter: ObservableObject {
     /// any more, or no git at all — and is kept apart from an empty list,
     /// which git never returns for a real repository since the main
     /// checkout is always in it.
+    ///
+    /// Which is why nothing parsed is also `nil` rather than an empty list.
+    /// Git printing no checkout at all is not an answer this can receive,
+    /// so reading one means the output never arrived — output can be lost
+    /// under a zero exit status when the machine is too busy to schedule
+    /// the pipe readers. Publishing that as an empty list empties the pane
+    /// of a repository whose worktrees are all still there; treating it as
+    /// no answer leaves the last real one on screen.
     nonisolated static func loadList(commonRoot: String) -> [GitWorktree]? {
         let result = GitCommand.run(["worktree", "list", "--porcelain"], in: commonRoot)
         guard result.succeeded else { return nil }
-        return GitWorktree.parse(porcelain: result.stdout)
+        let list = GitWorktree.parse(porcelain: result.stdout)
+        return list.isEmpty ? nil : list
     }
 
     /// Which branches have already landed on the repository's base.

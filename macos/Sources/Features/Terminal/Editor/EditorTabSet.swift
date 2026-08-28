@@ -50,17 +50,26 @@ enum EditorSelection: Equatable {
     case terminal
     case file(String)
 
-    /// The branch review, which is a tab like the terminal is a tab: one per
-    /// cell, not a file, and closable.
+    /// One review, named by its ``GitReviewScope/id``.
     ///
-    /// No payload. Which review is showing lives on `EditorCenter`, because it
-    /// is one per window and this enum is per cell — carrying it here would
-    /// let two cells disagree about a screen there is only one of.
-    case review
+    /// It used to carry nothing, because the window showed one review and
+    /// `EditorCenter` held which one. That is what made a commit reuse the
+    /// screen the last commit was on: with one review per window there was
+    /// nowhere to put a second, and no way to say which of two a cell means.
+    /// The id is what a tab per commit needs — and it is the id rather than
+    /// the scope so that the reviews this cell holds stay the one place a
+    /// scope is written down, with the selection pointing at one of them.
+    case review(String)
 
     var path: String? {
         guard case .file(let path) = self else { return nil }
         return path
+    }
+
+    /// The review this points at, if it points at one.
+    var reviewID: String? {
+        guard case .review(let id) = self else { return nil }
+        return id
     }
 }
 
@@ -76,6 +85,17 @@ enum EditorSelection: Equatable {
 struct EditorTabSet: Equatable {
     private(set) var tabs: [EditorTab] = []
 
+    /// The reviews open in this cell, in the order they were opened.
+    ///
+    /// A second list beside the files rather than a row among them: every
+    /// rule in `tabs` is about a path — the dirty dot, the rename, the
+    /// directory shown when two names collide — and a review has none. What
+    /// the two lists share is the cell, and that is the point. A review that
+    /// belongs to a cell is a review two cells can disagree about, which is
+    /// what lets one half of a split hold `a1b2c3d` while the other holds
+    /// `9f8e7d6`.
+    private(set) var reviews: [GitReviewScope] = []
+
     /// Starts on the terminal, which is what an empty pane means.
     private(set) var selection: EditorSelection = .terminal
 
@@ -84,7 +104,17 @@ struct EditorTabSet: Equatable {
     /// Whether the pane is showing the terminal rather than a file.
     var showsTerminal: Bool { selection == .terminal }
 
-    var showsReview: Bool { selection == .review }
+    var showsReview: Bool { selection.reviewID != nil }
+
+    /// The review this cell is showing, if it is showing one.
+    ///
+    /// Resolved through the selection rather than stored beside it, so a tab
+    /// that is gone cannot be the one on screen.
+    var selectedReview: GitReviewScope? {
+        selection.reviewID.flatMap { id in reviews.first { $0.id == id } }
+    }
+
+    func holdsReview(_ id: String) -> Bool { reviews.contains { $0.id == id } }
 
     /// The bar appears only once there is something to switch *to*.
     ///
@@ -141,7 +171,11 @@ struct EditorTabSet: Equatable {
 
         guard selectedPath == path else { return }
         guard !tabs.isEmpty else {
-            selection = .terminal
+            /// A review open in this cell is nearer than the terminal, which
+            /// with a grid may live in another cell entirely — and it is a
+            /// tab in this very strip, so falling back to it keeps the cell
+            /// showing something the reader can see they are on.
+            selection = reviews.last.map { .review($0.id) } ?? .terminal
             return
         }
         selection = .file(tabs[max(0, index - 1)].id)
@@ -157,11 +191,49 @@ struct EditorTabSet: Equatable {
         selection = .file(path)
     }
 
-    /// Brings the review forward. Like `selectTerminal`, it changes what is
-    /// shown without closing anything: the file that was in front stays open
-    /// and comes back when the review is closed or another tab is picked.
-    mutating func selectReview() {
-        selection = .review
+    /// Opens a review, or brings it forward when this cell already has it.
+    ///
+    /// The rule files follow, keyed on ``GitReviewScope/id``: a commit that
+    /// is already a tab here does not become a second one. The scope is
+    /// written over the one that was there, because the two are the same tab
+    /// by definition and the arriving one carries the subject as git last
+    /// printed it — a reworded commit relabels its tab rather than opening a
+    /// twin.
+    ///
+    /// Like `selectTerminal`, opening closes nothing: the file that was in
+    /// front stays open and comes back when this review is closed.
+    mutating func openReview(_ scope: GitReviewScope) {
+        if let index = reviews.firstIndex(where: { $0.id == scope.id }) {
+            reviews[index] = scope
+        } else {
+            reviews.append(scope)
+        }
+        selection = .review(scope.id)
+    }
+
+    /// Brings one of this cell's reviews forward, ignoring an id it does not
+    /// hold — the same guard `select(_:)` gives a path from another cell.
+    mutating func selectReview(_ id: String) {
+        guard holdsReview(id) else { return }
+        selection = .review(id)
+    }
+
+    /// Closes one review tab and picks what to show next.
+    ///
+    /// The neighbour to the left among the reviews, which is what closing a
+    /// file tab does and what keeps closing several commits in a row from
+    /// jumping around the bar. With no review left it falls back the way it
+    /// always did, to a file or to the terminal.
+    mutating func closeReview(_ id: String) {
+        guard let index = reviews.firstIndex(where: { $0.id == id }) else { return }
+        reviews.remove(at: index)
+
+        guard selection.reviewID == id else { return }
+        guard reviews.isEmpty else {
+            selection = .review(reviews[max(0, index - 1)].id)
+            return
+        }
+        selectAfterReview()
     }
 
     /// What to show once the review's tab is gone.
@@ -170,7 +242,7 @@ struct EditorTabSet: Equatable {
     /// a cell showing nothing is a cell the reader has to click to recover,
     /// and the review was laid over something.
     mutating func selectAfterReview() {
-        guard selection == .review else { return }
+        guard showsReview else { return }
         if let last = tabs.last {
             selection = .file(last.path)
         } else {

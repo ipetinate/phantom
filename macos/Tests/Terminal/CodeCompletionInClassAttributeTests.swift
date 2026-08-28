@@ -61,8 +61,8 @@ struct CodeCompletionInClassAttributeTests {
         textView.setSelectedRange(NSRange(location: caret, length: 0))
 
         let provider = Provider()
-        textView.completionProvider = { offset in
-            await MainActor.run { provider.offsets.append(offset) }
+        textView.completionProvider = { request in
+            await MainActor.run { provider.offsets.append(request.offset) }
             return .unchanged // see the type comment — never reaches orderFront
         }
 

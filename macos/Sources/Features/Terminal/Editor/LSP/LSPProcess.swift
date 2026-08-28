@@ -93,6 +93,10 @@ final class LSPProcess: @unchecked Sendable {
 
     let definition: LSPServerDefinition
 
+    /// What the workspace adds to the definition's own arguments. See the
+    /// initialiser.
+    let extraArguments: [String]
+
     /// Finishes when the server exits.
     let events: AsyncStream<Event>
 
@@ -122,6 +126,12 @@ final class LSPProcess: @unchecked Sendable {
     /// leak with no upper limit.
     private static let eventBufferLimit = 512
 
+    /// - Parameter extraArguments: Appended to the definition's own
+    ///   arguments. For the one argument that cannot live in the
+    ///   definition: `@vue/language-server` takes the path to TypeScript on
+    ///   its command line, and that path is a fact about the workspace
+    ///   being opened rather than about the server. See
+    ///   `LSPInitializationOptions.vueTSDKArgument(tsdk:)`.
     /// - Parameter environmentProvider: Injected so the transport can be
     ///   exercised without spawning a login shell, and so this file keeps
     ///   no hard dependency on the app. The default hands the server the
@@ -131,10 +141,12 @@ final class LSPProcess: @unchecked Sendable {
     ///   subprocesses.
     init(
         definition: LSPServerDefinition,
+        extraArguments: [String] = [],
         requestHandler: RequestHandler? = nil,
         environmentProvider: @escaping @Sendable () -> [String: String] = { LoginEnvironment.executableEnvironment() }
     ) {
         self.definition = definition
+        self.extraArguments = extraArguments
         self.requestHandler = requestHandler
         self.environmentProvider = environmentProvider
         self.writeQueue = DispatchQueue(label: "lsp.stdin.\(definition.languageID)")
@@ -381,7 +393,7 @@ final class LSPProcess: @unchecked Sendable {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = definition.arguments
+        process.arguments = definition.arguments + extraArguments
         process.environment = environment
         process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
 
@@ -524,10 +536,14 @@ final class LSPProcess: @unchecked Sendable {
     }
 
     /// Accepts the housekeeping requests every server sends and refuses the
-    /// rest. `workspace/configuration` is answered with one null per item
+    /// rest.
+    ///
+    /// Not private, because a handler that answers one request has to fall
+    /// through to exactly this for the others. A second copy of the list
+    /// would be a second place for a server's handshake to stall. `workspace/configuration` is answered with one null per item
     /// requested — "no opinion, use your defaults" — because the shape of
     /// the reply must match the request even when there is nothing to say.
-    private static func defaultAnswer(to request: LSPRequest) -> Result<LSPValue, LSPResponseError> {
+    static func defaultAnswer(to request: LSPRequest) -> Result<LSPValue, LSPResponseError> {
         switch request.method {
         case "client/registerCapability", "client/unregisterCapability",
              "window/workDoneProgress/create":

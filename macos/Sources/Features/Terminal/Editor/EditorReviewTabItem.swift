@@ -9,6 +9,11 @@ import SwiftUI
 /// away from being treated as a file by anything that reads `tab.path`.
 struct EditorReviewTabItem: View {
     let title: String
+
+    /// What the tooltip says. Passed in rather than fixed, because the tab is
+    /// no longer always the branch: a cell can hold one tab per commit, and
+    /// "The branch review" on all of them would name none of them.
+    var help: String = "The branch review"
     let isSelected: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
@@ -55,6 +60,6 @@ struct EditorReviewTabItem: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovered = $0 }
-        .help("The branch review")
+        .help(help)
     }
 }

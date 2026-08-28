@@ -68,6 +68,19 @@ struct EditorTabDragSource: NSViewRepresentable {
     /// A right click, which opens the same menu a double click does.
     let onMenu: () -> Void
 
+    /// Moves the tab along its own strip, and answers how many places it
+    /// actually moved.
+    ///
+    /// The answer matters because the strip refuses some moves: a tab will
+    /// not cross the pinned boundary or leave the end of its run. A gesture
+    /// that assumed every request landed would drift out of step with the bar
+    /// — see `EditorTabGesture.placed`.
+    ///
+    /// Defaults to moving nothing, for a tab the strip cannot reorder. The
+    /// terminal's tab is the one: it is drawn ahead of the files rather than
+    /// among them, and it has no path for the strip to move.
+    var onReorder: (Int) -> Int = { _ in 0 }
+
     func makeNSView(context: Context) -> DragSourceView {
         let view = DragSourceView()
         apply(to: view)
@@ -84,6 +97,7 @@ struct EditorTabDragSource: NSViewRepresentable {
         view.preview = preview
         view.onClick = onClick
         view.onMenu = onMenu
+        view.onReorder = onReorder
     }
 
     final class DragSourceView: NSView, NSDraggingSource {
@@ -92,10 +106,32 @@ struct EditorTabDragSource: NSViewRepresentable {
         var preview: (() -> NSImage?)?
         var onClick: ((Int) -> Void)?
         var onMenu: (() -> Void)?
+        var onReorder: ((Int) -> Int)?
 
         /// Set while a session this view began is in flight, so the release
         /// that ends it is not also read as a click.
         private var isDragging = false
+
+        /// Where the button went down, in the window. The gesture is measured
+        /// from here rather than from the previous event: a threshold read
+        /// against one event's delta is cleared by a slow drag a point at a
+        /// time, and a hand that wanders out and back would leave the tab
+        /// somewhere other than where it started.
+        private var pressedAt: NSPoint?
+
+        /// The decision itself, which lives in a value with no view in it.
+        /// Made afresh on every press, because a gesture is one press.
+        private var gesture: EditorTabGesture?
+
+        /// Whether this gesture has moved the tab along the strip.
+        ///
+        /// A release that reordered is not also a click, for two reasons. A
+        /// reorder that ended on the second press of a double click would open
+        /// the tab's menu over the tab the reader had just put down. And
+        /// selecting it would show its file: a reader tidying the strip is
+        /// arranging tabs, not choosing one, and the pane they were reading
+        /// would change under them.
+        private var didReorder = false
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -104,10 +140,26 @@ struct EditorTabDragSource: NSViewRepresentable {
         /// window instead of the tab. The click is answered on release.
         override func mouseDown(with event: NSEvent) {
             isDragging = false
+            didReorder = false
+            pressedAt = event.locationInWindow
+            /// One place along the strip is a tab's width, and this view is
+            /// what there is to measure it with.
+            ///
+            /// Over a file's tab it covers the icon and the name but not the
+            /// padding or the close control — it is kept off that button on
+            /// purpose, see `EditorTabItem` — so it reads about forty points
+            /// short and the swap lands a little before the half. Erring
+            /// early is the right way to be wrong here: the reader sees the
+            /// tab move while they are still pushing, and pushing further
+            /// only moves it on. `EditorTabGesture.minimumStep` is the floor
+            /// under a tab too narrow to divide.
+            gesture = EditorTabGesture(tabWidth: bounds.width)
         }
 
         override func mouseUp(with event: NSEvent) {
-            guard !isDragging else { return }
+            let reordered = didReorder
+            reset()
+            guard !isDragging, !reordered else { return }
             onClick?(event.clickCount)
         }
 
@@ -115,8 +167,43 @@ struct EditorTabDragSource: NSViewRepresentable {
             onMenu?()
         }
 
+        /// Sideways reorders, up or down detaches, and a movement too small to
+        /// be either leaves the click alone. The whole of that decision is
+        /// `EditorTabGesture`; what is left here is reading the pointer and
+        /// doing as it says.
         override func mouseDragged(with event: NSEvent) {
-            guard !isDragging, let item else { return }
+            guard !isDragging, let pressedAt, var gesture = self.gesture else { return }
+            defer { self.gesture = gesture }
+
+            let translation = CGSize(
+                width: event.locationInWindow.x - pressedAt.x,
+                height: event.locationInWindow.y - pressedAt.y)
+
+            switch gesture.update(translation) {
+            case .idle:
+                return
+
+            case .reorder(let places):
+                didReorder = true
+                gesture.moved(onReorder?(places) ?? 0)
+
+            case .detach:
+                beginDrag(with: event)
+            }
+        }
+
+        /// Forgets the gesture, so the next press starts its own.
+        private func reset() {
+            pressedAt = nil
+            gesture = nil
+            didReorder = false
+        }
+
+        /// Hands the tab to AppKit, which is what splits the pane when it
+        /// lands. Reached only once the gesture has said the tab is on its
+        /// way out of the row.
+        private func beginDrag(with event: NSEvent) {
+            guard let item else { return }
             guard let pasteboardItem = item.pasteboardItem() else { return }
 
             let dragged = NSDraggingItem(pasteboardWriter: pasteboardItem)
@@ -205,6 +292,7 @@ struct EditorTabDragSource: NSViewRepresentable {
             operation: NSDragOperation
         ) {
             isDragging = false
+            reset()
             EditorTabDragSession.shared.end()
         }
     }

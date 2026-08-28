@@ -92,18 +92,25 @@ final class EditorCenter: ObservableObject {
     /// offer the external editor instead.
     @Published var openFailure: OpenFailure?
 
-    /// The review screen, when one is open, and which work it is showing.
+    /// The review the cell in focus is showing, when it is showing one.
     ///
-    /// A pane-level presentation rather than a tab, because it is not a file:
-    /// it has no path, nothing on disk changes when it closes, and the tab
-    /// model's every rule — reopening never duplicates, closing picks the
-    /// neighbour to the left — is about files. It takes the same area a file,
-    /// the terminal and the markdown preview take, which is what was asked
-    /// for; what it does not take is a place in the strip above them.
+    /// Read off that cell rather than stored here. It used to be a property
+    /// of the window — one review at a time, on the argument that two side by
+    /// side is a comparison nobody asked for — and that is exactly what was
+    /// asked for: a commit opened over the commit before it, so there was no
+    /// way to put two of them beside each other.
     ///
-    /// One at a time per window. Two reviews side by side is a comparison
-    /// nobody asked for, and the screen is wide by nature.
-    @Published var review: GitReviewScope?
+    /// A review is a tab now, in the cell's own `EditorTabSet`. Which one is
+    /// on screen is therefore a question about a cell, and two cells may
+    /// answer it differently. That is the whole of the split comparison.
+    var review: GitReviewScope? { tabs.selectedReview }
+
+    /// Every review open in this window, in cell order.
+    ///
+    /// For the Git panel's commit list, which marks the commits that already
+    /// have a tab. It reaches them through `GitReviewCenter` — see
+    /// ``publishReviewTabs()``.
+    var openReviews: [GitReviewScope] { tree.groups.flatMap(\.tabs.reviews) }
 
     struct OpenFailure: Identifiable {
         let id = UUID()
@@ -191,6 +198,15 @@ final class EditorCenter: ObservableObject {
     /// already has it — the grid's form of "reopening never duplicates".
     private func place(_ path: String) {
         activeGroupID = tree.open(path, in: activeGroupID)
+
+        /// A tab arrives clean, and the observer that keeps the dot honest
+        /// only fires on changes *after* this. A document restored with an
+        /// unsaved buffer is dirty from its first frame and would otherwise
+        /// sit there with no dot until the reader happened to type — telling
+        /// them their unsaved work is saved, which is the one thing the dot
+        /// exists to deny.
+        if documents[path]?.isDirty == true { setDirty(true, for: path) }
+
         refreshPaneVisibility()
     }
 
@@ -361,6 +377,28 @@ final class EditorCenter: ObservableObject {
         let next = PaneVisibility(
             showsTerminal: cell.showsTerminal, showsTabBar: cell.showsTabBar)
         if paneVisibility != next { paneVisibility = next }
+        publishReviewTabs()
+    }
+
+    /// Tells `GitReviewCenter` which reviews this window has open and which
+    /// one it is looking at.
+    ///
+    /// From here because every gesture that could change either answer ends
+    /// in `refreshPaneVisibility` — opening a review, closing one, switching
+    /// tabs, and moving focus to another cell. A hook on `openReview` alone
+    /// would be a highlight that follows the click rather than the tab: click
+    /// a commit, then click the other cell, and the marked row would still be
+    /// the first one.
+    ///
+    /// The centre is a singleton and this object is per window, so what is
+    /// pushed is keyed by *this* window — see
+    /// ``GitReviewCenter/noteReviewTabs(open:front:from:)``, which ignores a
+    /// report that changes nothing.
+    private func publishReviewTabs() {
+        GitReviewCenter.shared.noteReviewTabs(
+            open: openReviews.map(\.id),
+            front: tabs.selection.reviewID,
+            from: self)
     }
 
     // MARK: Opening and closing
@@ -437,12 +475,23 @@ final class EditorCenter: ObservableObject {
             if let showing { document.presentation = showing }
             document.reviewBase = reviewBase
 
+            /// Before anything renders, so a file with unsaved work appears
+            /// the way it was left rather than appearing clean and changing
+            /// under the reader a frame later.
+            document.restoreUnsavedBuffer()
+
             documents[path] = document
             document.startWatching()
             /// Before the tab exists, so the first render already has the
             /// timeline this file left behind — and so the disk check that
             /// may throw it away happens once, here, with the text that was
             /// just read rather than one the view guessed at.
+            ///
+            /// After the buffer is restored, and that order is the point: the
+            /// history was fingerprinted against the text the reader left,
+            /// which for a dirty file is the buffer and not the file. Passing
+            /// the disk text here would fail that check on exactly the files
+            /// whose history matters most.
             EditorUndoCenter.shared.attach(path: path, text: document.currentText)
             // The tab's dirty dot follows the document, and the document is
             // its own observable object — a change inside it doesn't reach
@@ -477,9 +526,20 @@ final class EditorCenter: ObservableObject {
     /// A nil `agent` leaves an existing mark alone rather than clearing it. A
     /// reader jumping to a definition has not made the agent's line wrong; only
     /// an edit does that, and the document clears it there.
+    /// Both halves are the reader's to refuse — see ``EditorFeatureSettings``.
+    ///
+    /// The scroll is checked only for a reveal an *agent* asked for. The same
+    /// path carries a jump to a definition and a click on a search result, and
+    /// those the reader asked for in that moment; refusing them would be
+    /// refusing their own click. `agent == nil` is what tells the two apart.
     private func apply(_ reveal: LSPRange, markedBy agent: CodingAgent?, to document: EditorDocument) {
-        document.reveal = (id: UUID().uuidString, range: reveal)
-        if let agent { document.mark(agent, atLine: reveal.start.line + 1) }
+        let features = EditorFeatureSettings.shared
+        if agent == nil || features.agentReveal {
+            document.reveal = (id: UUID().uuidString, range: reveal)
+        }
+        if let agent, features.agentGutterMark {
+            document.mark(agent, atLine: reveal.start.line + 1)
+        }
     }
 
     /// Opens a media file: a tab, a viewer, and none of the machinery a text
@@ -523,12 +583,37 @@ final class EditorCenter: ObservableObject {
         var name: String { (path as NSString).lastPathComponent }
     }
 
-    /// Closes a tab, asking first when it has unsaved edits.
+    /// Closes a tab, asking first only when closing it would actually lose
+    /// something.
+    ///
+    /// A dirty buffer is written down by ``EditorBackupStore`` and comes back
+    /// when the file is opened again, so for almost every file closing is no
+    /// longer a decision and the question is not worth asking — the same
+    /// trade VS Code calls hot exit.
+    ///
+    /// The buffer is flushed here rather than left to ``close(_:)`` because
+    /// the answer decides whether to ask: a file whose backup was written has
+    /// nothing at stake, and one whose backup could not be written has
+    /// everything at stake. Those are the files still worth interrupting
+    /// somebody for — a buffer past ``EditorBackupStore/maximumBytes``, or a
+    /// write that failed.
+    ///
+    /// This is the check that was missed when hot exit landed. `close(_:)`
+    /// on a list of paths had been taught the rule, and this one — the path
+    /// every tab's close button takes — had not, so the prompt went on
+    /// appearing for every unsaved file.
     func requestClose(_ path: String) {
-        guard documents[path]?.isDirty == true else {
+        guard let document = documents[path], document.isDirty else {
             close(path)
             return
         }
+
+        document.flushBackup()
+        guard !EditorBackupStore.hasBackup(path: path) else {
+            close(path)
+            return
+        }
+
         closeConfirmation = CloseConfirmation(path: path)
     }
 
@@ -680,11 +765,33 @@ final class EditorCenter: ObservableObject {
         close(tabs(in: groupID).tabs.map(\.path))
     }
 
-    /// Closes the clean ones and answers with the dirty ones.
+    /// Closes them, and answers with the ones that still need an answer.
+    ///
+    /// Which is now almost none of them. A dirty buffer is written down at
+    /// ``close(_:)`` and put back when the file is opened again, so closing a
+    /// file with unsaved work is not a decision any more and the prompt that
+    /// used to make it one is gone — the same trade VS Code calls hot exit.
+    ///
+    /// What still comes back is the buffer that could not be written down:
+    /// past ``EditorBackupStore/maximumBytes``, or a write that failed. Those
+    /// keep the old behaviour, because for them "close" really does mean
+    /// "lose it", and that is the one case worth interrupting somebody for.
     private func close(_ paths: [String]) -> [String] {
-        let dirty = paths.filter { documents[$0]?.isDirty == true }
-        for path in paths where !dirty.contains(path) { close(path) }
-        return dirty
+        var unsafe: [String] = []
+        for path in paths {
+            guard let document = documents[path], document.isDirty else {
+                close(path)
+                continue
+            }
+
+            document.flushBackup()
+            if EditorBackupStore.hasBackup(path: path) {
+                close(path)
+            } else {
+                unsafe.append(path)
+            }
+        }
+        return unsafe
     }
 
     /// Saves and then closes, for the "Save" answer.
@@ -694,6 +801,10 @@ final class EditorCenter: ObservableObject {
 
     func close(_ path: String) {
         documents[path]?.stopWatching()
+        /// The buffer goes to disk before the document does. A file closed
+        /// from anywhere -- a tab's x, a group closing, a window going away --
+        /// reaches here, so this is the one place that has to be sure.
+        documents[path]?.flushBackup()
         /// Before the document goes, because what is being recorded is the
         /// text it holds: from here until the file is opened again, the only
         /// thing that can change it is the world outside this app, and that
@@ -707,39 +818,81 @@ final class EditorCenter: ObservableObject {
         mutateHolder(of: path) { $0.close(path) }
     }
 
-    /// Shows the terminal without closing anything, and moves focus to the
-    /// cell it lives in — which is not necessarily the cell being worked in.
-    /// Puts the review screen on screen, or takes it down.
+    /// Opens a review as a tab, or brings the tab that already shows it
+    /// forward — wherever in the grid that tab is.
     ///
-    /// Setting it does not close anything: the file underneath stays open and
-    /// comes back when the review is dismissed, which is what makes this
-    /// usable as a glance rather than as a place to go.
-    func showReview(_ scope: GitReviewScope?) {
-        guard review != scope else {
-            /// Asked for the review that is already open: bring its tab
-            /// forward rather than doing nothing. Clicking "Review this work"
-            /// twice should land on the review both times, and after the first
-            /// click the reader has probably opened a file since.
-            if scope != nil { mutateActive { $0.selectReview() } }
+    /// The identity of a review tab is ``GitReviewScope/id``: the repository
+    /// and the work, with nothing about how either is drawn. Two commits
+    /// therefore make two tabs, and one commit clicked twice makes one — the
+    /// same promise `open(_:)` gives a file, and for the same reason. The
+    /// commit list is a list of names and clicking one twice is something
+    /// people do without thinking.
+    ///
+    /// Focus follows the tab, like `select(_:)` does for a file in another
+    /// cell: clicking a commit that is open in the other half of a split is
+    /// also a request to work in that half.
+    ///
+    /// Opening closes nothing. The file underneath stays open and comes back
+    /// when the review's tab is closed or another tab is picked.
+    func openReview(_ scope: GitReviewScope) {
+        if let holder = tree.groups.first(where: { $0.tabs.holdsReview(scope.id) })?.id {
+            tree.update(holder) { $0.tabs.openReview(scope) }
+            activeGroupID = holder
+            refreshPaneVisibility()
             return
         }
+        mutateActive { $0.openReview(scope) }
+    }
 
-        review = scope
-        if scope != nil {
-            mutateActive { $0.selectReview() }
-        } else {
-            /// Closing it leaves the cell showing whatever it showed before —
-            /// a file if one is open, the terminal if this is its cell. Both
-            /// are what `close` already does for a tab, so it is asked rather
-            /// than reimplemented.
-            mutateActive { $0.selectAfterReview() }
+    /// Brings an open review forward, ignoring one no cell holds.
+    func selectReview(_ id: String) {
+        guard let holder = tree.groups.first(where: { $0.tabs.holdsReview(id) })?.id else {
+            return
+        }
+        tree.update(holder) { $0.tabs.selectReview(id) }
+        activeGroupID = holder
+        refreshPaneVisibility()
+    }
+
+    /// Puts a review on screen, or takes the front one down.
+    ///
+    /// Kept in this shape because it is what the Git panel and the review
+    /// screen itself call. `nil` still means "close", and a scope still means
+    /// "show me this" — what changed underneath is that showing one no longer
+    /// replaces the one before it.
+    func showReview(_ scope: GitReviewScope?) {
+        guard let scope else {
+            closeReview()
+            return
+        }
+        openReview(scope)
+    }
+
+    /// Takes down the review the cell in focus is showing.
+    func closeReview() {
+        guard let id = tabs.selection.reviewID else { return }
+        closeReview(id)
+    }
+
+    /// Takes one review's tab down, wherever it is.
+    ///
+    /// Addressed by id rather than by cell so that closing a review from a
+    /// tab strip closes *that* tab, and not whichever one the focused cell
+    /// happens to be showing.
+    func closeReview(_ id: String) {
+        guard let holder = tree.groups.first(where: { $0.tabs.holdsReview(id) })?.id else {
+            return
+        }
+        let fallback = tree.neighbour(of: holder)
+        tree.update(holder) { $0.tabs.closeReview(id) }
+        if tree.group(activeGroupID) == nil {
+            activeGroupID = fallback ?? tree.groupIDs[0]
         }
         refreshPaneVisibility()
     }
 
-    /// Takes the review's tab down.
-    func closeReview() { showReview(nil) }
-
+    /// Shows the terminal without closing anything, and moves focus to the
+    /// cell it lives in — which is not necessarily the cell being worked in.
     func selectTerminal() {
         guard let host = tree.terminalHost else { return }
         tree.update(host) { $0.tabs.selectTerminal() }
@@ -777,6 +930,45 @@ final class EditorCenter: ObservableObject {
         media.removeAll()
         tree.closeAllFiles()
         activeGroupID = tree.terminalHost ?? tree.groupIDs[0]
+        refreshPaneVisibility()
+    }
+
+    /// Puts a saved arrangement back: the cells, the tabs in each, and the
+    /// cell that was in front.
+    ///
+    /// The files are opened first and the layout is stated afterwards, in one
+    /// assignment. `open` places a file in the cell *in focus*, so replaying
+    /// it cell by cell would mean rebuilding the shape and moving files
+    /// through it at the same time, and every intermediate shape would have
+    /// to be a legal one. Documents are keyed by path and know nothing of
+    /// cells, so loading them in any order and then declaring the layout
+    /// gives the same result with no ordering to get wrong.
+    ///
+    /// A file that is gone, or that is there but cannot be read, costs its
+    /// own tab and nothing else: it is left out by `rebuilt`, which is told
+    /// what actually opened rather than what was asked for.
+    ///
+    /// Unsaved text is deliberately not restored here. The tab comes back
+    /// over the file as it is on disk; the buffer the reader left is the undo
+    /// timeline's to return, and two writers over the same bytes would be two
+    /// sources of truth for them.
+    func restore(_ state: EditorGridState) {
+        var opened: Set<String> = []
+        for path in state.paths where FileManager.default.fileExists(atPath: path) {
+            if open(URL(fileURLWithPath: path)) { opened.insert(path) }
+        }
+
+        /// `open` raises this for a file it could name but not read, and the
+        /// host turns it into a dialog offering the external editor. There is
+        /// no gesture behind a restore to explain such a dialog, so a reader
+        /// would be greeted at launch by a question about a file they last saw
+        /// working. The tab is dropped instead, which is the same answer the
+        /// missing ones get.
+        openFailure = nil
+
+        guard let rebuilt = state.rebuilt(isOpen: opened.contains) else { return }
+        tree = rebuilt.tree
+        activeGroupID = rebuilt.activeGroupID
         refreshPaneVisibility()
     }
 
@@ -857,6 +1049,7 @@ final class EditorCenter: ObservableObject {
         /// the floor — and would leave a stale entry keyed to a path nothing
         /// will ask for again.
         EditorUndoCenter.shared.repath(from: oldPath, to: newPath)
+        EditorBackupStore.repath(from: oldPath, to: newPath)
 
         let moved = document.transferred(to: URL(fileURLWithPath: newPath))
         documents[newPath] = moved

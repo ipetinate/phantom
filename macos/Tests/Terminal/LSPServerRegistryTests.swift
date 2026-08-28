@@ -169,10 +169,16 @@ struct LSPServerRegistryTests {
     @Test func everyServerHasACategory() {
         for definition in LSPServerRegistry.all {
             switch definition.command {
-            case "typescript-language-server", "vue-language-server",
+            case "typescript-language-server",
                  "pyright-langserver", "bash-language-server",
                  "intelephense", "ruby-lsp", "tsc":
                 #expect(definition.category == .script, "\(definition.command)")
+            case "vue-language-server":
+                /// Not Script, though a `.vue` holds script. One file carries
+                /// a template, a style block and a script block, and serving
+                /// it takes two processes — which is the thing filing it under
+                /// Script hid.
+                #expect(definition.category == .frontendFramework, "\(definition.command)")
             case "sourcekit-lsp", "kotlin-language-server", "rust-analyzer",
                  "gopls", "zls", "jdtls", "clangd":
                 #expect(definition.category == .compiled, "\(definition.command)")
@@ -363,7 +369,10 @@ struct LanguageListOrderTests {
             .map(\.title)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
 
-        #expect(sorted == ["Compiled", "Data", "Infrastructure", "Markup", "Script", "Styles"])
+        #expect(sorted == [
+            "Compiled", "Data", "Frontend Frameworks",
+            "Infrastructure", "Markup", "Script", "Styles",
+        ])
     }
 
     /// The complaint that prompted the sort: the two TypeScript servers sat

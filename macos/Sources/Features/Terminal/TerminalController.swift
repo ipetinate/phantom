@@ -98,6 +98,21 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     private var terminalPaneView: NSView?
     private var terminalTitleCancellable: AnyCancellable?
 
+    /// Records the session whenever the editor's arrangement changes.
+    ///
+    /// The surface tree already reports itself (`surfaceTreeDidChange`), and
+    /// without this the editor had no such report: what was open reached the
+    /// file only if a terminal happened to change afterwards, or if the app
+    /// was quit in the ordinary way, which is the one path a crash does not
+    /// take.
+    ///
+    /// Deduplicated on the tree's own equality, and that is what makes it
+    /// cheap enough to sit here. The tab set is republished on every dirty-dot
+    /// update, which is every keystroke; the value only *differs* when a tab
+    /// opens, closes, moves, is pinned, or the layout changes — a handful of
+    /// times an hour, each landing on a debounce.
+    private var editorGridCancellable: AnyCancellable?
+
     /// The right-hand pane, which the titlebar measurement asks about.
     ///
     /// The pane rather than the terminal: it spans the window's full height,
@@ -1685,6 +1700,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // The terminal's own tab is labelled with the window's title, which
         // the shell rewrites as it goes. KVO rather than a one-time read, so
         // the tab doesn't sit there naming a directory you left.
+        editorGridCancellable = editorCenter.$tree
+            .removeDuplicates()
+            .sink { _ in
+                PhantomSessionStore.shared.scheduleSave()
+            }
+
         terminalTitleCancellable = window.publisher(for: \.title)
             .map { title in title.isEmpty ? "Terminal" : title }
             .removeDuplicates()

@@ -371,6 +371,49 @@ struct CodeCompletionItem: Equatable, Identifiable, Sendable {
     /// supplied one, the label otherwise.
     var matchText: String { filterText ?? label }
 
+    /// Whether this row's producer may still be holding edits it has not sent.
+    ///
+    /// The protocol reason, and it is the whole of the auto-import bug:
+    /// computing an import line for every row of a list is expensive, so a
+    /// server is allowed to leave `additionalEdits` empty in the list and fill
+    /// them in only when asked about the one row that was chosen. Measured on
+    /// `typescript-language-server`, a list of 1097 rows arrives with the
+    /// import edit on **none** of them, and the same rows answer with one when
+    /// asked individually. A client that never asks therefore inserts the
+    /// identifier and no import, which is indistinguishable from a server that
+    /// had no import to offer.
+    ///
+    /// Three conditions, and each one excludes a row nobody can be asked
+    /// about. A word scraped out of the buffer has no producer; a row with no
+    /// `resolveToken` is one whose list has been replaced, and asking about it
+    /// gets it back **unchanged rather than refused**; and a row that already
+    /// carries edits has nothing to gain — a second answer that omitted them
+    /// would overwrite what is already right.
+    var mayHaveUnsentEdits: Bool {
+        source == .server && resolveToken != nil && additionalEdits.isEmpty
+    }
+
+    /// This row, with whatever the second request added to it.
+    ///
+    /// **Only `additionalEdits` crosses over, and that is the specification
+    /// rather than caution.** A resolve may fill in the properties the client
+    /// declared it would wait for and may not change the rest: the label,
+    /// the sort key and the text to insert belong to the row the reader
+    /// looked at and chose, and taking those from a reply would let a late
+    /// answer insert a different symbol than the one on screen.
+    ///
+    /// A reply about some other row is refused outright. It is not a
+    /// hypothetical: a server that cannot recognise the item it was handed
+    /// answers with that item unchanged, so identity is the only evidence
+    /// that the answer is about this row at all.
+    func finished(by resolved: CodeCompletionItem?) -> CodeCompletionItem {
+        guard let resolved, resolved.id == id, !resolved.additionalEdits.isEmpty else { return self }
+
+        var item = self
+        item.additionalEdits = resolved.additionalEdits
+        return item
+    }
+
     /// Separated by `U+0001`, a character no label, detail or module name
     /// contains — so two different rows cannot collide by one field ending
     /// where the next begins.

@@ -320,6 +320,21 @@ extension PrettierAttempt {
 }
 
 private struct DocumentView: View {
+    /// Whether the completion list keeps its documentation card open.
+    ///
+    /// Here rather than in the engine because the engine reads no
+    /// `UserDefaults` — `EditorEngineBoundaryTests` forbids it, so the value
+    /// crosses in and the change comes back out.
+    @AppStorage(EditorSettings.showsCompletionDocumentationKey)
+    private var showsCompletionDocumentation = false
+
+    /// The switches for what the editor does unasked, observed so a change in
+    /// the settings window reaches an open file without reopening it.
+    ///
+    /// An `@ObservedObject` rather than six `@AppStorage` lines, because
+    /// `EditorFeatureSettings` already owns the reading of them — and because
+    /// what crosses into the engine is one value, not six preferences.
+    @ObservedObject private var editorFeatures = EditorFeatureSettings.shared
     @ObservedObject var document: EditorDocument
     let theme: CodeTheme
     let configuration: CodeEditorConfiguration
@@ -404,12 +419,25 @@ private struct DocumentView: View {
     /// looked innocent was scanning the whole file once per diagnostic per
     /// character typed. They are recomputed when the server speaks, which
     /// is the only time they actually change.
-    @State private var underlines: [(range: NSRange, color: NSColor)] = []
+    /// The diagnostics handed to the engine to draw — each carrying the
+    /// message, because both the wave and the card are read from the one text
+    /// attribute they become. See ``CodeDiagnosticMark``.
+    @State private var underlines: [(range: NSRange, mark: CodeDiagnosticMark)] = []
 
     /// A diagnostic with its range already resolved against the document.
     private struct LocatedProblem {
         let range: NSRange
         let problem: CodeHoverInfo.Problem
+
+        /// The server's own diagnostic, kept beside the located one.
+        ///
+        /// A quick fix is matched on the diagnostic's `code`, and a request
+        /// that omits it comes back with the refactors and **none** of the
+        /// fixes — measured on `typescript-language-server`: eighteen actions
+        /// with the code, seventeen without, and the one that disappeared was
+        /// the only quick fix. Nothing errors. So the caret's diagnostics have
+        /// to travel with a ⌃. request, and this is where they are kept.
+        let diagnostic: LSPDiagnostic
     }
 
     /// Every diagnostic, located once. The underlines are a subset of these
@@ -825,8 +853,18 @@ private struct DocumentView: View {
             },
             underlines: underlines,
             hoverProvider: { offset in await hoverInfo(at: offset) },
-            completionProvider: { offset in await completions(at: offset) },
+            completionProvider: { request in await completions(for: request) },
             completionDocProvider: { item in await documentation(for: item) },
+            completionResolver: { item in await resolvedCompletion(for: item) },
+            /// Remembered across lists and across launches, because it is a
+            /// preference the reader expressed with a click and not a decision
+            /// about one completion.
+            showsCompletionDocumentation: showsCompletionDocumentation,
+            onCompletionDocumentationChanged: { showsCompletionDocumentation = $0 },
+            onDiagnosticNote: { WindowBreadcrumbs.note($0) },
+            codeActionProvider: { range in await codeActions(in: range) },
+            codeActionResolver: { item in await resolveCodeAction(item) },
+            onRunCodeAction: { item in runCodeAction(item) },
             completionOffersDocumentation: { item in offersDocumentation(item) },
             completionIconFont: CompletionIconFont.font(ofSize: configuration.font.pointSize),
             reveal: revealRange,
@@ -853,7 +891,19 @@ private struct DocumentView: View {
             onCloseTab: onCloseTab,
             onSearchWorkspace: onSearchWorkspace,
             onAttachLine: onAttachLine,
-            onAttachLinePicker: onAttachLinePicker
+            onAttachLinePicker: onAttachLinePicker,
+            /// The reader's preferences collapsed into the one value the
+            /// engine takes. It may not read them itself — see
+            /// `EditorAssistance` — so this is where the two vocabularies
+            /// meet.
+            assistance: EditorAssistance(
+                autoImport: editorFeatures.autoImport,
+                gitLens: editorFeatures.gitLens,
+                hoverCards: editorFeatures.hoverCards,
+                diffMarks: editorFeatures.diffMarks,
+                completionWhileTyping: editorFeatures.completionWhileTyping,
+                inlineDiagnostics: editorFeatures.inlineDiagnostics),
+            assistanceRevision: editorFeatures.revision
         )
     }
 
@@ -893,6 +943,15 @@ private struct DocumentView: View {
         .onAppear {
             lsp.didOpen(path: document.url.path, text: document.currentText)
             refreshUnderlines()
+
+            /// A server may ask to edit the buffer rather than answering with
+            /// the edit — `workspace/applyEdit`, which is how a command-driven
+            /// code action reaches the text. Set here because this is the pane
+            /// that owns a document; without it the server runs the command,
+            /// asks, is told "not applied", and nothing reaches the file.
+            lsp.applyEdit = { byFile, label in
+                applyWorkspaceEdits(byFile, named: label ?? "Code Action") > 0
+            }
 
             /// The model is fresh per tab; the preference is not. Read it
             /// back so a reader who chose stacked splits gets stacked
@@ -991,6 +1050,7 @@ private struct DocumentView: View {
     /// mark that could not be rendered is a mark not drawn, never a reveal that
     /// failed.
     private var gutterMark: CodeGutterView.Mark? {
+        guard EditorFeatureSettings.shared.agentGutterMark else { return nil }
         guard let mark = document.agentMark else { return nil }
         let size = CodeGutterView.markSize(for: configuration.font)
         guard let image = EditorAgentMarkImages.shared.image(for: mark.agent, size: size)
@@ -1062,7 +1122,8 @@ private struct DocumentView: View {
                     message: diagnostic.message,
                     source: diagnostic.source,
                     color: Self.color(for: diagnostic.severity)
-                )
+                ),
+                diagnostic: diagnostic
             )
         }
 
@@ -1072,12 +1133,140 @@ private struct DocumentView: View {
         /// end of file — has something to say and nothing to underline.
         underlines = located.compactMap { found in
             guard found.range.length > 0 else { return nil }
-            return (found.range, found.problem.color)
+            return (found.range, CodeDiagnosticMark(
+                message: found.problem.message,
+                source: found.problem.source,
+                color: found.problem.color))
         }
     }
 
     private func position(at offset: Int) -> LSPPosition {
         LSPTextCoordinates.position(at: offset, in: document.currentText as NSString)
+    }
+
+    // MARK: Code actions
+
+    /// The server's own action behind each row the menu is showing.
+    ///
+    /// The same device `CompletionBridge` uses and for the same reason: the
+    /// engine may not hold an `LSPCodeAction`, so it is handed an integer and
+    /// this remembers what the integer meant. Replaced wholesale on each
+    /// request, because a menu that has closed can no longer be resolved from.
+    @State private var codeActionsByID: [Int: LSPCodeAction] = [:]
+
+    /// What ⌃. asks for at `range`.
+    ///
+    /// The diagnostics under the caret travel with the request. Without them
+    /// a server answers with its refactors and none of its quick fixes, and
+    /// answers *successfully* — see ``LocatedProblem/diagnostic``.
+    private func codeActions(in range: NSRange) async -> [CodeActionItem] {
+        let text = document.currentText as NSString
+        let lspRange = LSPRange(
+            start: position(at: range.location),
+            end: position(at: min(NSMaxRange(range), text.length)))
+
+        let touching = located
+            .filter { NSIntersectionRange($0.range, range).length > 0 || $0.range.location == range.location }
+            .map(\.diagnostic)
+
+        let actions = await lsp.codeActions(
+            path: document.url.path, range: lspRange, diagnostics: touching)
+
+        codeActionsByID = Dictionary(
+            actions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        let index = LSPLineIndex(text)
+        return actions.map { Self.item(for: $0, path: document.url.path, using: index) }
+    }
+
+    /// Asks the server to finish a row the reader chose.
+    private func resolveCodeAction(_ item: CodeActionItem) async -> CodeActionItem? {
+        guard let action = codeActionsByID[item.id],
+              let resolved = await lsp.resolveCodeAction(path: document.url.path, action: action)
+        else { return nil }
+
+        codeActionsByID[item.id] = resolved
+        return Self.item(
+            for: resolved,
+            path: document.url.path,
+            using: LSPLineIndex(document.currentText as NSString))
+    }
+
+    /// Carries out a row the engine could not: one that reaches another file,
+    /// or one that is a command.
+    ///
+    /// The protocol fixes the order and it is not a preference — an action
+    /// may carry an edit **and** a command, and a real quick fix from
+    /// `typescript-language-server` does. Applying one and not the other
+    /// performs half of what the reader chose.
+    private func runCodeAction(_ item: CodeActionItem) {
+        guard let action = codeActionsByID[item.id] else { return }
+
+        Task {
+            let finished = action.needsResolve
+                ? await lsp.resolveCodeAction(path: document.url.path, action: action) ?? action
+                : action
+
+            if !finished.edit.isEmpty {
+                applyWorkspaceEdits(finished.edit, named: finished.title)
+            }
+
+            if let invocation = finished.command {
+                _ = await lsp.executeCommand(
+                    path: document.url.path,
+                    command: invocation.command,
+                    arguments: invocation.arguments)
+            }
+        }
+    }
+
+    /// Applies a set of edits keyed by path, the way `rename` does.
+    ///
+    /// This file goes through the document so the change is one undo step and
+    /// the server is told; the others are re-read immediately before being
+    /// written, which is what makes them safe without a revision guard of
+    /// their own.
+    @discardableResult
+    private func applyWorkspaceEdits(_ byFile: [String: [LSPTextEdit]], named name: String) -> Int {
+        var changed = 0
+        for (path, edits) in byFile where !edits.isEmpty {
+            if path == document.url.path {
+                let updated = LSPTextEdit.apply(edits, to: document.currentText)
+                document.replaceText(updated, named: name)
+                lsp.didChange(path: path, text: updated)
+            } else if let existing = try? String(contentsOfFile: path, encoding: .utf8) {
+                let updated = LSPTextEdit.apply(edits, to: existing)
+                try? updated.write(toFile: path, atomically: true, encoding: .utf8)
+            } else {
+                continue
+            }
+            changed += 1
+        }
+        return changed
+    }
+
+    /// One `LSPCodeAction` in the engine's vocabulary.
+    ///
+    /// Only the edits to *this* file are handed over. Anything else makes the
+    /// row non-local, which is what sends it back here to be run.
+    private static func item(
+        for action: LSPCodeAction,
+        path: String,
+        using index: LSPLineIndex
+    ) -> CodeActionItem {
+        let mine = action.edit.first { LSPCodeAction.isSameFile($0.key, as: path) }?.value ?? []
+
+        return CodeActionItem(
+            id: action.id,
+            title: action.title,
+            kind: CodeActionItem.Kind(lspKind: action.kind),
+            isPreferred: action.isPreferred,
+            disabledReason: action.disabledReason,
+            edits: CompletionBridge.edits(mine, using: index)
+                .map { CodeActionEdit(range: $0.range, newText: $0.newText) },
+            touchesOtherFiles: action.edit.keys.contains { !LSPCodeAction.isSameFile($0, as: path) },
+            runsCommand: action.command != nil,
+            mayHaveUnsentEdits: action.needsResolve)
     }
 
     /// What the card shows: the problems reported here, then what the symbol
@@ -1111,12 +1300,27 @@ private struct DocumentView: View {
     /// cached because a server can finish starting between two keystrokes,
     /// and a `false` remembered from before it was ready would leave the
     /// documentation card permanently silent.
-    private func completions(at offset: Int) async -> CodeCompletionAnswer {
-        if let snippets = markdownSnippets(at: offset) { return .items(snippets) }
+    private func completions(for request: CodeCompletionRequest) async -> CodeCompletionAnswer {
+        if let snippets = markdownSnippets(at: request.offset) {
+            return .items(snippets, isIncomplete: false)
+        }
+
+        let support = lsp.completionSupport(forPath: document.url.path)
 
         let outcome = await lsp.completions(
             path: document.url.path,
-            position: position(at: offset)
+            position: position(at: request.offset),
+            /// The client advertises `contextSupport: true`, and this is
+            /// where that promise is kept. Sending no context is not a
+            /// dropped field a server can detect — it answers a different
+            /// question, silently: `typescript-language-server` reads the
+            /// trigger character to decide whether it is completing a member
+            /// access at all.
+            context: LSPCompletionContext.decide(
+                typedCharacter: request.typedCharacter,
+                isRefiningIncompleteList: request.isRefiningIncompleteList,
+                support: support
+            )
         )
 
         completionBridge.note(
@@ -1249,6 +1453,39 @@ private struct DocumentView: View {
             """
         )
         return CompletionBridge.outcome(of: outcome)
+    }
+
+    /// Asks the server to finish the row the reader accepted.
+    ///
+    /// The same lookup the documentation card does, for the same reason — the
+    /// server has to be handed back the object it sent — but after a different
+    /// half of the reply. The card wants the prose; this wants the edits that
+    /// put an `import` at the top of the file, and for
+    /// `typescript-language-server` and sourcekit-lsp those edits exist
+    /// nowhere else. Measured on a real project: a list of 1097 rows carries
+    /// the import on none of them, and the chosen row answers with one when
+    /// asked on its own.
+    ///
+    /// Nothing here is TypeScript's. Deferring `additionalTextEdits` to
+    /// `completionItem/resolve` is what the protocol allows, so this is the
+    /// auto-import for every language whose server takes that option.
+    ///
+    /// A tighter deadline than the card's, because the reader is waiting on a
+    /// keystroke rather than on a selection settling — see
+    /// ``LSPTimeout/completionResolveOnAccept``.
+    private func resolvedCompletion(for item: CodeCompletionItem) async -> CodeCompletionItem? {
+        guard let completion = completionBridge.completion(for: item.resolveToken) else { return nil }
+
+        let outcome = await lsp.resolve(
+            completion,
+            path: document.url.path,
+            timeout: LSPTimeout.completionResolveOnAccept
+        )
+        return completionBridge.item(
+            item,
+            finishedBy: outcome,
+            in: document.currentText as NSString
+        )
     }
 
     /// Temporary, for tracking down a documentation card that stuck on

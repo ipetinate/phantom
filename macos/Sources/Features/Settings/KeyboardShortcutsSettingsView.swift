@@ -145,11 +145,25 @@ struct KeyboardShortcutsSettingsView: View {
             } header: {
                 Text("Fixed")
             } footer: {
-                Text("Phantom answers these in code and nothing can rebind them. The pane chords work whenever the editor pane has a file open; the explorer keys work while the file explorer has focus. They are listed here because the only other place they appear is the warning you get for recording one of them yourself.")
+                Text("Phantom answers these in code and nothing can rebind them. The pane chords work whenever the editor pane has a file open; the explorer keys work while the file explorer has focus. They are listed here because the only other place they appear is the warning you get for recording one of them yourself.\n\nOne warning about ⌃␣, which is above in the editable list rather than here: macOS ships Select the Previous Input Source on the same keys, under System Settings → Keyboard → Keyboard Shortcuts → Input Sources, and a system shortcut is taken before any app is offered it. If suggestions never appear, either switch that one off or give Suggest Completions a different chord. Escape asks for the same list either way.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// The engine's shape for a chord, in the shape this window draws.
+    ///
+    /// Only for drawing: `PhantomShortcut` is what knows that a space is
+    /// spelled ␣ rather than as the nothing it actually reports, which is how
+    /// the file explorer's own keys once appeared here as blanks.
+    private static func displayed(_ shortcut: EditorShortcut) -> PhantomShortcut {
+        var modifiers: Set<PhantomShortcutModifier> = []
+        if shortcut.modifiers.contains(.command) { modifiers.insert(.command) }
+        if shortcut.modifiers.contains(.shift) { modifiers.insert(.shift) }
+        if shortcut.modifiers.contains(.option) { modifiers.insert(.option) }
+        if shortcut.modifiers.contains(.control) { modifiers.insert(.control) }
+        return PhantomShortcut(key: shortcut.key, modifiers: modifiers)
     }
 
     /// Straight from the table the collision checker refuses recordings

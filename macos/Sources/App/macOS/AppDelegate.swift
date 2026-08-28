@@ -214,6 +214,29 @@ class AppDelegate: NSObject,
             "ApplePressAndHoldEnabled": false,
         ])
 
+        /// Shorten the wait before a tooltip appears. Outside the
+        /// `MCPServer.isTesting` guard below: that guard exists for the calls
+        /// that write into the reader's own files, and this one writes nothing
+        /// — it sets a number on an AppKit object that dies with the process.
+        /// A test host wants it too, because running it is what proves the
+        /// private API it resolves has not gone away.
+        /// Before anything else that could fail. A crash during launch is the
+        /// one this cannot afford to be installed after.
+        CrashBreadcrumbs.install()
+
+        ToolTipDelay.applyInitialDelay()
+
+        /// Age out undo histories for files nobody has come back to. Off the
+        /// main thread because it walks a directory, and skipped under test
+        /// because the test bundle is hosted inside the app and would prune
+        /// the real one.
+        if !MCPServer.isTesting {
+            DispatchQueue.global(qos: .utility).async {
+                EditorUndoArchive.prune()
+                EditorBackupStore.prune()
+            }
+        }
+
         // Put the chosen app icon back on. The override is in-memory only
         // (`NSApp.applicationIconImage`), so every launch starts from the
         // compiled-in icon until this runs.
@@ -560,6 +583,22 @@ class AppDelegate: NSObject,
 
         // Final authoritative write of our own session store.
         PhantomSessionStore.shared.saveNow()
+
+        // Quitting with files open is the ordinary way to quit, and it is the
+        // one path where no tab ever closes — so this is the only chance the
+        // open files get to have their undo history written down.
+        var open: [String: String] = [:]
+        for controller in TerminalController.all {
+            for (path, document) in controller.editorCenter.documents {
+                open[path] = document.currentText
+
+                // And the unsaved text itself, which the debounce may not have
+                // written yet. Quitting is the deadline the debounce exists to
+                // survive.
+                document.flushBackup()
+            }
+        }
+        EditorUndoCenter.shared.persistOpenFiles(texts: open)
     }
 
     /// This is called when the application is already open and someone double-clicks the icon

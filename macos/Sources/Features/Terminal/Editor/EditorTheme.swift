@@ -88,6 +88,18 @@ enum EditorSettings {
     static let showsMinimapKey = "EditorShowsMinimap"
     static let colorsBracketPairsKey = "EditorColorsBracketPairs"
 
+    /// Whether the completion list keeps its documentation card open.
+    ///
+    /// Remembered, because it is a preference the reader expresses with a
+    /// click on the info glyph and not a per-list decision. Opening it once
+    /// meant opening it again on the next completion, and on the next launch —
+    /// so the glyph was the same answer given over and over.
+    ///
+    /// Absent means closed, which is the state the list has always started in
+    /// and the smaller of the two: a card that appears unasked covers the code
+    /// the reader is completing against.
+    static let showsCompletionDocumentationKey = "EditorShowsCompletionDocumentation"
+
     /// The three halves of auto-closing, kept apart because they are three
     /// different opinions.
     ///

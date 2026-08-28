@@ -69,9 +69,10 @@ struct EditorPaneTabBar: View {
                     terminalTitle: center.terminalTitle,
                     onSelectTerminal: { center.selectTerminal() },
                     hostsTerminal: center.hostsTerminal(groupID),
-                    reviewTitle: center.review?.title,
-                    onSelectReview: { center.showReview(center.review) },
-                    onCloseReview: { center.closeReview() }
+                    reviews: cell.reviews,
+                    onSelectReview: { center.selectReview($0.id) },
+                    onCloseReview: { center.closeReview($0.id) },
+                    onReorder: reorder
                 )
                 Divider()
             }
@@ -134,5 +135,35 @@ struct EditorPaneTabBar: View {
                     WorktreeDivergence.verdict(
                         documentPath: $0, terminalDirectory: directory) != nil
                 })
+    }
+
+    /// Moves a tab along this cell's bar, and answers how many places it
+    /// actually moved.
+    ///
+    /// Asked rather than assumed, because the strip refuses a move that would
+    /// carry a tab out of its own run — the same rule the menu's Move Left and
+    /// Move Right follow. A gesture that counted a refused move would drift
+    /// out of step with the bar, and dragging back to where it began would
+    /// then displace a tab that had never moved.
+    ///
+    /// **One place at a time, rather than asking for the whole distance.**
+    /// `EditorTabSet.canMove(_:by:)` answers about the destination, so it
+    /// refuses a run of places wholesale when only the far end of it is out
+    /// of bounds. A slow drag never notices — its events arrive one place
+    /// apart — but a flick arrives as a single jump of several, and asking
+    /// for all of them at once would pin the tab in place for the rest of the
+    /// gesture instead of carrying it as far as it can go. Walking the run
+    /// stops it at the boundary, which is what a reader dragging a tab into
+    /// the pinned run expects to see.
+    private func reorder(_ tab: EditorTab, by places: Int) -> Int {
+        guard places != 0 else { return 0 }
+
+        let step = places > 0 ? 1 : -1
+        var moved = 0
+        while moved != places, cell.canMove(tab.path, by: step) {
+            center.moveTab(tab.path, by: step)
+            moved += step
+        }
+        return moved
     }
 }

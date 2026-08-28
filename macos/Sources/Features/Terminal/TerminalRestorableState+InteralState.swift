@@ -62,6 +62,22 @@ extension TerminalRestorableState {
         /// before it existed still decode, and `nil` is read as "not
         /// fullscreen", which is what all but a few windows were.
         let isFullscreen: Bool?
+
+        // MARK: - Phantom (own session store, editor)
+
+        /// What the window's editor had open: the cells, the tabs in each,
+        /// and which one was in front.
+        ///
+        /// Beside the surface tree rather than in a file of its own, because
+        /// it belongs to the same window and has to come and go with it. A
+        /// second file would need a key tying it to this window, and the only
+        /// honest key — the terminal the editor took its pane from — is
+        /// already what this record *is*.
+        ///
+        /// Optional for the reason the fields above are, and for one more: it
+        /// is nil for every window whose editor never opened a file, which is
+        /// most of them.
+        let editorGrid: EditorGridState?
     }
 }
 
@@ -83,6 +99,27 @@ extension TerminalRestorableState.InternalState where ViewType == Ghostty.Surfac
             tabIndex: tabIndex,
             isSelectedTab: isSelectedTab,
             isFullscreen: controller.fullscreenStyle?.isFullscreen,
+            /// The editor is main-actor isolated and this initializer is not,
+            /// though every caller reaches it from the main thread: both
+            /// `PhantomSessionStore.saveNow` call sites are AppKit's
+            /// termination handlers, its third is a `DispatchQueue.main`
+            /// work item, and `window(_:willEncodeRestorableState:)` is a
+            /// window delegate callback. Asserted rather than hopped, because
+            /// a hop would make the capture asynchronous and the save would
+            /// then record the arrangement as it is *after* whatever prompted
+            /// the save.
+            ///
+            /// The thread is checked first because `assumeIsolated` is a
+            /// precondition, not a question: reached off the main thread it
+            /// does not return an error, it kills the process. Nothing in the
+            /// list above is off the main thread today, and none of it is
+            /// enforced by a type. One of those callers runs inside quit,
+            /// where an abort would take the session file and the undo
+            /// history down with it — so an impossible thread is answered
+            /// with no editor state rather than no app.
+            editorGrid: Thread.isMainThread
+                ? MainActor.assumeIsolated { EditorGridState(capturing: controller.editorCenter) }
+                : nil,
         )
     }
 }

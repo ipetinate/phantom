@@ -45,15 +45,15 @@ struct CompletionBridgeTests {
     /// for a context that no longer exists.
     @Test func anUnansweredRequestClearsTheList() {
         let bridge = CompletionBridge()
-        #expect(bridge.items(from: .noServer, in: text) == .items([]))
-        #expect(bridge.items(from: .timedOut, in: text) == .items([]))
-        #expect(bridge.items(from: .failed("boom"), in: text) == .items([]))
+        #expect(bridge.items(from: .noServer, in: text) == .items([], isIncomplete: false))
+        #expect(bridge.items(from: .timedOut, in: text) == .items([], isIncomplete: false))
+        #expect(bridge.items(from: .failed("boom"), in: text) == .items([], isIncomplete: false))
     }
 
     /// An empty list from a server that *did* answer is still an answer.
     @Test func anEmptyAnswerIsItemsAndNotUnchanged() {
         let bridge = CompletionBridge()
-        #expect(bridge.items(from: list([]), in: text) == .items([]))
+        #expect(bridge.items(from: list([]), in: text) == .items([], isIncomplete: false))
     }
 
     // MARK: Tokens
@@ -65,7 +65,7 @@ struct CompletionBridgeTests {
     /// an error**.
     @Test func everyItemCarriesATokenBackToTheServersOwnValue() throws {
         let bridge = CompletionBridge()
-        guard case .items(let items) = bridge.items(
+        guard case .items(let items, _) = bridge.items(
             from: list([["label": .string("connect")]]),
             in: text
         ) else {
@@ -86,7 +86,7 @@ struct CompletionBridgeTests {
     @Test func aTokenFromASupersededListResolvesToNothing() throws {
         let bridge = CompletionBridge()
 
-        guard case .items(let first) = bridge.items(
+        guard case .items(let first, _) = bridge.items(
             from: list([["label": .string("alpha")]]),
             in: text
         ) else {
@@ -95,7 +95,7 @@ struct CompletionBridgeTests {
         }
         let stale = try #require(first.first?.resolveToken)
 
-        guard case .items(let second) = bridge.items(
+        guard case .items(let second, _) = bridge.items(
             from: list([["label": .string("beta")]]),
             in: text
         ) else {
@@ -145,7 +145,7 @@ struct CompletionBridgeTests {
     /// in `newText`, and guessing writes `foo..bar`.
     @Test func aServersRangeReachesTheRowItBelongsTo() throws {
         let bridge = CompletionBridge()
-        guard case .items(let items) = bridge.items(
+        guard case .items(let items, _) = bridge.items(
             from: list([[
                 "label": .string("bar"),
                 "filterText": .string(".bar"),
@@ -166,7 +166,7 @@ struct CompletionBridgeTests {
     /// here" and fall back only in the first case.
     @Test func anItemWithoutATextEditCarriesNoRange() throws {
         let bridge = CompletionBridge()
-        guard case .items(let items) = bridge.items(
+        guard case .items(let items, _) = bridge.items(
             from: list([["label": .string("map"), "insertText": .string("map(")]]),
             in: text
         ) else {
@@ -283,5 +283,53 @@ struct CompletionBridgeTests {
         let plain = LSPMarkupContent(kind: .plaintext, value: "hi")
         #expect(CompletionBridge.documentation(of: plain)
             == CodeDocumentation(format: .plainText, text: "hi"))
+    }
+}
+
+/// `isIncomplete` on the way through.
+///
+/// The server saying "this list is a guess for the prefix you asked about;
+/// ask again as it grows". It was parsed and then dropped at this boundary,
+/// which left the engine unable to tell a refinement from a fresh request —
+/// so every re-request went out claiming nobody had asked before.
+@MainActor
+struct CompletionBridgeIncompleteTests {
+    private let text = "const a = 1\n" as NSString
+
+    private func list(_ isIncomplete: Bool) -> LSPCompletionOutcome {
+        .list(LSPCompletionList(
+            items: [LSPCompletion(["label": "connect"])].compactMap { $0 },
+            isIncomplete: isIncomplete
+        ))
+    }
+
+    @Test func aGuessIsCarriedThroughToTheEngine() {
+        let bridge = CompletionBridge()
+        guard case .items(_, let isIncomplete) = bridge.items(from: list(true), in: text) else {
+            Issue.record("expected items")
+            return
+        }
+
+        #expect(isIncomplete)
+    }
+
+    @Test func aSettledListIsCarriedThroughAsSettled() {
+        let bridge = CompletionBridge()
+        guard case .items(_, let isIncomplete) = bridge.items(from: list(false), in: text) else {
+            Issue.record("expected items")
+            return
+        }
+
+        #expect(!isIncomplete)
+    }
+
+    /// A server that failed, timed out or was never there is not a server
+    /// asking to be re-asked. Marking silence as a guess would have the
+    /// engine keep re-requesting from something that is not answering.
+    @Test func silenceIsNotAGuess() {
+        let bridge = CompletionBridge()
+
+        #expect(bridge.items(from: .timedOut, in: text) == .items([], isIncomplete: false))
+        #expect(bridge.items(from: .noServer, in: text) == .items([], isIncomplete: false))
     }
 }

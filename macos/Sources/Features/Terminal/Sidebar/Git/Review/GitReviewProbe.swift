@@ -38,23 +38,39 @@ enum GitReviewProbe {
         return paths.isEmpty ? .conflicting(["(unnamed)"]) : .conflicting(paths)
     }
 
-    /// The paths out of `merge-tree`'s output.
+    /// The paths out of `merge-tree --name-only`.
     ///
-    /// The first line is the tree object it wrote; the conflicted paths follow
-    /// after a blank line. Anything that looks like an object id is dropped
-    /// rather than trusted to be a path, because that first line is a path's
-    /// shape as far as a string is concerned.
+    /// **The paths come before the blank line, not after it.** The layout is:
+    ///
+    /// ```
+    /// 5c1debb…                          <- the tree it wrote
+    /// package.json                      <- the conflicted paths
+    /// pnpm-lock.yaml
+    ///                                   <- blank
+    /// Auto-merging package.json         <- informational messages
+    /// CONFLICT (content): Merge conflict in package.json
+    /// ```
+    ///
+    /// This read the second block, so every conflicted file was counted twice
+    /// — once for its `Auto-merging` line and once for its `CONFLICT` line.
+    /// Reported as "8 files would conflict" where git found four, and the
+    /// doubling is invisible: eight plausible-looking lines, and the number
+    /// is one a reader has no way to check without running git themselves.
+    ///
+    /// `Auto-merging` is not even a conflict. It says git merged that file
+    /// **successfully**.
     static func conflictedPaths(in output: String) -> [String] {
         var paths: [String] = []
-        var pastHeader = false
 
         for line in output.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty {
-                pastHeader = true
-                continue
-            }
-            guard pastHeader else { continue }
+
+            /// The blank line ends the list. Everything after it is git
+            /// talking to a human.
+            if trimmed.isEmpty { break }
+
+            /// The tree object it wrote, which is a path's shape as far as a
+            /// string is concerned.
             guard !isObjectID(trimmed) else { continue }
             paths.append(trimmed)
         }

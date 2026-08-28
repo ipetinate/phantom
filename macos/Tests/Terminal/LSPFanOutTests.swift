@@ -186,22 +186,64 @@ struct LSPFanOutPlacementTests {
         )
     }
 
-    /// The two features that are genuinely about one server, so that list
-    /// staying short is a decision somebody makes rather than a drift.
+    /// Formatting is the one feature that asks the file's *primary* server
+    /// and no other, so that list staying at one is a decision somebody
+    /// makes rather than a drift.
     ///
-    /// `completionItem/resolve` is about an item **from** a particular
-    /// server's list and is meaningless to any other, and formatting is a
-    /// whole-document rewrite where two servers' answers cannot be chosen
-    /// between — the second would silently overwrite the first.
-    @Test func onlyResolveAndFormattingSpeakToASingleServer() throws {
+    /// Formatting is a whole-document rewrite, and two servers' answers
+    /// cannot be chosen between — the second would silently overwrite the
+    /// first.
+    ///
+    /// `completionItem/resolve` used to be on this list and no longer is.
+    /// That is a tightening, not a loosening: it still speaks to exactly one
+    /// server, and it no longer assumes that server is the primary. The rule
+    /// moved to `onlyOneServerAnswersAResolveAndItIsTheRightOne` below,
+    /// because the property worth guarding was never "it calls the singular
+    /// helper" — it was "one request, to the server the item came from".
+    @Test func onlyFormattingSpeaksToThePrimaryAlone() throws {
         let singular = try methods()
             .filter { $0.body.contains("runningServer(forPath: path)") }
             .map(\.name)
             .sorted()
 
         #expect(
-            singular == ["formatting", "performResolve"],
+            singular == ["formatting"],
             "a feature took the single-server path: \(singular)"
+        )
+    }
+
+    /// A resolve is about an item **from** a particular server's list and is
+    /// meaningless to any other. So it enumerates the file's servers to find
+    /// that one, and then asks it alone.
+    ///
+    /// Measured, which is why narrowing to one is not a style preference: a
+    /// `.vue` list is two servers' answers concatenated, and handing
+    /// `typescript-language-server`'s item to the Vue server answers
+    /// `-32603 Cannot read properties of undefined (reading '1')` — the name
+    /// was accepted and its import was never written.
+    ///
+    /// Asking *every* server would be worse than asking the wrong one. A
+    /// server that cannot match an item returns it **unchanged and without
+    /// an error**, so a loop would take the first non-answer as the answer
+    /// and stop.
+    @Test func onlyOneServerAnswersAResolveAndItIsTheRightOne() throws {
+        let resolve = try body(of: "performResolve")
+
+        #expect(
+            resolve.contains("Self.resolvingCommand(for: item"),
+            "performResolve no longer picks the server that made the item"
+        )
+        #expect(
+            resolve.contains("live.first(where:"),
+            "performResolve no longer narrows the file's servers down to one"
+        )
+        #expect(
+            !resolve.contains("for (key, server) in live"),
+            """
+            performResolve loops the request over every server. A server that \
+            cannot match an item answers it unchanged rather than failing, so \
+            the loop would keep the first non-answer.
+            """
         )
     }
 

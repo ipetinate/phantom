@@ -240,7 +240,14 @@ final class GitCenter: ObservableObject {
     /// Built from `unstaged`, which by construction holds no unmerged entry —
     /// the parser files those under `unmerged` alone — so this is the whole
     /// list minus the conflicts without having to subtract anything.
-    private func safePathsToStage(in root: String) -> [String] {
+    ///
+    /// "Safe" here means only "git does not call it unmerged", and that is
+    /// less than it sounds: git stops reporting a path as unmerged the moment
+    /// it is staged once, markers or not. So this list can still hold a file
+    /// with `<<<<<<<` in it, and `GitConflictStaging.blockers(among:in:)` is
+    /// what looks. It is read from outside for that reason — the caller has to
+    /// see the same paths this would stage before it decides to stage them.
+    func safePathsToStage(in root: String) -> [String] {
         guard let status = statuses[root] else { return [] }
         var seen: Set<String> = []
         return status.unstaged.map(\.path).filter { seen.insert($0).inserted }
@@ -339,6 +346,53 @@ final class GitCenter: ObservableObject {
 
     func fetch(in root: String) {
         perform("Fetch", in: root, arguments: ["fetch", "--prune"], timeout: GitCommand.networkTimeout)
+    }
+
+    /// Brings the branch up to date with its own upstream.
+    ///
+    /// `--ff-only`, and that is the difference from ``pull(in:)``. This is the
+    /// button beside the "3 commits to pull" badge, and the reader pressing it
+    /// is saying "I am behind, catch me up" — not "invent a merge commit if my
+    /// history has diverged". A branch that cannot fast-forward has diverged,
+    /// which is a different situation and deserves to be refused with a
+    /// message rather than resolved silently.
+    func updateFromUpstream(in root: String) {
+        perform(
+            "Update Branch",
+            in: root,
+            arguments: ["pull", "--ff-only"],
+            timeout: GitCommand.networkTimeout
+        )
+    }
+
+    /// Merges `ref` into the current branch.
+    ///
+    /// `--no-edit` so the editor does not open behind the app for the message
+    /// git already wrote. A conflict leaves the working tree mid-merge, which
+    /// is the state the conflict resolver in the editor exists for — so a
+    /// failure here is not an error to hide but a screen to go to.
+    func merge(_ ref: String, in root: String) {
+        perform(
+            "Merge \(ref)",
+            in: root,
+            arguments: ["merge", "--no-edit", ref],
+            timeout: GitCommand.networkTimeout
+        )
+    }
+
+    /// Replays the branch's commits on top of `ref`.
+    ///
+    /// **Rewrites this branch's history**, so a branch that has been pushed
+    /// needs a force-push afterwards and anyone who pulled it has to recover.
+    /// The caller is responsible for saying so before calling this — see the
+    /// confirmation in the branch review's header.
+    func rebase(onto ref: String, in root: String) {
+        perform(
+            "Rebase onto \(ref)",
+            in: root,
+            arguments: ["rebase", ref],
+            timeout: GitCommand.networkTimeout
+        )
     }
 
     func checkout(branch: String, in root: String) {

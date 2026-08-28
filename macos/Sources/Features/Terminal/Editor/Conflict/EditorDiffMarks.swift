@@ -61,10 +61,14 @@ enum EditorDiffMarks {
 
             switch (isRemoved, isInserted) {
             case (true, true):
-                /// A change: something left this line. Clearing the flag is
-                /// what stops the line *after* a change from also being
-                /// blamed for the removal.
-                marks[currentIndex + 1] = .removed
+                /// A removal and an insertion at the same position. The
+                /// difference pairs them, and the pairing alone does not say
+                /// whether the reader rewrote a line or typed a new one into
+                /// a region that had already changed — so the two lines are
+                /// compared rather than assumed related. See `isRewrite`.
+                marks[currentIndex + 1] = isRewrite(current[currentIndex], base[baseIndex])
+                    ? .changed
+                    : .added
                 deletionPending = false
                 baseIndex += 1
                 currentIndex += 1
@@ -79,6 +83,10 @@ enum EditorDiffMarks {
                 baseIndex += 1
 
             case (false, false):
+                /// Lines left from the boundary this line now sits against.
+                /// The line itself is untouched — it is only carrying the
+                /// mark, which is why `.removed` is drawn on its top edge
+                /// rather than beside its number.
                 if deletionPending, currentIndex < current.count,
                    marks[currentIndex + 1] == nil {
                     marks[currentIndex + 1] = .removed
@@ -96,6 +104,69 @@ enum EditorDiffMarks {
         }
 
         return marks
+    }
+
+    /// Whether `line` is a rewrite of `was`, rather than something new that
+    /// happens to sit where `was` used to.
+    ///
+    /// **Why the pairing cannot answer this.** `CollectionDifference` finds a
+    /// minimal edit script; when a run of lines changes, it pairs removals
+    /// with insertions by position, and a brand-new line typed inside that
+    /// run gets paired with whatever removal is going spare. Reported by a
+    /// reader who typed `<WD` on a fresh line inside a block they had already
+    /// reformatted, and watched it come back marked as a change to a line it
+    /// had nothing to do with.
+    ///
+    /// So the texts are compared. Two heuristics, both cheap, and both about
+    /// the same thing — does this line still look like the one it replaced:
+    ///
+    /// - A shared leading run. Editing a line usually keeps its beginning:
+    ///   its indentation, its keyword, the name being assigned. Requiring a
+    ///   few characters past the indentation is what stops every line in an
+    ///   indented block from looking related to every other.
+    /// - Failing that, enough shared words. A line whose tokens are mostly
+    ///   the tokens of the old one is a rewrite however much its shape moved;
+    ///   a line that shares nothing but a bracket is not.
+    ///
+    /// Wrong in the reader's favour when it is wrong: an unrecognised rewrite
+    /// is marked `added`, which says "this line is not in the commit" — true
+    /// of a rewrite as well. The failure it avoids is the opposite one, where
+    /// a new line is described as a change to something the reader never saw.
+    static func isRewrite(_ line: String, _ was: String) -> Bool {
+        let new = line.trimmingCharacters(in: .whitespaces)
+        let old = was.trimmingCharacters(in: .whitespaces)
+
+        guard !new.isEmpty, !old.isEmpty else { return new.isEmpty == old.isEmpty }
+        if new == old { return true }
+
+        let shared = zip(new, old).prefix { $0 == $1 }.count
+        if shared >= minimumSharedPrefix { return true }
+
+        let newWords = Set(new.split(whereSeparator: isTokenBoundary))
+        let oldWords = Set(old.split(whereSeparator: isTokenBoundary))
+        guard !newWords.isEmpty, !oldWords.isEmpty else { return false }
+
+        let overlap = Double(newWords.intersection(oldWords).count)
+        return overlap / Double(min(newWords.count, oldWords.count)) >= minimumSharedWords
+    }
+
+    /// How many characters two lines must open with to count as one edited.
+    ///
+    /// Four, measured against the alternative: at two, `</div>` and `</p>`
+    /// pair up, and every closing tag in a template looks like a rewrite of
+    /// every other. At eight, renaming a variable at the start of a line stops
+    /// counting as an edit to it, which is the commonest edit there is.
+    private static let minimumSharedPrefix = 4
+
+    /// What fraction of the shorter line's words must be shared.
+    ///
+    /// Half. A rewrite that keeps half its vocabulary is recognisably the same
+    /// line reworded; below that it is a different statement that happens to
+    /// mention some of the same names.
+    private static let minimumSharedWords = 0.5
+
+    private static func isTokenBoundary(_ character: Character) -> Bool {
+        !character.isLetter && !character.isNumber && character != "_"
     }
 
     /// Splitting a file the way the editor counts lines.
@@ -117,5 +188,58 @@ enum EditorDiffMarks {
         case .insert(let offset, _, _): return offset
         case .remove(let offset, _, _): return offset
         }
+    }
+
+    /// The lines whose **text** differs from the committed file.
+    ///
+    /// Not derivable from ``marks(current:base:)``, and that is the whole
+    /// reason this exists. The glyph answers "what should the margin draw",
+    /// and it says `-` for two different things: a line that was changed in
+    /// place, and a line that survived a deletion which happened at it. The
+    /// first is the reader's own text; the second is somebody's committed
+    /// line, unchanged, wearing a mark about its neighbour.
+    ///
+    /// `git blame` has to tell those apart, because it answers by line
+    /// *number* against the file on disk: asked about a line the reader
+    /// changed, it names whoever last touched that number in the commit — a
+    /// real person with nothing to do with what is on screen. Asked about the
+    /// surviving line, it is still right.
+    ///
+    /// So this reports insertions and in-place changes and nothing else. An
+    /// earlier version of the ghost text filtered `marks` for `.added`, which
+    /// covered a line typed on a new row and missed every line edited in
+    /// place — the commonest case, and the one that was reported.
+    static func changedLines(current: [String], base: [String]) -> Set<Int> {
+        guard !base.isEmpty, current.count <= lineBudget, base.count <= lineBudget else {
+            return []
+        }
+
+        let difference = current.difference(from: base)
+        let inserted = Set(difference.insertions.map(offset))
+        let removed = Set(difference.removals.map(offset))
+
+        var changed: Set<Int> = []
+        var baseIndex = 0
+        var currentIndex = 0
+
+        while baseIndex < base.count || currentIndex < current.count {
+            let isRemoved = baseIndex < base.count && removed.contains(baseIndex)
+            let isInserted = currentIndex < current.count && inserted.contains(currentIndex)
+
+            switch (isRemoved, isInserted) {
+            case (true, true), (false, true):
+                changed.insert(currentIndex + 1)
+                if isRemoved { baseIndex += 1 }
+                currentIndex += 1
+
+            case (true, false):
+                baseIndex += 1
+
+            case (false, false):
+                baseIndex += 1
+                currentIndex += 1
+            }
+        }
+        return changed
     }
 }

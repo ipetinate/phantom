@@ -31,7 +31,12 @@ final class MCPServer {
     ///
     /// The environment variable is XCTest's own, set by the runner in the host
     /// process before the bundle is injected.
-    static var isTesting: Bool {
+    ///
+    /// `nonisolated` because it reads nothing but the environment, and the
+    /// question is asked from outside the main actor: `EditorUndoArchive`
+    /// resolves its folder on whatever thread a save happens on and has to
+    /// know whether it is running under a test host before it writes.
+    nonisolated static var isTesting: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             || ProcessInfo.processInfo.environment["XCTestSessionIdentifier"] != nil
     }

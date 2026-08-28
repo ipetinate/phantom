@@ -24,10 +24,32 @@ struct EditorShortcut: Equatable, Sendable {
     /// no remapped shortcut worked while caps lock was down, and an arrow key,
     /// which always sets the function bit, could not be bound at all.
     func matches(_ event: NSEvent) -> Bool {
-        guard !key.isEmpty else { return false }
-        guard event.charactersIgnoringModifiers?.lowercased() == key else { return false }
+        guard !key.isEmpty, Self.key(of: event) == key else { return false }
         return event.modifierFlags.intersection(Self.bindable) == modifiers.intersection(Self.bindable)
     }
+
+    /// The key an event is on, as a binding spells it.
+    ///
+    /// `charactersIgnoringModifiers` is the answer for every key except one.
+    /// Control and the space bar produce U+0000 — the control character the
+    /// combination *sends* — on layouts where the property is filled in from
+    /// the sent text rather than from the unmodified key, and an empty string
+    /// on some others. Either way ⌃Space compares equal to nothing and a
+    /// binding on it can never match, which is one of the ways the completion
+    /// list could not be asked for.
+    ///
+    /// Recovered from the key code, which is what the hardware sends and what
+    /// AppKit always fills in — the same reasoning `EditorCommands.divideZone`
+    /// gives for matching the arrows that way.
+    private static func key(of event: NSEvent) -> String {
+        let typed = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        guard event.keyCode == spaceKeyCode else { return typed }
+        return typed.isEmpty || typed == "\u{0}" ? " " : typed
+    }
+
+    /// `kVK_Space`, spelled out rather than imported: Carbon's key codes come
+    /// from `HIToolbox`, which nothing else in the editor engine links.
+    private static let spaceKeyCode: UInt16 = 49
 
     private static let bindable: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
 }

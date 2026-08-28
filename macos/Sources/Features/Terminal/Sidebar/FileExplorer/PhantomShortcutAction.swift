@@ -56,6 +56,8 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
     case moveLineDown
     case attachLineToAgent
     case attachLineToAgentPicker
+    case triggerSuggest
+    case quickFix
 
     var id: String { rawValue }
 
@@ -75,6 +77,8 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         case .closeTab: return "Close File Tab"
         case .findInFile: return "Find in File"
         case .searchWorkspace: return "Search Workspace"
+        case .triggerSuggest: return "Suggest Completions"
+        case .quickFix: return "Quick Fix"
         case .goToDefinition: return "Go to Definition"
         case .findReferences: return "Find All References"
         case .renameSymbol: return "Rename Symbol"
@@ -95,6 +99,11 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         case .closeTab: return "Closes the focused file tab"
         case .findInFile: return "Opens the find bar for the focused file"
         case .searchWorkspace: return "Searches every file in the project"
+        case .triggerSuggest:
+            return "Asks for the completion list without waiting for it to appear on its own"
+        case .quickFix:
+            return "Offers the fixes and refactors the language server has for what is "
+                + "under the caret"
         case .goToDefinition: return "Jumps to where the symbol under the caret is defined"
         case .findReferences: return "Lists everywhere the symbol under the caret is used"
         case .renameSymbol: return "Renames the symbol under the caret across the project"
@@ -135,6 +144,14 @@ enum PhantomShortcutAction: String, CaseIterable, Identifiable, Sendable {
         /// suggests: macOS spends ⌃⌘D on Look Up in every text view, and
         /// this is one. ⌃⌘J is also where Xcode keeps Jump to Definition,
         /// which is the habit a reader most likely arrives with.
+        /// ⌃Space and ⌃. are what every other editor uses, so they are the
+        /// defaults — but ⌃Space is also macOS's "Select the Previous Input
+        /// Source", and a system shortcut is taken before any app sees the
+        /// key. That is the reason these two are rebindable rather than fixed:
+        /// a reader who uses more than one input source cannot have ours, and
+        /// needs somewhere to move it to.
+        case .triggerSuggest: return [PhantomShortcut(key: " ", modifiers: [.control])]
+        case .quickFix: return [PhantomShortcut(key: ".", modifiers: [.control])]
         case .goToDefinition: return [PhantomShortcut(key: "j", modifiers: [.command, .control])]
         case .findReferences: return [PhantomShortcut(key: "g", modifiers: [.command, .control])]
         case .renameSymbol: return [PhantomShortcut(key: "r", modifiers: [.command, .control])]

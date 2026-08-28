@@ -99,6 +99,29 @@ struct LSPServerExitLogTests {
         return (directory, definition)
     }
 
+    /// Waits for a line to reach the log, rather than reading it the instant
+    /// `initialize` throws.
+    ///
+    /// The drain runs on its own task: the throw and the stderr line are two
+    /// events and nothing orders them. Reading immediately passed on an idle
+    /// machine and failed under the load of the full suite — measured, in a
+    /// run where this was the only failure and it passed three times out of
+    /// three on its own afterwards. A test that depends on which of two
+    /// unordered events lands first is a test that reports the machine's mood.
+    ///
+    /// Polling rather than a fixed sleep, so a fast machine pays nothing and a
+    /// busy one still gets its answer.
+    private func waitForLog(
+        _ process: LSPProcess,
+        containing fragment: String
+    ) async -> Bool {
+        for _ in 0..<200 {
+            if process.recentLog.contains(where: { $0.contains(fragment) }) { return true }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        return false
+    }
+
     /// The reproduction: a one-shot server that writes a diagnostic to stderr
     /// and dies. The `initialize` call throws `terminated(status: 78)`, and
     /// the log must still contain the diagnostic it printed.
@@ -117,7 +140,7 @@ struct LSPServerExitLogTests {
             _ = try await process.initialize(rootURI: "file:///tmp", timeout: 5)
         }
 
-        #expect(process.recentLog.contains { $0.contains("Gemfile.lock") })
+        #expect(await waitForLog(process, containing: "Gemfile.lock"))
     }
 
     /// The hardening: a server that spawns a grandchild which *inherits* the
@@ -141,7 +164,7 @@ struct LSPServerExitLogTests {
             _ = try await process.initialize(rootURI: "file:///tmp", timeout: 5)
         }
 
-        #expect(process.recentLog.contains { $0.contains("opaque, no time to explain") })
+        #expect(await waitForLog(process, containing: "opaque, no time to explain"))
     }
 }
 

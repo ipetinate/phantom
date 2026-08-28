@@ -25,6 +25,13 @@ struct GitBranchReviewView: View {
     let onOpenDiff: (GitReviewFile, GitReviewBase) -> Void
 
     @ObservedObject private var palette: ThemePalette = .shared
+
+    /// Watched for one thing: which commits are open as tabs, and which of
+    /// them is in front. The marks on this list have to follow the *tabs* —
+    /// with two commit tabs open, the row that lights up is the one the
+    /// reader switched to, not the one they clicked last.
+    @ObservedObject private var reviewCenter: GitReviewCenter = .shared
+
     @State private var isExpanded = false
     @State private var outcome: GitBranchReviewOutcome?
     @State private var isLoading = false
@@ -206,38 +213,15 @@ struct GitBranchReviewView: View {
     @ViewBuilder
     private func commitList(_ review: GitBranchReview) -> some View {
         ForEach(review.commits) { commit in
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(commit.shortSha)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+            let scope = GitReviewScope.commit(
+                root: root, sha: commit.sha, subject: commit.subject)
 
-                Text(commit.subject)
-                    .font(palette.font(size: 10))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                Spacer(minLength: 4)
-
-                /// Never wrapped, and never the thing that shrinks.
-                ///
-                /// `layoutPriority(-1)` alone told SwiftUI to take space from
-                /// this first, and with nothing forbidding a second line it
-                /// took it one character at a time — a commit with a long
-                /// subject left "5 days ago" running down the panel as a
-                /// column of letters. The subject is the part with room to
-                /// give, and it already truncates.
-                Text(commit.relativeDate)
-                    .font(palette.font(size: 9))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            /// The whole row, because every part of it identifies the same
-            /// commit. A hit target on the sha alone would be seven
-            /// characters wide.
-            .contentShape(Rectangle())
-            .onTapGesture { onOpenCommit?(commit) }
-            .help("Review \(commit.shortSha) \u{2014} \(commit.author)")
+            GitBranchReviewCommitRow(
+                commit: commit,
+                isFront: reviewCenter.isFront(scope),
+                isOpen: reviewCenter.isOpen(scope),
+                onOpen: { onOpenCommit?(commit) }
+            )
         }
 
         if review.hasMoreCommits {
@@ -293,6 +277,93 @@ struct GitBranchReviewView: View {
                 isLoading = false
             }
         }
+    }
+}
+
+/// One commit in the review, and whether it is open.
+///
+/// Three states rather than two, because a tab per commit makes "open" and
+/// "in front" different questions. The fill says which review the reader is
+/// looking at right now; the rule down the leading edge says this commit has
+/// a tab somewhere — in the other half of a split, or behind the tab in
+/// front. Without the second mark, opening four commits leaves a list that
+/// looks the same as it did before any of them were opened.
+private struct GitBranchReviewCommitRow: View {
+    let commit: GitReviewCommit
+
+    /// Whether its tab is the one on screen.
+    let isFront: Bool
+
+    /// Whether it has a tab at all.
+    let isOpen: Bool
+
+    let onOpen: () -> Void
+
+    @ObservedObject private var palette: ThemePalette = .shared
+    @State private var isHovered = false
+
+    private var accent: Color { palette.accent ?? .accentColor }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(commit.shortSha)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(isFront ? AnyShapeStyle(accent) : AnyShapeStyle(.tertiary))
+
+            Text(commit.subject)
+                .font(palette.font(size: 10, weight: isFront ? .medium : .regular))
+                .foregroundStyle(isFront ? .primary : .secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 4)
+
+            /// Never wrapped, and never the thing that shrinks.
+            ///
+            /// `layoutPriority(-1)` alone told SwiftUI to take space from
+            /// this first, and with nothing forbidding a second line it
+            /// took it one character at a time — a commit with a long
+            /// subject left "5 days ago" running down the panel as a
+            /// column of letters. The subject is the part with room to
+            /// give, and it already truncates.
+            Text(commit.relativeDate)
+                .font(palette.font(size: 9))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4).fill(fill))
+        .overlay(alignment: .leading) {
+            /// Only for a commit whose tab is not the one in front — the
+            /// fill already says that, and drawing both would give the front
+            /// row two marks for one fact.
+            RoundedRectangle(cornerRadius: 1)
+                .fill(isOpen && !isFront ? accent.opacity(0.7) : .clear)
+                .frame(width: 2)
+                .padding(.vertical, 1)
+        }
+        /// The whole row, because every part of it identifies the same
+        /// commit. A hit target on the sha alone would be seven
+        /// characters wide.
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .onHover { isHovered = $0 }
+        .help(help)
+    }
+
+    private var fill: Color {
+        if isFront { return accent.opacity(0.16) }
+        if isHovered { return Color.secondary.opacity(0.12) }
+        return .clear
+    }
+
+    private var help: String {
+        if isFront { return "\(commit.shortSha) \u{2014} the review you are looking at" }
+        if isOpen { return "\(commit.shortSha) \u{2014} already open in a tab" }
+        return "Review \(commit.shortSha) \u{2014} \(commit.author)"
     }
 }
 

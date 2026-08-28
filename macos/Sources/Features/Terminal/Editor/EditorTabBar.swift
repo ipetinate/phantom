@@ -45,23 +45,34 @@ struct EditorTabBar: View {
     /// clicked it.
     let hostsTerminal: Bool
 
-    /// The review's tab, when one is open in this cell. Its title, because
-    /// this view is handed values rather than the centre — the same rule the
-    /// terminal's title follows.
-    var reviewTitle: String?
-    var onSelectReview: () -> Void = {}
-    var onCloseReview: () -> Void = {}
+    /// The reviews open in this cell, in tab order. Values rather than the
+    /// centre — the same rule the terminal's title follows.
+    var reviews: [GitReviewScope] = []
+    var onSelectReview: (GitReviewScope) -> Void = { _ in }
+    var onCloseReview: (GitReviewScope) -> Void = { _ in }
+
+    /// Moves a tab along the bar, and answers how many places it moved.
+    ///
+    /// The gesture that asks is `EditorTabGesture`, which reorders on a
+    /// sideways drag and hands the tab to the split drag only when it is
+    /// pulled out of the row. It is told how far the tab really went because
+    /// the strip refuses a move across the pinned boundary, and a gesture
+    /// counting a refused move would drift out of step with what it sees.
+    var onReorder: (EditorTab, Int) -> Int = { _, _ in 0 }
 
     @ObservedObject private var palette: ThemePalette = .shared
 
-    /// How tall a tab is, and how much room is left under it for the
-    /// scroller. Named because three places have to agree on them: the row,
-    /// the scroll view around it, and the inset the terminal below is pushed
-    /// down by.
+    /// How tall a tab is. Named because three places have to agree on it:
+    /// the row, the scroll view around it, and the inset the terminal below
+    /// is pushed down by.
+    ///
+    /// There used to be a `scrollerStrip` of 8 points under the row, reserved
+    /// so an overlay scroller had somewhere to be drawn that was not across
+    /// the tab labels. `InvisibleScrollers` removed the knob, so the band it
+    /// was keeping clear has nothing left to keep clear.
     static let tabHeight: CGFloat = 30
-    static let scrollerStrip: CGFloat = 8
 
-    static var height: CGFloat { tabHeight + scrollerStrip }
+    static var height: CGFloat { tabHeight }
 
     var body: some View {
         ScrollView(.horizontal) {
@@ -84,12 +95,17 @@ struct EditorTabBar: View {
                 /// was opened from: the reader asked for it while looking at
                 /// the branch, not while looking at a file. Closable, unlike
                 /// the terminal — it is a guest here too.
-                if let reviewTitle {
+                /// One tab per review, because two commits are two screens:
+                /// a reader comparing them switches between the tabs, and a
+                /// strip with one row could only ever show the last commit
+                /// clicked.
+                ForEach(reviews) { scope in
                     EditorReviewTabItem(
-                        title: reviewTitle,
-                        isSelected: selection == .review,
-                        onSelect: onSelectReview,
-                        onClose: onCloseReview
+                        title: scope.tabTitle,
+                        help: scope.tabHelp,
+                        isSelected: selection == .review(scope.id),
+                        onSelect: { onSelectReview(scope) },
+                        onClose: { onCloseReview(scope) }
                     )
                 }
 
@@ -102,7 +118,8 @@ struct EditorTabBar: View {
                         availability: availability(tab),
                         onSelect: { onSelect(tab.id) },
                         onClose: { onClose(tab.id) },
-                        onCommand: { onCommand($0, tab) }
+                        onCommand: { onCommand($0, tab) },
+                        onReorder: { onReorder(tab, $0) }
                     )
                 }
 
@@ -112,7 +129,7 @@ struct EditorTabBar: View {
                 // so it was drawn clipped, over the bottom edge of the bar and
                 // the rule under it. Overlay draws thin, over the content, and
                 // fades when the scrolling stops.
-                OverlayScrollers()
+                InvisibleScrollers()
 
                 // Wheel down scrolls the row sideways, because reaching for a
                 // tab off the right edge with a mouse otherwise means a
@@ -135,7 +152,7 @@ struct EditorTabBar: View {
         // bar, and the row stops being *vertically* scrollable — content
         // taller than its viewport is what made a wheel event scroll a few
         // invisible points up and down instead of moving the tabs.
-        .frame(height: Self.tabHeight + Self.scrollerStrip)
+        .frame(height: Self.tabHeight)
     }
 }
 
@@ -271,6 +288,9 @@ private struct EditorTabItem: View {
     let onClose: () -> Void
     let onCommand: (EditorTabCommand) -> Void
 
+    /// See ``EditorTabBar/onReorder``.
+    let onReorder: (Int) -> Int
+
     @ObservedObject private var palette: ThemePalette = .shared
     @ObservedObject private var icons: FileIconProvider = .shared
     @State private var isHovered = false
@@ -310,7 +330,8 @@ private struct EditorTabItem: View {
                     onClick: { clicks in
                         if clicks >= 2 { showMenu() } else { onSelect() }
                     },
-                    onMenu: showMenu
+                    onMenu: showMenu,
+                    onReorder: onReorder
                 )
             }
 
@@ -489,6 +510,96 @@ private struct EditorTabItem: View {
             }
             .buttonStyle(.plain)
             .opacity(isHovered || tab.isDirty ? 1 : 0.35)
+        }
+    }
+}
+
+// MARK: - The scrollbar that used to run through the tabs
+
+/// A scroller that occupies its place and draws nothing.
+///
+/// The tab strip drew a horizontal bar through the middle of the row, and a
+/// tab strip is the one place a scroller has nothing to add: a strip with more
+/// tabs than fit already says so by clipping one at its edge, which is the
+/// affordance every editor with a scrolling tab strip relies on.
+///
+/// **A scroller that draws nothing, rather than `hasHorizontalScroller = false`.**
+/// Turning the scroller off does not only remove the indicator: an
+/// `NSScrollView` resolves `horizontalScrollElasticity` of `.automatic`
+/// against whether that axis has a scroller, so switching it off puts the
+/// strip's own scrolling at risk — and the strip has to keep scrolling by
+/// trackpad and by shift-wheel, which is how a tab past the right edge is
+/// reached at all.
+///
+/// **And why `OverlayScrollers()` is replaced here rather than deleted.** That
+/// call is what keeps a *legacy* scroller off the row: with "Show scroll bars:
+/// Always" in System Settings, AppKit gives every scroll view a legacy
+/// scroller, which is permanent and claims a column of layout for itself.
+/// Deleting the call brings that back — a wider bar than the one being
+/// removed, drawn clipped over the tab labels.
+///
+/// `.scrollIndicators(.hidden)` is not the answer either, for the reason
+/// `OverlayScrollers` already records: the modifier does not reach the
+/// scroller SwiftUI's own scroll view draws.
+final class InvisibleScroller: NSScroller {
+    override static func scrollerWidth(
+        for controlSize: NSControl.ControlSize,
+        scrollerStyle: NSScroller.Style
+    ) -> CGFloat {
+        0
+    }
+
+    /// Required of any `NSScroller` subclass used as an overlay scroller,
+    /// which is the style this installs.
+    override static var isCompatibleWithOverlayScrollers: Bool { true }
+
+    override func drawKnob() {}
+
+    override func drawKnobSlot(in slotRect: NSRect, highlight: Bool) {}
+}
+
+/// Puts an ``InvisibleScroller`` on the enclosing scroll view, in place of the
+/// thin one `OverlayScrollers` installs.
+///
+/// Placed inside the scroll view's content with no size of its own, so it can
+/// find its way up to the scroll view and otherwise does nothing — the same
+/// shape, and for the same reason, as `OverlayScrollers`.
+private struct InvisibleScrollers: View {
+    var body: some View {
+        Representable()
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+    }
+
+    private struct Representable: NSViewRepresentable {
+        func makeNSView(context: Context) -> NSView { Finder() }
+
+        func updateNSView(_ nsView: NSView, context: Context) {
+            (nsView as? Finder)?.apply()
+        }
+    }
+
+    private final class Finder: NSView {
+        /// Applied on arrival in a window, which is the first moment there is
+        /// a scroll view above this to find.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        /// Idempotent, because SwiftUI calls `updateNSView` on every pass and
+        /// replacing a scroller mid-fade throws away the one being drawn.
+        func apply() {
+            guard let scrollView = enclosingScrollView else { return }
+            guard !(scrollView.horizontalScroller is InvisibleScroller) else { return }
+
+            /// Overlay as well as invisible. The style is what stops AppKit
+            /// from parking a scroller in the layout forever for a reader
+            /// whose System Settings say to always show scroll bars.
+            scrollView.scrollerStyle = .overlay
+            scrollView.autohidesScrollers = true
+            scrollView.horizontalScroller = InvisibleScroller()
+            scrollView.verticalScroller = InvisibleScroller()
         }
     }
 }

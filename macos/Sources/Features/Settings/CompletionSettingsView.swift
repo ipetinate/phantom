@@ -43,7 +43,13 @@ struct CompletionSettingsSection: View {
 
     var body: some View {
         Section {
-            Toggle("Suggest as You Type", isOn: $isEnabled)
+            /// "Suggest Completions", not "Suggest as You Type". This switch
+            /// is the master — off, even an explicit request answers nothing
+            /// — and its old name described the narrower behaviour instead,
+            /// the one the Assistance section above now carries a switch
+            /// for. Two rows in one pane both reading "as you type" is a
+            /// reader choosing between them by guessing.
+            Toggle("Suggest Completions", isOn: $isEnabled)
                 .toggleStyle(.switch)
 
             Picker("Ask for Suggestions", selection: $delayRaw) {
@@ -94,7 +100,7 @@ struct CompletionSettingsSection: View {
             Text("Completion")
         } footer: {
             Text("""
-            With Suggest as You Type off, nothing opens the list — not a \
+            With Suggest Completions off, nothing opens the list — not a \
             trigger character, not an explicit request. Nothing below can \
             bring it back; that switch is the master.
 

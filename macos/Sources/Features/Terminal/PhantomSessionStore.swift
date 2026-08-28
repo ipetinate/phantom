@@ -927,6 +927,24 @@ final class PhantomSessionStore {
             }
             controller.titleOverride = state.titleOverride
 
+            /// Before the window is revealed, so the grid's first commit
+            /// already shows the files the reader left open rather than a
+            /// bare terminal that grows tabs a moment later.
+            ///
+            /// Asserted onto the main actor for the reason the capture is —
+            /// the restore runs at launch and on the reopen handler, both on
+            /// the main queue — and hopping instead would put the files back
+            /// after the window is on screen.
+            ///
+            /// Guarded by the same thread check, for the same reason: this is
+            /// a precondition that aborts rather than fails, and a launch that
+            /// cannot put the editor back should open the window without it.
+            if let editorGrid = state.editorGrid, Thread.isMainThread {
+                MainActor.assumeIsolated {
+                    controller.editorCenter.restore(editorGrid)
+                }
+            }
+
             if let focusedStr = state.focusedSurface {
                 var foundView: Ghostty.SurfaceView?
                 for view in controller.surfaceTree where view.id.uuidString == focusedStr {

@@ -106,13 +106,17 @@ struct CodeTextView: NSViewRepresentable {
 
     /// Ranges to underline, with the colour to use. Supplied as plain
     /// values so the engine never learns what a language server is.
-    var underlines: [(range: NSRange, color: NSColor)] = []
+    /// The diagnostics to draw, each carrying the message the card will show.
+    ///
+    /// The message travels with the range because both end up in one text
+    /// attribute — see ``CodeDiagnosticMark`` for why that matters.
+    var underlines: [(range: NSRange, mark: CodeDiagnosticMark)] = []
 
     /// Asked what to say when the pointer rests on an offset.
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
 
     /// Asked what to offer at an offset, for the completion list.
-    var completionProvider: ((Int) async -> CodeCompletionAnswer)?
+    var completionProvider: ((CodeCompletionRequest) async -> CodeCompletionAnswer)?
 
     /// Asked to describe the highlighted row, for the documentation card.
     ///
@@ -122,6 +126,58 @@ struct CodeTextView: NSViewRepresentable {
     /// asked about a specific item, which is a request per selection change
     /// rather than per keystroke.
     var completionDocProvider: ((CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome)?
+
+    /// Asked to finish the row the reader accepted, before it is inserted.
+    ///
+    /// The third question about a completion, and the one an auto-import
+    /// needs. Computing an import line for every row of a list is expensive,
+    /// so a producer is allowed to leave `additionalEdits` off all of them and
+    /// supply them only for the row that was chosen — which means a client
+    /// that never asks inserts the identifier and no import.
+    ///
+    /// The engine may not learn that a second request exists, so it hands over
+    /// a row and takes back a finished one. Nil, and a nil answer, both mean
+    /// "insert the row as it stands".
+    var completionResolver: ((CodeCompletionItem) async -> CodeCompletionItem?)?
+
+    /// The reader's standing answer about the completion list's documentation
+    /// card, and the way back when they change it. See
+    /// ``CodeNSTextView/showsDocumentationByDefault``.
+    var showsCompletionDocumentation = false
+    var onCompletionDocumentationChanged: ((Bool) -> Void)?
+
+    /// Where the engine's diagnostic notes go. See
+    /// ``CodeNSTextView/onDiagnosticNote``.
+    var onDiagnosticNote: ((String) -> Void)?
+
+    /// Asked what can be done about a range of this file — the quick fixes
+    /// and refactors ⌃. offers.
+    ///
+    /// A plain range in, plain values out, like every other provider here:
+    /// the engine presents the answers and applies the ones that belong to
+    /// this buffer, and never learns where they came from.
+    ///
+    /// Nil is a supported state and means the key still opens a menu saying
+    /// there is nothing — see `requestCodeActions` for why that is better
+    /// than a key that does nothing at all.
+    var codeActionProvider: ((NSRange) async -> [CodeActionItem])?
+
+    /// Asked to finish a chosen action before it is carried out.
+    ///
+    /// The same bargain as `completionResolver`, for the same reason: working
+    /// out every fix for every problem on a line is expensive, so a producer
+    /// may answer with titles and fill in the edits only for the one that was
+    /// chosen. Nil, and a nil answer, both mean "carry it out as it stands".
+    var codeActionResolver: ((CodeActionItem) async -> CodeActionItem?)?
+
+    /// Called with an action the engine cannot carry out itself — one that
+    /// also rewrites another file, or that asks for something to be invoked
+    /// by name.
+    ///
+    /// Handed up rather than attempted here, for the reason
+    /// `onResolveConflict` gives: the engine holds one buffer and one undo
+    /// timeline, and an edit to a file it cannot open is not its to make.
+    var onRunCodeAction: ((CodeActionItem) -> Void)?
 
     /// Whether a row gets an info glyph. See `CodeNSTextView` for why this is
     /// the host's question and not the item's.
@@ -225,6 +281,29 @@ struct CodeTextView: NSViewRepresentable {
     /// terminal receives it is the host's — the engine holds neither.
     var onAttachLine: ((NSRange, String) -> Void)?
     var onAttachLinePicker: ((NSRange, String) -> Void)?
+
+    /// Which of the things this editor does unasked the reader still wants.
+    ///
+    /// A value the host collapses its preferences into, like everything else
+    /// that crosses this boundary — see `EditorAssistance` for why the engine
+    /// may not go and read them itself. The default is the whole editor, so a
+    /// host that says nothing gets an editor rather than a stripped one.
+    ///
+    /// Last in the list on purpose: it has a default, and a parameter with a
+    /// default added anywhere else would reorder the memberwise initialiser
+    /// under every existing call.
+    var assistance: EditorAssistance = .all
+
+    /// Bumped by the host whenever `assistance` changes.
+    ///
+    /// The same device as `textRevision` and for a sharper version of the
+    /// same reason. Honouring a switch means re-marking the document and
+    /// re-measuring the margin, and SwiftUI updates this view for reasons
+    /// that have nothing to do with switches — so a comparison of the value
+    /// would be doing that work on every keystroke. A number the host bumps
+    /// when it means it says the one thing a comparison cannot: that
+    /// something actually changed.
+    var assistanceRevision = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -344,6 +423,17 @@ struct CodeTextView: NSViewRepresentable {
         blame.isSelectable = false
         /// Paint, not a control: a click here belongs to the text under it.
         blame.refusesFirstResponder = true
+
+        /// The diagnostic waves, in front of the glyphs and inside the
+        /// document — which is what scrolls them for free. Added before the
+        /// ghost text so a squiggle running to the end of a line passes under
+        /// the history rather than through it.
+        let squiggles = CodeSquiggleView(frame: textView.bounds)
+        squiggles.textView = textView
+        textView.addSubview(squiggles)
+        textView.squiggles = squiggles
+        context.coordinator.squiggles = squiggles
+
         textView.addSubview(blame)
         context.coordinator.blameLabel = blame
 
@@ -392,12 +482,20 @@ struct CodeTextView: NSViewRepresentable {
         textView.onFindReferences = onFindReferences
         textView.onFormat = onFormat
         textView.commandShortcuts = commandShortcuts
+        textView.assistance = assistance
         textView.completionTriggers = completionTriggers
         textView.completesInsideClassAttribute = completesInsideClassAttribute
         textView.onJumpToDefinition = onJumpToDefinition
         textView.hoverProvider = hoverProvider
         textView.completionProvider = completionProvider
         textView.completionDocProvider = completionDocProvider
+        textView.completionResolver = completionResolver
+        textView.showsDocumentationByDefault = showsCompletionDocumentation
+        textView.onDocumentationPreferenceChanged = onCompletionDocumentationChanged
+        textView.onDiagnosticNote = onDiagnosticNote
+        textView.codeActionProvider = codeActionProvider
+        textView.codeActionResolver = codeActionResolver
+        textView.onRunCodeAction = onRunCodeAction
         textView.completionOffersDocumentation = completionOffersDocumentation
         textView.completionIconFont = completionIconFont
 
@@ -446,12 +544,20 @@ struct CodeTextView: NSViewRepresentable {
             code.onFindReferences = onFindReferences
             code.onFormat = onFormat
             code.commandShortcuts = commandShortcuts
+            code.assistance = assistance
             code.completionTriggers = completionTriggers
             code.completesInsideClassAttribute = completesInsideClassAttribute
             code.onJumpToDefinition = onJumpToDefinition
             code.hoverProvider = hoverProvider
             code.completionProvider = completionProvider
             code.completionDocProvider = completionDocProvider
+            code.completionResolver = completionResolver
+            code.showsDocumentationByDefault = showsCompletionDocumentation
+            code.onDocumentationPreferenceChanged = onCompletionDocumentationChanged
+            code.onDiagnosticNote = onDiagnosticNote
+            code.codeActionProvider = codeActionProvider
+            code.codeActionResolver = codeActionResolver
+            code.onRunCodeAction = onRunCodeAction
             code.completionOffersDocumentation = completionOffersDocumentation
             code.completionIconFont = completionIconFont
         }
@@ -460,6 +566,12 @@ struct CodeTextView: NSViewRepresentable {
         /// a branch that has no such file — and the view is not rebuilt for
         /// that.
         textView.isEditable = isEditable
+
+        /// Before the underlines, which are one of the things it governs.
+        /// `assistanceRevision` is what makes this a no-op on the updates
+        /// SwiftUI runs for unrelated reasons — every pass it does run
+        /// re-marks the document and re-measures the margin.
+        context.coordinator.apply(assistance: assistance, revision: assistanceRevision)
         context.coordinator.applyUnderlines(underlines)
 
         context.coordinator.storage.setSyntax(syntax)
@@ -615,8 +727,28 @@ struct CodeTextView: NSViewRepresentable {
 
         /// The underlines currently drawn, so an update that changed
         /// something else doesn't walk the whole document to redraw marks
-        /// that haven't moved.
-        private var appliedUnderlines: [NSRange] = []
+        /// that haven't moved. Nil means "whatever is there, redo it" — the
+        /// one thing a switch being flipped needs to be able to say.
+        private var appliedUnderlines: [NSRange]?
+
+        /// What the host last supplied, so a switch flipped in the settings
+        /// window can be honoured against it without waiting for the host to
+        /// send it again.
+        ///
+        /// Kept rather than re-derived because neither is derivable from
+        /// here: a diagnostic comes from a language server and a line's
+        /// history comes from git, and the engine is not allowed to know that
+        /// either exists.
+        private var hostUnderlines: [(range: NSRange, mark: CodeDiagnosticMark)] = []
+        private var hostBlameGhost: String?
+
+        /// The wave under each problem. See `CodeSquiggleView`.
+        weak var squiggles: CodeSquiggleView?
+
+        /// The reader's switches as this view was last told them, and the
+        /// revision that answer came from. See `apply(assistance:revision:)`.
+        private(set) var assistance = EditorAssistance.all
+        private var assistanceRevision = Int.min
 
         /// The bracket spans currently coloured, guarded the same way.
         private var appliedBrackets: [BracketDepth.Span] = []
@@ -1188,7 +1320,17 @@ struct CodeTextView: NSViewRepresentable {
         /// fragment, for the reason `updateCurrentLineBand` records: the two
         /// can disagree, and the caret is the thing the reader sees.
         func updateBlameGhost(_ text: String?, theme: CodeTheme, font: NSFont) {
+            hostBlameGhost = text
             guard let label = blameLabel, let textView else { return }
+
+            /// The reader's switch, read here rather than where the sentence
+            /// is composed: the composing side is the host's, and the host
+            /// would then be deciding what the engine draws. Off means the
+            /// label comes down and nothing measures a caret.
+            guard assistance.gitLens else {
+                label.isHidden = true
+                return
+            }
 
             guard let text, !text.isEmpty else {
                 label.isHidden = true
@@ -1418,10 +1560,40 @@ struct CodeTextView: NSViewRepresentable {
             guard text != appliedDiffText else { return }
             appliedDiffText = text
 
-            gutter.setDiffMarks(EditorDiffMarks.marks(
-                current: EditorDiffMarks.lines(of: text),
-                base: baseline
-            ))
+            let lines = EditorDiffMarks.lines(of: text)
+
+            /// **Only the drawing is switched off, and the comparison below
+            /// still runs.** The two answer different questions off the same
+            /// measurement: the margin answers "what have I changed", which
+            /// is a decoration somebody may not want, and the set below
+            /// answers "is this line mine", which is what stops the ghost
+            /// text naming a colleague for a line the reader has since
+            /// rewritten. Returning early here would take the second away
+            /// with the first, and the git lens would start attributing the
+            /// reader's own edits to whoever last committed that line number.
+            gutter.setDiffMarks(
+                assistance.diffMarks
+                    ? EditorDiffMarks.marks(current: lines, base: baseline)
+                    : [:]
+            )
+
+            /// Which lines the reader has changed, so the ghost text stays
+            /// quiet on them. `git blame` reads the file on disk and answers
+            /// by line number, so on a changed line it names whoever last
+            /// touched that number in the committed file.
+            ///
+            /// Asked of ``EditorDiffMarks/changedLines(current:base:)`` rather
+            /// than read off the glyphs. A `-` means two different things —
+            /// a line changed in place, and a line that survived a deletion —
+            /// and only the first is the reader's own text. Filtering the
+            /// marks for `.added` was the first version of this and it missed
+            /// every line edited in place, which is the case that was
+            /// reported.
+            if let documentPath {
+                EditorBlameCenter.shared.setLocallyChanged(
+                    EditorDiffMarks.changedLines(current: lines, base: baseline),
+                    forPath: documentPath)
+            }
         }
 
         /// Rebuilds the minimap shortly, rather than now.
@@ -1500,37 +1672,101 @@ struct CodeTextView: NSViewRepresentable {
             gutter?.needsDisplay = true
         }
 
-        /// Draws the diagnostic underlines on top of the syntax colours.
+        /// Marks the problems on top of the syntax colours.
         ///
         /// Applied as a separate pass rather than folded into highlighting:
         /// the two change for unrelated reasons — one when you type, the
         /// other when a server answers — and a single pass would mean
         /// re-tokenising the document every time a diagnostic arrived.
-        func applyUnderlines(_ underlines: [(range: NSRange, color: NSColor)]) {
+        ///
+        /// **What lands is `.codeDiagnosticUnderline` and nothing AppKit
+        /// draws.** The mark is a wave, `NSUnderlineStyle` has no wave, so
+        /// `CodeSquiggleView` draws it and this only records where. The
+        /// attribute is still an attribute rather than a list held beside the
+        /// text because `NSTextStorage` moves attributes when the text under
+        /// them moves — see the key's own documentation.
+        ///
+        /// The straight-underline keys are cleared as well as the new one.
+        /// Not for tidiness: a buffer that was marked up by an earlier build
+        /// of this editor is still on screen after an update, and a rule left
+        /// under a word that no longer has a problem is a rule nothing would
+        /// ever take away.
+        func applyUnderlines(_ underlines: [(range: NSRange, mark: CodeDiagnosticMark)]) {
+            hostUnderlines = underlines
             guard let textView, let storage = textView.textStorage else { return }
+
+            let wanted = assistance.inlineDiagnostics ? underlines : []
 
             // SwiftUI updates this view for reasons that have nothing to do
             // with diagnostics — a theme change, a resize, a keystroke —
             // and each pass here walks the whole document. Skipping the
             // unchanged case is what keeps that off the typing path.
-            let ranges = underlines.map(\.range)
+            let ranges = wanted.map(\.range)
             guard ranges != appliedUnderlines else { return }
             appliedUnderlines = ranges
 
             let full = NSRange(location: 0, length: storage.length)
 
             storage.beginEditing()
+            storage.removeAttribute(.codeDiagnosticUnderline, range: full)
             storage.removeAttribute(.underlineStyle, range: full)
             storage.removeAttribute(.underlineColor, range: full)
-            for underline in underlines {
+            for underline in wanted {
                 let clipped = NSIntersectionRange(underline.range, full)
                 guard clipped.length > 0 else { continue }
-                storage.addAttributes([
-                    .underlineStyle: NSUnderlineStyle.thick.rawValue,
-                    .underlineColor: underline.color,
-                ], range: clipped)
+                storage.addAttribute(.codeDiagnosticUnderline, value: underline.mark, range: clipped)
             }
             storage.endEditing()
+
+            squiggles?.refresh()
+        }
+
+        /// Takes the reader's switches, and re-runs what they govern.
+        ///
+        /// Most of them need only to be *held*: the next hover, the next
+        /// keystroke and the next accepted row each read the value when they
+        /// run. What needs a pass of its own is the state that is drawn once
+        /// and left there — a wave already in the text storage, a name
+        /// already beside the caret, a column of marks already in the margin.
+        /// None of those repaint on their own, and a reader who turns one off
+        /// and watches it stay on has been told the switch does not work.
+        ///
+        /// The revision is what makes that affordable. This runs from
+        /// `updateNSView`, which SwiftUI calls for reasons that have nothing
+        /// to do with switches, and the three passes below each defeat a
+        /// guard that exists to keep them off the typing path — so they may
+        /// only run when something actually moved, and only the host can say
+        /// that.
+        func apply(assistance: EditorAssistance, revision: Int) {
+            guard revision != assistanceRevision else { return }
+            assistanceRevision = revision
+            self.assistance = assistance
+            reapplyAssistance()
+        }
+
+        /// Re-runs everything the switches govern, whatever they now say.
+        ///
+        /// Split from `apply(assistance:revision:)` so a test can drive it
+        /// without inventing a revision, and so the guard above stays the one
+        /// place that decides whether anything needs doing at all.
+        func reapplyAssistance() {
+            appliedUnderlines = nil
+            applyUnderlines(hostUnderlines)
+
+            appliedDiffText = nil
+            scheduleDiffMarkRefresh()
+
+            updateBlameGhost(hostBlameGhost, theme: storage.theme, font: storage.configuration.font)
+
+            /// A card or a list that is already open outlives the switch that
+            /// stopped new ones appearing, and a reader watching the thing
+            /// they just turned off sit there has been told the switch does
+            /// not work. Both are closed rather than left to their own
+            /// dismissal.
+            guard let code = textView as? CodeNSTextView else { return }
+            code.assistance = assistance
+            if !assistance.hoverCards { code.hideHover() }
+            if !assistance.completionWhileTyping { code.dismissCompletions() }
         }
 
         func applyAppearance(
@@ -1902,6 +2138,13 @@ struct CodeTextView: NSViewRepresentable {
             // it per keystroke is the cost this editor exists to avoid. The
             // visible region is what a reader can see being wrong.
             colorBrackets(in: region)
+
+            /// The waves are drawn by a sibling view, and a sibling is not
+            /// told that the text storage moved. Only the exposed part, which
+            /// is the only part that can be wrong on screen — the rest is
+            /// redrawn when it is scrolled into.
+            squiggles?.setNeedsDisplay(squiggles?.visibleRect ?? .zero)
+
             gutter?.reload()
             scheduleMinimapRefresh()
             scheduleDiffMarkRefresh()
@@ -1972,8 +2215,31 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     var commandShortcuts: [String: [EditorShortcut]] = [:]
     var onJumpToDefinition: ((Int) -> Void)?
     var hoverProvider: ((Int) async -> CodeHoverInfo?)?
-    var completionProvider: ((Int) async -> CodeCompletionAnswer)?
+    var completionProvider: ((CodeCompletionRequest) async -> CodeCompletionAnswer)?
     var completionDocProvider: ((CodeCompletionItem) async -> CodeCompletionDocPanel.Outcome)?
+
+    /// Asked to finish the accepted row before it is inserted. See the
+    /// property of the same name on `CodeTextView`, and `acceptCompletion`
+    /// for why the answer is waited for rather than applied after the fact.
+    var completionResolver: ((CodeCompletionItem) async -> CodeCompletionItem?)?
+
+    /// Asked what can be done about a range. See the properties of the same
+    /// names on `CodeTextView`.
+    var codeActionProvider: ((NSRange) async -> [CodeActionItem])?
+    var codeActionResolver: ((CodeActionItem) async -> CodeActionItem?)?
+    var onRunCodeAction: ((CodeActionItem) -> Void)?
+
+    /// The pending quick-fix request, and the counter that tells its answer
+    /// from a later one's. Same device, and same reason, as
+    /// `completionGeneration`: the buffer moves while an answer travels.
+    private var codeActionTask: Task<Void, Never>?
+    private var codeActionGeneration = 0
+
+    /// The wave under each problem, drawn in front of the text.
+    ///
+    /// A subview rather than anything this class draws itself — see
+    /// `CodeSquiggleView` for why overriding `draw(_:)` here is not available.
+    weak var squiggles: CodeSquiggleView?
 
     /// Whether a row is worth offering an info glyph on.
     ///
@@ -2002,6 +2268,28 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// own visibility because the card is legitimately empty for a server
     /// that answers no documentation, and "asked for and empty" has to
     /// survive the selection moving to a row that does have some.
+    /// Whether the completion list keeps its documentation card open.
+    ///
+    /// Seeded by the host and reported back when the reader turns it, rather
+    /// than read from `UserDefaults` here — the engine may not reach one, and
+    /// `EditorEngineBoundaryTests` holds that line. See
+    /// ``showsDocumentationByDefault`` and ``onDocumentationPreferenceChanged``.
+    /// The reader's standing answer about the documentation card.
+    ///
+    /// Set by the host from whatever it persists. Seeding rather than binding,
+    /// because the engine reads no `UserDefaults` — see
+    /// ``onDocumentationPreferenceChanged``.
+    var showsDocumentationByDefault = false
+
+    /// Reports the reader turning the card on or off, so the host can remember
+    /// it. Called only from the info glyph — a list closing is not an answer.
+    var onDocumentationPreferenceChanged: ((Bool) -> Void)?
+
+    /// A line for the log that survives the process, for the panel moments a
+    /// crash report did not describe. The host supplies it, because the engine
+    /// may not name the logger — see `EditorEngineBoundaryTests`.
+    var onDiagnosticNote: ((String) -> Void)?
+
     private var isShowingDocumentation = false
 
     /// How long the caret rests before the list asks for suggestions.
@@ -2045,9 +2333,21 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// The list currently on screen, if any.
     private var completionSession: CompletionSession?
 
+    /// Whether the answer on screen was one the producer called a guess.
+    ///
+    /// The producer asked to be asked again as the prefix grows, and the
+    /// next request has to say that it is that re-ask. Reset when the list
+    /// closes, because a fresh session is nobody's refinement.
+    private var lastAnswerWasIncomplete = false
+
     /// Built on first use and kept, so a burst of typing reuses one window
     /// rather than making and destroying one per keystroke.
     private(set) var completionPanel: CodeCompletionPanel?
+
+    /// The one-line answer to a key that could not do what it was pressed
+    /// for. Kept for the same reason as the list above it. See
+    /// `CodeNoticePanel`.
+    private(set) var noticePanel: CodeNoticePanel?
 
     /// The in-flight fetch. Cancelled on every new one, rather than dropped —
     /// dropping the *new* request is what the version this replaces did, and
@@ -2149,6 +2449,14 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     var closesBrackets = true
     var closesQuotes = true
     var closesTags = true
+
+    /// Which of the things the editor does unasked the reader still wants.
+    ///
+    /// Mirrored onto the view for the reason the switches below it are: the
+    /// keystroke arrives *here*, and the answer has to be a property load
+    /// rather than a question asked of something else. See
+    /// `EditorAssistance`, which also records why it may not be a global.
+    var assistance = EditorAssistance.all
 
     /// Whether the list may open at all, and whether buffer words join the
     /// server's answer. Mirrored from the configuration — see
@@ -2267,6 +2575,12 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     override func layout() {
         super.layout()
         fitDocumentWidth()
+
+        /// The overlay covers the document, and the document grows with the
+        /// text. Sized here rather than left to an autoresizing mask because
+        /// this is the one moment the new size is known — `fitDocumentWidth`
+        /// above changes it from inside this very pass.
+        if let squiggles, squiggles.frame != bounds { squiggles.frame = bounds }
     }
 
     /// ⌘-click goes to the definition; without the modifier this is an
@@ -2290,6 +2604,13 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// it passes over is a request per pixel of travel.
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
+
+        /// A card that is off must not merely stop *appearing* — nothing
+        /// below this line may run, or a pointer crossing the file would
+        /// still be sending a request per word to a language server for
+        /// answers nobody will ever see.
+        guard assistance.hoverCards else { return }
+
         guard let hoverProvider else { return }
 
         /// Still on the card, still on the word it describes, or still crossing
@@ -2319,13 +2640,59 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         hoverTask = Task { [weak self, hoverFetchDelay] in
             try? await Task.sleep(for: hoverFetchDelay)
             guard !Task.isCancelled else { return }
-            let info = await hoverProvider(offset)
-            guard !Task.isCancelled, let info, !info.isEmpty else { return }
+            let answered = await hoverProvider(offset)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.hoverOffset == offset else { return }
+
+                /// The host's answer, plus whatever the *text* says is wrong
+                /// here. The host resolved its list when the server last
+                /// spoke; the storage has been moving its marks with every
+                /// keystroke since. Merging is what stops an edited file from
+                /// showing a wave with no message behind it.
+                let info = self.withOwnDiagnostics(answered, at: offset)
+                guard !info.isEmpty else { return }
                 self.showHover(info, at: offset)
             }
         }
+    }
+
+    /// Adds the diagnostics the text itself carries to whatever the host
+    /// answered.
+    ///
+    /// Deduplicated on the message, because the two sources overlap: a
+    /// diagnostic with a span is in both, and the same sentence twice in one
+    /// card reads as two problems.
+    private func withOwnDiagnostics(_ answered: CodeHoverInfo?, at offset: Int) -> CodeHoverInfo {
+        var info = answered ?? CodeHoverInfo(problems: [])
+        var seen = Set(info.problems.map(\.message))
+
+        for mark in diagnostics(at: offset) where seen.insert(mark.message).inserted {
+            info.problems.append(CodeHoverInfo.Problem(
+                message: mark.message, source: mark.source, color: mark.color))
+        }
+        return info
+    }
+
+    /// The diagnostics under an offset, read from the text rather than from a
+    /// list.
+    ///
+    /// This is the whole point of putting the mark in an attribute: the
+    /// storage moves it with the text, so the answer is current between the
+    /// reader's edit and the server's next word. The list the host resolved
+    /// when the server last spoke is not.
+    func diagnostics(at offset: Int) -> [CodeDiagnosticMark] {
+        guard let storage = textStorage, offset >= 0, offset < storage.length else { return [] }
+
+        var found: [CodeDiagnosticMark] = []
+        /// The whole run, not just the character under the pointer: an offset
+        /// one past the end of a diagnostic is still on the word it marks as
+        /// far as a reader pointing at it is concerned.
+        let probe = NSRange(location: offset, length: 1)
+        storage.enumerateAttribute(.codeDiagnosticUnderline, in: probe, options: []) { value, _, _ in
+            if let mark = value as? CodeDiagnosticMark { found.append(mark) }
+        }
+        return found
     }
 
     /// Puts the card beside the hovered word.
@@ -2344,6 +2711,8 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// report was about.
     private func showHover(_ info: CodeHoverInfo, at offset: Int) {
         guard !hoverHoldsPointer() else { return }
+        onDiagnosticNote?("hover: open at \(offset), completions="
+            + "\(completionSession != nil), doc=\(isShowingDocumentation)")
 
         let content = string as NSString
         guard content.length > 0 else { return }
@@ -2431,7 +2800,11 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     }
 
     /// Stops everything: no card, and no card on its way.
-    private func hideHover() {
+    ///
+    /// Internal rather than private because the coordinator calls it when the
+    /// reader switches hover cards off — a card already on screen outlives
+    /// the switch otherwise.
+    func hideHover() {
         hoverTask?.cancel()
         dismissTask?.cancel()
         hoverSymbol = nil
@@ -2489,10 +2862,32 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
             )
         }
 
-        if window == nil {
-            hoverOffset = nil
-            hideHover()
-        }
+        if window == nil { dismissEverythingFloating() }
+    }
+
+    /// Closes every panel this view owns, because it no longer has a window
+    /// for one to be anchored to.
+    ///
+    /// **Each of these is a real `NSWindow`, added as a child of the editor's
+    /// window.** A child window does not go away because the view that
+    /// positioned it left — nothing in AppKit connects the two — so a panel
+    /// left open here stays on screen, over whatever the reader moves to, for
+    /// the life of the process.
+    ///
+    /// Reported from a demo: typing `cons`, the completion list open, and the
+    /// tab closed before the list was dismissed or a row accepted. The list
+    /// stayed exactly where it was until the app was quit.
+    ///
+    /// This used to close the hover card alone, which is why the card was the
+    /// one that behaved. Anything added here later that opens a window has to
+    /// be closed here too — the rule is the view's, not each panel's: no
+    /// window, no panels.
+    private func dismissEverythingFloating() {
+        hoverOffset = nil
+        hideHover()
+        dismissCompletions()
+        hideDocumentation()
+        hideNotice()
     }
 
     /// The editor's window losing focus closes the card, because the card is a
@@ -2683,22 +3078,42 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         (sender.representedObject as? MenuAction)?.run()
     }
 
-    /// ⌃Space asks for completions, the way most editors bind it.
+    /// ⌃Space asks for completions and ⌃. asks what can be done about the
+    /// code under the caret, the way most editors bind them.
     ///
     /// In `keyDown` rather than `performKeyEquivalent` because that one only
     /// sees ⌘ combinations — a plain modifier+key never reaches it.
+    ///
+    /// Both go through the same lookup as every other command rather than
+    /// through a branch of their own, and the branch they used to have is
+    /// worth recording because it could not work:
+    ///
+    /// ```swift
+    /// if modifiers == .control, event.charactersIgnoringModifiers == " " { … }
+    /// ```
+    ///
+    /// Two faults, either of which is enough to make the key do nothing.
+    /// `modifiers` was masked with `deviceIndependentFlagsMask`, which
+    /// *includes* the caps lock bit — so an equality against `.control` failed
+    /// on every press made with caps lock down. And ⌃Space reports U+0000 for
+    /// `charactersIgnoringModifiers` on some layouts rather than a space, so
+    /// the comparison failed there whatever the modifiers said. `EditorShortcut`
+    /// answers both — it narrows to the four bindable modifiers and recovers
+    /// the space from the key code — and going through it is also what lets
+    /// the reader rebind these.
     override func keyDown(with event: NSEvent) {
         // Typing means the reader has moved on, and the text the card
         // describes may be the text being replaced.
         hoverOffset = nil
         hideHover()
 
+        /// And the notice describes a key press that is now the *previous*
+        /// one. Taken down here rather than left to its own clock, so a
+        /// reader who presses ⌃Space twice sees the second answer rather than
+        /// the remains of the first.
+        hideNotice()
+
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if modifiers == .control, event.charactersIgnoringModifiers == " ",
-           completionProvider != nil {
-            complete(nil)
-            return
-        }
 
         /// The reader's own bindings again, for whatever
         /// `performKeyEquivalent` did not get to see — the comment above says
@@ -2755,7 +3170,7 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         case .ignore:
             break
         case .open, .refilter:
-            requestCompletions(explicitly: false, immediate: isTrigger)
+            requestCompletions(explicitly: false, immediate: isTrigger, typed: typed)
         }
     }
 
@@ -2850,19 +3265,51 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// the main actor and re-check that the world has not moved — with one
     /// addition hover does not need: the buffer moves under a completion, so
     /// a generation counter guards it as well as the offset.
-    private func requestCompletions(explicitly: Bool, immediate: Bool = false) {
-        guard completionEnabled, let completionProvider else { return }
+    private func requestCompletions(
+        explicitly: Bool,
+        immediate: Bool = false,
+        typed: Character? = nil
+    ) {
+        switch Self.completionRequestVerdict(
+            isExplicit: explicitly,
+            completionEnabled: completionEnabled,
+            suggestsWhileTyping: assistance.completionWhileTyping,
+            hasProvider: completionProvider != nil
+        ) {
+        case .ask:
+            break
+        case .stayQuiet:
+            return
+        case .sayItIsOff:
+            /// Only ever reached from ⌃Space. An explicit ask that produces
+            /// nothing *and* says nothing is the whole of the report this
+            /// path came from: the reader cannot tell a key that is not bound
+            /// from a key that is bound to a feature they switched off.
+            showNotice(Self.completionsOffNotice)
+            return
+        }
+
+        guard let completionProvider else { return }
 
         completionGeneration += 1
         let generation = completionGeneration
         let offset = selectedRange().location
         let delay = immediate || explicitly ? Duration.zero : completionFetchDelay
 
+        /// Read here rather than inside the task, so it describes the answer
+        /// that was on screen when this keystroke landed rather than whatever
+        /// has replaced it by the time the request goes out.
+        let request = CodeCompletionRequest(
+            offset: offset,
+            typedCharacter: typed,
+            isRefiningIncompleteList: lastAnswerWasIncomplete
+        )
+
         completionTask?.cancel()
         completionTask = Task { [weak self, delay] in
             if delay > .zero { try? await Task.sleep(for: delay) }
             guard !Task.isCancelled else { return }
-            let answer = await completionProvider(offset)
+            let answer = await completionProvider(request)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self, self.completionGeneration == generation else { return }
@@ -2870,14 +3317,69 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
                 /// The one case that must not reach `showCompletions`: it is
                 /// not an answer, so there is nothing to draw and — crucially
                 /// — nothing to clear.
-                guard case .items(let items) = answer else { return }
-                self.showCompletions(items, requestedAt: offset)
+                guard case .items(let items, let isIncomplete) = answer else { return }
+                self.lastAnswerWasIncomplete = isIncomplete
+                self.showCompletions(items, requestedAt: offset, wasExplicit: explicitly)
             }
         }
     }
 
+    /// Whether a request for completions goes out, and what to say when it
+    /// does not.
+    ///
+    /// Three answers rather than a `Bool`, because "no" has two meanings here
+    /// and only one of them may be silent.
+    ///
+    /// **The master switch outranks the explicit ask.** Settings promises, in
+    /// as many words, that with *Suggest Completions* off "nothing opens the
+    /// list — not a trigger character, not an explicit request", so ⌃Space
+    /// does not get to overrule it. What it does get is an answer: silence
+    /// there is indistinguishable from a key that is not bound at all.
+    ///
+    /// **Suggesting while typing is a different switch and only covers the
+    /// unasked list.** Off, nothing opens by itself and ⌃Space still works —
+    /// which is the whole difference between the two settings and the reason
+    /// there are two.
+    ///
+    /// A static over values so the rule can be asserted without a view, a
+    /// server or a keystroke.
+    static func completionRequestVerdict(
+        isExplicit: Bool,
+        completionEnabled: Bool,
+        suggestsWhileTyping: Bool,
+        hasProvider: Bool
+    ) -> CompletionRequestVerdict {
+        guard completionEnabled else { return isExplicit ? .sayItIsOff : .stayQuiet }
+        guard hasProvider else { return .stayQuiet }
+        guard isExplicit || suggestsWhileTyping else { return .stayQuiet }
+        return .ask
+    }
+
+    enum CompletionRequestVerdict: Equatable {
+        /// Send the request.
+        case ask
+
+        /// Send nothing, and say nothing: nobody asked.
+        case stayQuiet
+
+        /// Send nothing, and tell the reader why: they asked.
+        case sayItIsOff
+    }
+
+    static let completionsOffNotice = "Completions are turned off for this file"
+    static let noCompletionsNotice = "No suggestions here"
+
     /// Ranks an answer and puts it on screen.
-    private func showCompletions(_ items: [CodeCompletionItem], requestedAt offset: Int) {
+    ///
+    /// - Parameter wasExplicit: whether the reader asked for this list by
+    ///   name. An empty answer to an explicit ask is reported rather than
+    ///   dropped; an empty answer to a keystroke is dropped, because a list
+    ///   that never opened is the normal case for most characters typed.
+    private func showCompletions(
+        _ items: [CodeCompletionItem],
+        requestedAt offset: Int,
+        wasExplicit: Bool = false
+    ) {
         let content = string as NSString
         let caret = selectedRange().location
         let prefix = completionPrefixRange(in: content, endingAt: caret)
@@ -2889,18 +3391,34 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         )
         guard !ranked.isEmpty else {
             dismissCompletions()
+            if wasExplicit { showNotice(Self.noCompletionsNotice) }
             return
         }
 
         completionSession = CompletionSession(items: ranked, selection: 0)
 
+        /// The reader's standing answer about the documentation card, applied
+        /// as the list opens. Read from the host rather than remembered here:
+        /// a text view is made and thrown away per pane, so a preference kept
+        /// on one would last exactly as long as the pane did.
+        isShowingDocumentation = showsDocumentationByDefault
+
         /// Anchored on the **start of the word**, not the caret, so the list
         /// lines up under what is being completed rather than drifting right
         /// as the reader types. A zero-height rect means TextKit has not laid
         /// the line out yet, and the panel treats that as "do not show".
-        let anchor = firstRect(
+        ///
+        /// Which is the second silent way ⌃Space could do nothing: asked with
+        /// no word under the caret — after a dot, on blank space, at the end
+        /// of a file — the range measured here is empty, and
+        /// `firstRect(forCharacterRange:)` answers nothing for an empty range
+        /// at the end of the document. A list was built, ranked and handed to
+        /// a panel that then declined to draw it. `caretAnchor` is the same
+        /// repair the current-line band already carries, for the same reason.
+        var anchor = firstRect(
             forCharacterRange: NSRange(location: prefix.location, length: max(prefix.length, 1)),
             actualRange: nil)
+        if anchor.height <= 0 { anchor = caretAnchor(at: prefix.location) ?? anchor }
 
         let panel = completionPanel ?? makeCompletionPanel()
         panel.present(
@@ -3125,6 +3643,7 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         /// formatting pass, an undo, an edit the language server applied.
         hoverOffset = nil
         hideHover()
+        hideNotice()
 
         guard let session = snippetSession, let edit = pendingEdit else { return }
         pendingEdit = nil
@@ -3245,11 +3764,19 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
 
     /// The info glyph is a toggle, not a one-way door: it is the same control
     /// for "show me this" and "that is enough".
+    ///
+    /// And the answer is remembered. Turning it on used to last until the list
+    /// closed, so a reader who wanted documentation had to say so again on the
+    /// next completion, and again after a relaunch — the same click answering
+    /// the same question forever. The host is told, and hands the answer back
+    /// when the next list opens.
     private func toggleDocumentation(for item: CodeCompletionItem) {
         if isShowingDocumentation {
             hideDocumentation()
+            onDocumentationPreferenceChanged?(false)
         } else {
             isShowingDocumentation = true
+            onDocumentationPreferenceChanged?(true)
             requestDocumentation(for: item)
         }
     }
@@ -3317,10 +3844,113 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         documentationPanel?.dismiss()
     }
 
+    /// Accepting a row, with one round trip in the middle when the row's
+    /// producer may still be holding edits it has not sent.
+    ///
+    /// **The wait goes before the insertion, and moving it after would break
+    /// the feature silently.** The insertion is itself a change the producer
+    /// is told about, and `typescript-language-server` drops its completion
+    /// cache on that notification. A resolve sent afterwards is answered with
+    /// the item **unchanged and without an error** — so the import is simply
+    /// absent, nothing reports a failure, and the result is identical to a
+    /// server that had none to give. Inserting first and importing later
+    /// looks like the kinder order and is the one that cannot work.
+    ///
+    /// The wait is bounded by the host, at `completionResolveOnAccept`. When
+    /// it expires the name still goes in without its import, because a Return
+    /// that does nothing is worse than a missing import.
+    ///
+    /// The list closes first regardless, so no row sits highlighted while the
+    /// answer travels.
     private func acceptCompletion(_ item: CodeCompletionItem) {
         guard completionSession != nil else { return }
         dismissCompletions()
-        applyCompletion(item)
+
+        /// **The reader who turned auto-import off does not wait for the
+        /// server at all.** The resolve above exists for one purpose — to
+        /// collect an import the list was too expensive to compute — so with
+        /// that switched off the round trip has nothing left to fetch, and
+        /// keeping it would spend a bounded wait before every single
+        /// insertion in exchange for edits that are about to be discarded.
+        /// The name goes in immediately, which is what the switch promises.
+        ///
+        /// Edits already on the row are dropped in the same breath. A server
+        /// is free to send them with the list rather than on resolve, and
+        /// skipping only the request would let exactly those servers keep
+        /// writing imports for somebody who asked them not to.
+        guard assistance.autoImport else {
+            applyCompletion(Self.withoutAdditionalEdits(item))
+            return
+        }
+
+        guard let completionResolver, item.mayHaveUnsentEdits else {
+            applyCompletion(item)
+            return
+        }
+
+        let asked = string
+
+        Task { [weak self] in
+            let finished = await completionResolver(item)
+            await MainActor.run {
+                guard let self else { return }
+                self.applyCompletion(Self.rowToApply(
+                    asked: item,
+                    finished: finished,
+                    textWhenAsked: asked,
+                    textNow: self.string
+                ))
+            }
+        }
+    }
+
+    /// Which row actually gets inserted once the answer arrives.
+    ///
+    /// **Every range a producer sends is an offset into the document it last
+    /// saw, and an offset only means something against the text it was
+    /// measured on.** If the reader typed, deleted, or accepted something
+    /// else while the answer travelled, the edits that come back describe a
+    /// document that no longer exists — so they are dropped and the row goes
+    /// in as it stood.
+    ///
+    /// Dropped rather than adjusted, deliberately. Losing an import costs the
+    /// reader a line they can type; placing one by arithmetic against text it
+    /// was never measured on writes an `import` into the middle of an
+    /// unrelated line. Same rule, and the same reasoning, as
+    /// `CompletionBridge.edits(_:using:)`.
+    ///
+    /// Note what this does **not** guard, because the insertion guards it
+    /// already: the row's own `replaceRange`. That one is re-derived from the
+    /// buffer at insertion time by `replacementRange`, which is why typing
+    /// ahead of an open list still works. This is only about the edits that
+    /// arrive from elsewhere, and it is the only part with no second chance.
+    ///
+    /// A static so the rule is assertable without a window, an event loop or
+    /// a server — the same shape `replacementRange` and `acceptChangesText`
+    /// are in, and for the same reason.
+    static func rowToApply(
+        asked: CodeCompletionItem,
+        finished: CodeCompletionItem?,
+        textWhenAsked: String,
+        textNow: String
+    ) -> CodeCompletionItem {
+        guard textWhenAsked == textNow else { return asked }
+        return asked.finished(by: finished)
+    }
+
+    /// The same row with only its own text left on it.
+    ///
+    /// What an accepted completion inserts when the reader has turned
+    /// auto-import off: the identifier, and none of the edits elsewhere in
+    /// the file that would otherwise come with it.
+    ///
+    /// A static beside `rowToApply` and for the same reason — the rule is
+    /// about a value, so it is assertable as one.
+    static func withoutAdditionalEdits(_ item: CodeCompletionItem) -> CodeCompletionItem {
+        guard !item.additionalEdits.isEmpty else { return item }
+        var stripped = item
+        stripped.additionalEdits = []
+        return stripped
     }
 
     /// The span an accepted row replaces.
@@ -3467,6 +4097,7 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         completionTask?.cancel()
         completionTask = nil
         completionSession = nil
+        lastAnswerWasIncomplete = false
         completionGeneration += 1
         completionPanel?.dismiss()
         hideDocumentation()
@@ -3891,8 +4522,37 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// dictionary's order is not a promise, and "works until you restart" is
     /// the worst shape a shortcut bug takes.
     private func boundCommand(for event: NSEvent) -> String? {
-        commandShortcuts.keys.sorted().first { id in
+        if let bound = commandShortcuts.keys.sorted().first(where: { id in
             commandShortcuts[id]?.contains { $0.matches(event) } == true
+        }) {
+            return bound
+        }
+        return Self.assistCommand(for: event, host: commandShortcuts)
+    }
+
+    /// ⌃Space and ⌃., where the host has not spoken for them.
+    ///
+    /// The rule the host already states for its own map applies here in full:
+    /// **a missing id means "use the default", an empty list means "no
+    /// shortcut"**. So an id the host does not mention at all falls through to
+    /// `EditorAssistCommand`, and the moment the app grows a configurable
+    /// action with the same id — bound, or deliberately cleared — the host's
+    /// answer is the only one consulted.
+    ///
+    /// Sorted for the reason the lookup above is: two commands on one
+    /// combination must resolve the same way on every launch, and a
+    /// dictionary's order is not a promise.
+    ///
+    /// A static over values so the fallback rule can be asserted without a
+    /// view — the whole of it is which map answers, and that is exactly the
+    /// part that would otherwise only be discoverable by pressing the key.
+    static func assistCommand(
+        for event: NSEvent,
+        host: [String: [EditorShortcut]]
+    ) -> String? {
+        EditorAssistCommand.defaults.keys.sorted().first { id in
+            guard host[id] == nil else { return false }
+            return EditorAssistCommand.defaults[id]?.contains { $0.matches(event) } == true
         }
     }
 
@@ -3940,10 +4600,278 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         case "attachLineToAgentPicker":
             guard let onAttachLinePicker else { return false }
             onAttachLinePicker(selectedRange(), string)
+        case EditorAssistCommand.triggerSuggest.actionID:
+            complete(nil)
+        case EditorAssistCommand.quickFix.actionID:
+            requestCodeActions()
         default:
             return false
         }
         return true
+    }
+
+    // MARK: Quick fixes
+
+    static let noCodeActionsNotice = CodeActionMenu.emptyMessage
+
+    /// Asks what can be done here and offers the answers at the caret.
+    ///
+    /// The same shape as a completion request — cancel the previous, guard a
+    /// generation, hop back to the main actor and re-check — with the delay
+    /// left out. There is no debounce because there is no keystroke: this only
+    /// ever runs because somebody pressed ⌃., and one press is one request.
+    ///
+    /// A view with no producer still opens the menu, saying there is nothing.
+    /// That is deliberate and it is the lesson of ⌃Space: a key that answers
+    /// nothing at all cannot be told from a key that is not bound, and the
+    /// reader has no way to find out which they are looking at.
+    private func requestCodeActions() {
+        let range = codeActionRange()
+
+        guard let codeActionProvider else {
+            presentCodeActions([])
+            return
+        }
+
+        codeActionGeneration += 1
+        let generation = codeActionGeneration
+
+        codeActionTask?.cancel()
+        codeActionTask = Task { [weak self] in
+            let actions = await codeActionProvider(range)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.codeActionGeneration == generation else { return }
+                self.presentCodeActions(actions)
+            }
+        }
+    }
+
+    /// What the reader is asking about.
+    ///
+    /// Their selection when they have one, and the caret alone when they do
+    /// not. An empty range is a legal question — it is how a producer is told
+    /// "the problem I am on", which is what a quick fix nearly always is.
+    private func codeActionRange() -> NSRange {
+        let selection = selectedRange()
+        let length = (string as NSString).length
+        let location = min(max(selection.location, 0), length)
+        return NSRange(location: location, length: min(selection.length, length - location))
+    }
+
+    /// Draws the menu, whatever came back.
+    ///
+    /// An empty answer takes the notice rather than a menu of one dead row: a
+    /// menu holds the keyboard, and there is nothing here to navigate.
+    private func presentCodeActions(_ actions: [CodeActionItem]) {
+        guard !actions.isEmpty else {
+            showNotice(Self.noCodeActionsNotice)
+            return
+        }
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        for row in CodeActionMenu.rows(for: actions) {
+            switch row {
+            case .separator:
+                menu.addItem(.separator())
+            case .message(let text):
+                menu.addItem(disabledItem(titled: text))
+            case .action(let action):
+                let item = NSMenuItem(
+                    title: action.title,
+                    action: #selector(runCodeAction(_:)),
+                    keyEquivalent: "")
+                item.target = self
+                item.representedObject = action
+                item.isEnabled = action.isEnabled
+                item.toolTip = action.disabledReason
+                menu.addItem(item)
+            }
+        }
+
+        popUpAtCaret(menu)
+    }
+
+    @objc private func runCodeAction(_ sender: NSMenuItem) {
+        guard let action = sender.representedObject as? CodeActionItem, action.isEnabled else { return }
+        resolveThenApply(action)
+    }
+
+    /// Finishes the row if the producer might still be holding its edits, then
+    /// carries it out.
+    ///
+    /// The wait goes before the change for the reason `acceptCompletion`
+    /// records at length: the change is itself something the producer is told
+    /// about, and a request sent afterwards is answered against a document
+    /// that has already moved.
+    private func resolveThenApply(_ action: CodeActionItem) {
+        guard let codeActionResolver, action.mayHaveUnsentEdits else {
+            carryOut(action)
+            return
+        }
+
+        let asked = string
+        Task { [weak self] in
+            let finished = await codeActionResolver(action)
+            await MainActor.run {
+                guard let self else { return }
+                self.carryOut(Self.actionToApply(
+                    asked: action,
+                    finished: finished,
+                    textWhenAsked: asked,
+                    textNow: self.string
+                ))
+            }
+        }
+    }
+
+    /// Which version of the row is carried out once a resolve has answered.
+    ///
+    /// Identical in rule and in reasoning to
+    /// `rowToApply(asked:finished:textWhenAsked:textNow:)`: every range a
+    /// producer sends is measured against the document it last saw, so an
+    /// answer that arrives after the reader has typed describes a file that no
+    /// longer exists and is dropped rather than adjusted.
+    ///
+    /// A static so the rule is assertable without a window, a menu or a
+    /// server.
+    static func actionToApply(
+        asked: CodeActionItem,
+        finished: CodeActionItem?,
+        textWhenAsked: String,
+        textNow: String
+    ) -> CodeActionItem {
+        guard textWhenAsked == textNow else { return asked }
+        return asked.finished(by: finished)
+    }
+
+    /// Applies what belongs to this buffer, and hands anything else back.
+    ///
+    /// The split is the engine's boundary drawn where it always is. Edits
+    /// measured in this file's offsets are this view's to make, and it makes
+    /// them on this file's undo timeline. An action that also rewrites a
+    /// neighbouring file, or that asks a producer to invoke something, is not
+    /// — the engine cannot open another file and must not pretend to.
+    private func carryOut(_ action: CodeActionItem) {
+        if action.isLocal {
+            applyCodeActionEdits(action.edits)
+            return
+        }
+
+        guard let onRunCodeAction else {
+            showNotice(Self.noCodeActionsNotice)
+            return
+        }
+        onRunCodeAction(action)
+    }
+
+    /// The rewrites, back to front, in one undo step.
+    ///
+    /// Back to front because every range is measured against the document as
+    /// it was, so applying them in ascending order invalidates every position
+    /// after the first. One step because a fix is one thing the reader did,
+    /// and taking half of it back is not an outcome they asked for.
+    private func applyCodeActionEdits(_ edits: [CodeActionEdit]) {
+        guard !edits.isEmpty else { return }
+
+        let length = (string as NSString).length
+        undoTimeline.beginGrouping()
+        defer { undoTimeline.endGrouping() }
+
+        for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
+            guard edit.range.location >= 0, NSMaxRange(edit.range) <= length else { continue }
+            guard shouldChangeText(in: edit.range, replacementString: edit.newText) else { continue }
+            textStorage?.replaceCharacters(in: edit.range, with: edit.newText)
+            didChangeText()
+        }
+    }
+
+    // MARK: Saying nothing happened
+
+    /// Tells the reader that the key they pressed had nothing to offer.
+    ///
+    /// See `CodeNoticePanel` for why this is a panel and emphatically not a
+    /// menu: a menu holds the keyboard while it is up, and the reader who
+    /// presses ⌃Space usually carries on typing.
+    func showNotice(_ text: String) {
+        let panel = noticePanel ?? {
+            let made = CodeNoticePanel()
+            noticePanel = made
+            return made
+        }()
+
+        panel.show(
+            text,
+            theme: hoverTheme,
+            font: font ?? .monospacedSystemFont(ofSize: 12, weight: .regular),
+            anchor: caretAnchor(at: selectedRange().location) ?? .zero,
+            over: self
+        )
+    }
+
+    func hideNotice() {
+        noticePanel?.dismiss()
+    }
+
+    private func disabledItem(titled text: String) -> NSMenuItem {
+        let item = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    /// Opens a menu just under the caret.
+    ///
+    /// ⚠️ **The window guard is not defensive tidiness.** `popUp` runs a
+    /// nested event loop, and a test host has no running `NSApplication` to
+    /// run it — reaching this without a window hangs the call forever and
+    /// takes the whole suite with it. `CodeCompletionPanel` guards its own
+    /// `present` for the same reason and records it in the same words.
+    private func popUpAtCaret(_ menu: NSMenu) {
+        guard window != nil else { return }
+
+        let caret = caretRectInView(at: selectedRange().location)
+        let point = NSPoint(
+            x: caret?.minX ?? textContainerOrigin.x,
+            y: (caret?.maxY ?? textContainerOrigin.y) + 2)
+        menu.popUp(positioning: nil, at: point, in: self)
+    }
+
+    /// The caret's own rectangle, in this view's coordinates.
+    ///
+    /// Asked of the layout manager rather than of
+    /// `firstRect(forCharacterRange:)`, which answers nothing for an empty
+    /// range at the very end of the document — and a file that ends in a
+    /// newline puts that position on the last line of nearly every file here.
+    /// The same finding, and the same repair, as
+    /// `Coordinator.caretRectInView(of:caret:)`.
+    private func caretRectInView(at offset: Int) -> NSRect? {
+        let length = (string as NSString).length
+        guard let layout = textLayoutManager,
+              let content = layout.textContentManager,
+              let location = content.location(
+                content.documentRange.location,
+                offsetBy: min(max(offset, 0), length)),
+              let empty = NSTextRange(location: location, end: location)
+        else { return nil }
+
+        var found: NSRect?
+        layout.enumerateTextSegments(in: empty, type: .standard) { _, frame, _, _ in
+            found = frame
+            return false
+        }
+        guard let found, found.height > 0 else { return nil }
+
+        let origin = textContainerOrigin
+        return found.offsetBy(dx: origin.x, dy: origin.y)
+    }
+
+    /// The same rectangle in screen coordinates, which is what a panel is
+    /// anchored with.
+    private func caretAnchor(at offset: Int) -> NSRect? {
+        guard let window, let rect = caretRectInView(at: offset) else { return nil }
+        return window.convertToScreen(convert(rect, to: nil))
     }
 
     /// Swaps the caret's line — or every line the selection touches — with its

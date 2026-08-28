@@ -589,7 +589,7 @@ struct EditorTabPinningTests {
         set.open("/a.swift")
         set.open("/b.swift")
 
-        set.selectReview()
+        set.openReview(.branch(root: "/repo"))
 
         #expect(set.showsReview)
         #expect(set.tabs.count == 2)
@@ -602,7 +602,7 @@ struct EditorTabPinningTests {
     @Test func selectingAFileTakesTheReviewOffTheFront() {
         var set = EditorTabSet()
         set.open("/a.swift")
-        set.selectReview()
+        set.openReview(.branch(root: "/repo"))
 
         set.select("/a.swift")
 
@@ -616,7 +616,7 @@ struct EditorTabPinningTests {
     @Test func closingTheReviewFallsBackToTheLastFile() {
         var set = EditorTabSet()
         set.open("/a.swift")
-        set.selectReview()
+        set.openReview(.branch(root: "/repo"))
 
         set.selectAfterReview()
 
@@ -627,7 +627,7 @@ struct EditorTabPinningTests {
     /// a cell can always show.
     @Test func closingItWithNoFilesFallsBackToTheTerminal() {
         var set = EditorTabSet()
-        set.selectReview()
+        set.openReview(.branch(root: "/repo"))
 
         set.selectAfterReview()
 
@@ -649,7 +649,7 @@ struct EditorTabPinningTests {
 
     @Test func theTerminalAndTheReviewAreDifferentSelections() {
         var set = EditorTabSet()
-        set.selectReview()
+        set.openReview(.branch(root: "/repo"))
         #expect(set.showsReview)
         #expect(set.showsTerminal == false)
 
