@@ -403,7 +403,10 @@ enum LSPServerRegistry {
             displayName: "JSON Language Server",
             command: "vscode-json-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g vscode-langservers-extracted"
+            installHint: "npm i -g vscode-langservers-extracted",
+            // Ships a formatter and reports `documentFormattingProvider:
+            // false` until a client asks for it. See `.provideFormatter`.
+            initializationOptionsKind: .provideFormatter
         ),
         LSPServerDefinition(
             languageID: "yaml",
@@ -437,28 +440,40 @@ enum LSPServerRegistry {
             displayName: "HTML Language Server",
             command: "vscode-html-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g vscode-langservers-extracted"
+            installHint: "npm i -g vscode-langservers-extracted",
+            // Ships a formatter and reports `documentFormattingProvider:
+            // false` until a client asks for it. See `.provideFormatter`.
+            initializationOptionsKind: .provideFormatter
         ),
         LSPServerDefinition(
             languageID: "css",
             displayName: "CSS Language Server",
             command: "vscode-css-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g vscode-langservers-extracted"
+            installHint: "npm i -g vscode-langservers-extracted",
+            // Ships a formatter and reports `documentFormattingProvider:
+            // false` until a client asks for it. See `.provideFormatter`.
+            initializationOptionsKind: .provideFormatter
         ),
         LSPServerDefinition(
             languageID: "scss",
             displayName: "CSS Language Server",
             command: "vscode-css-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g vscode-langservers-extracted"
+            installHint: "npm i -g vscode-langservers-extracted",
+            // Ships a formatter and reports `documentFormattingProvider:
+            // false` until a client asks for it. See `.provideFormatter`.
+            initializationOptionsKind: .provideFormatter
         ),
         LSPServerDefinition(
             languageID: "less",
             displayName: "CSS Language Server",
             command: "vscode-css-language-server",
             arguments: ["--stdio"],
-            installHint: "npm i -g vscode-langservers-extracted"
+            installHint: "npm i -g vscode-langservers-extracted",
+            // Ships a formatter and reports `documentFormattingProvider:
+            // false` until a client asks for it. See `.provideFormatter`.
+            initializationOptionsKind: .provideFormatter
         ),
         LSPServerDefinition(
             languageID: "java",

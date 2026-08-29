@@ -150,13 +150,23 @@ struct LSPServerRegistryTests {
         #expect(swift.invocation == "sourcekit-lsp")
     }
 
-    /// Volar is the one server that needs to be told where TypeScript
-    /// lives; everyone else sends nothing at all.
-    @Test func onlyVueResolvesInitializationOptions() throws {
+    /// Two servers need to be told something before they can work, and
+    /// everyone else sends nothing at all.
+    ///
+    /// Volar has to be told where TypeScript lives. The three from
+    /// `vscode-langservers-extracted` have to be asked for their formatter,
+    /// which they ship and keep switched off — see `.provideFormatter`.
+    @Test func onlyTheServersThatNeedThemResolveInitializationOptions() throws {
         let vue = try #require(LSPServerRegistry.server(forLanguage: "vue"))
         #expect(vue.initializationOptionsKind == .vueTypeScriptSDK)
 
-        for definition in LSPServerRegistry.all where definition.languageID != "vue" {
+        for language in ["json", "html", "css", "scss", "less"] {
+            let definition = try #require(LSPServerRegistry.server(forLanguage: language))
+            #expect(definition.initializationOptionsKind == .provideFormatter, "\(language)")
+        }
+
+        let told: Set<String> = ["vue", "json", "html", "css", "scss", "less"]
+        for definition in LSPServerRegistry.all where !told.contains(definition.languageID) {
             #expect(
                 definition.initializationOptionsKind == .none,
                 "\(definition.languageID) shouldn't need initializationOptions"
