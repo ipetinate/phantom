@@ -74,4 +74,35 @@ struct EditorFormatRouteTests {
     @Test func aServerStillStartingIsWaitedFor() {
         #expect(!route(server: .starting))
     }
+
+    // MARK: The formatters that are a command
+
+    private func external(server: LSPServerStatus? = .running, formats: Bool = false) -> Bool {
+        EditorFormatRoute.usesExternalFormatter(server: server, serverFormats: formats)
+    }
+
+    /// Python is the case: `pyright` has no formatter at all, so nothing else
+    /// was ever going to answer.
+    @Test func aLanguageWhoseServerDoesNotFormatGoesToItsOwnTool() {
+        #expect(external())
+        #expect(external(server: nil))
+        #expect(external(server: .notInstalled))
+    }
+
+    /// The difference from the Prettier fallback, and the deliberate one: a
+    /// save takes this route. These tools are the only formatter their
+    /// language has, which is where the language server's own formatter
+    /// stands — and that has always run on a save.
+    @Test func theTriggerDoesNotDecideThisOne() {
+        #expect(external())
+    }
+
+    /// A server that formats is the project's own answer.
+    @Test func aServerThatFormatsKeepsFormatting() {
+        #expect(!external(formats: true))
+    }
+
+    @Test func aServerStillStartingIsWaitedForHereToo() {
+        #expect(!external(server: .starting))
+    }
 }

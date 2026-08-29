@@ -210,6 +210,12 @@ struct FilesSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            /// Directly under Formatting, because it is the rest of the same
+            /// answer: that section says what happens to the files Prettier
+            /// and the language servers handle, and this one says what happens
+            /// to the languages neither of them formats.
+            ExternalFormatterSettingsSection()
+
             /// Above Completion, and next to Formatting, because that is the
             /// order of the question: what does this editor do on its own,
             /// and then how does the one behaviour with a table of its own

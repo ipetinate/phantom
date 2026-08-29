@@ -273,7 +273,7 @@ struct EditorPaneView: View {
 ///
 /// The failure travels as a string: it crosses an actor boundary, and what the
 /// reader needs from it is a sentence, not an error to re-inspect.
-enum PrettierAttempt: Sendable {
+enum FormatAttempt: Sendable {
     case notOurs
     case answered(PrettierEdit?)
     case failed(String)
@@ -293,7 +293,7 @@ enum EditorFormatTrigger: Sendable {
     case save
 }
 
-extension PrettierAttempt {
+extension FormatAttempt {
     /// The sentence this outcome is worth interrupting the reader with, or nil
     /// to say nothing at all.
     ///
@@ -311,11 +311,16 @@ extension PrettierAttempt {
     ///   its turn below, and reports for itself.
     /// - `.failed` — the reader asked for something and did not get it, and the
     ///   reason carries a parse error's line and column, an unreadable config,
-    ///   or a Prettier that is not installed. Worth a modal, but only on
+    ///   or a formatter that is not installed. Worth a modal, but only on
     ///   `.command`. The write goes ahead regardless.
+    ///
+    /// The reason is passed through whole rather than wrapped in a sentence
+    /// here. Which tool is speaking is known where the run happened and not
+    /// here — several can now — and "Prettier couldn't format this file: Ruff:
+    /// …" is what wrapping it produced.
     func notice(for trigger: EditorFormatTrigger) -> String? {
         guard trigger == .command, case .failed(let reason) = self else { return nil }
-        return "Prettier couldn't format this file: \(reason)"
+        return reason
     }
 }
 
@@ -1577,7 +1582,7 @@ private struct DocumentView: View {
     /// has no formatter is an ordinary state, and a modal saying so on every
     /// ⌘S would train the reader to dismiss alerts without reading them — so
     /// the save path reports nothing at all. What neither path reports is a
-    /// run that went fine: see `PrettierAttempt.notice(for:)`.
+    /// run that went fine: see `FormatAttempt.notice(for:)`.
     private func formatDocument(_ trigger: EditorFormatTrigger) async {
         /// Read-only means read-only, and formatting is the one write that
         /// does not begin with a keystroke. A non-editable text view refuses
@@ -1586,6 +1591,7 @@ private struct DocumentView: View {
         guard divergence?.isReadOnly != true else { return }
         if await formatWithPrettier(trigger) { return }
         if await formatWithPrettierFromPath(trigger) { return }
+        if await formatWithExternalFormatter(trigger) { return }
         await formatWithLanguageServer(trigger)
     }
 
@@ -1632,12 +1638,12 @@ private struct DocumentView: View {
         let outcome = await Task.detached(priority: .userInitiated) {
             let project = PrettierProject.discover(forFile: path)
             guard project.handles(fileNamed: (path as NSString).lastPathComponent)
-            else { return PrettierAttempt.notOurs }
+            else { return FormatAttempt.notOurs }
 
             do {
                 return .answered(try PrettierFormatter.edit(for: text, at: path, in: project))
             } catch {
-                return .failed(error.localizedDescription)
+                return .failed("Prettier couldn't format this file: \(error.localizedDescription)")
             }
         }.value
 
@@ -1672,26 +1678,68 @@ private struct DocumentView: View {
             /// which is what `PrettierFormatter.binary` already does.
             let project = PrettierProject.discover(forFile: path)
             do {
-                return PrettierAttempt.answered(
+                return FormatAttempt.answered(
                     try PrettierFormatter.edit(for: text, at: path, in: project))
             } catch {
-                return PrettierAttempt.failed(error.localizedDescription)
+                return FormatAttempt.failed(
+                    "Prettier couldn't format this file: \(error.localizedDescription)")
             }
         }.value
 
         return apply(outcome, trigger: trigger, at: path, to: text, since: revision)
     }
 
-    /// What to do with the buffer, and what to say — one copy for both
-    /// Prettier routes, because they differ in who may run Prettier and in
-    /// nothing else.
+    /// The formatter for a language nothing else here formats: Ruff for
+    /// Python, shfmt for shell, StyLua for Lua, xmllint for XML.
+    ///
+    /// Unlike the Prettier fallback above, this runs on a save too. Prettier
+    /// is held back there because a stray global Prettier would claim files in
+    /// every JavaScript-adjacent repository, including ones formatted by
+    /// something else; these four are the only formatter their language has on
+    /// this machine, which is the same position the language server's own
+    /// formatter is in — and each is a switch in Settings.
+    private func formatWithExternalFormatter(_ trigger: EditorFormatTrigger) async -> Bool {
+        let path = document.url.path
+        let name = (path as NSString).lastPathComponent
+
+        guard let known = ExternalFormatterRegistry.formatter(forFileNamed: name),
+              let formatter = ExternalFormatterStore.effective(known),
+              EditorFormatRoute.usesExternalFormatter(
+                server: lsp.status(forPath: path),
+                serverFormats: lsp.hasCapability("documentFormattingProvider", forPath: path))
+        else { return false }
+
+        let revision = document.revision
+        let text = document.currentText
+
+        let outcome = await Task.detached(priority: .userInitiated) {
+            do {
+                let formatted = try ExternalFormatterRunner.format(
+                    text,
+                    filePath: path,
+                    formatter: formatter,
+                    searchPath: LoginEnvironment.executableSearchPath(),
+                    workingDirectory: (path as NSString).deletingLastPathComponent,
+                    environment: LoginEnvironment.executableEnvironment())
+                return FormatAttempt.answered(
+                    formatted.flatMap { PrettierEdit.minimal(from: text, to: $0) })
+            } catch {
+                return FormatAttempt.failed(error.localizedDescription)
+            }
+        }.value
+
+        return apply(outcome, trigger: trigger, at: path, to: text, since: revision)
+    }
+
+    /// What to do with the buffer, and what to say — one copy for every
+    /// formatter route, because they differ in who runs and in nothing else.
     ///
     /// - Parameters:
     ///   - text: the buffer as it was when the run started. The edit was
     ///     measured against it.
     ///   - revision: the document revision at the same moment.
     private func apply(
-        _ outcome: PrettierAttempt,
+        _ outcome: FormatAttempt,
         trigger: EditorFormatTrigger,
         at path: String,
         to text: String,

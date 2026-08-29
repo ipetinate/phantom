@@ -43,4 +43,25 @@ enum EditorFormatRoute {
         /// by a sentence about `marksman`.
         return true
     }
+
+    /// Whether the external formatter for this file gets to run.
+    ///
+    /// The same deference to the language server, for the same reasons: a
+    /// server that formats is the project's own answer, and a server that has
+    /// not finished starting has not answered at all.
+    ///
+    /// What is deliberately missing is the trigger. Prettier from `PATH` is
+    /// held to ⇧⌘F because a stray global Prettier would claim files in every
+    /// JavaScript-adjacent repository, including ones formatted by something
+    /// else. The tools in `ExternalFormatterRegistry` are in the opposite
+    /// position — they are the only formatter their language has here, which
+    /// is where the language server's own formatter stands, and that one has
+    /// always run on a save. Each of them is also a switch in Settings.
+    static func usesExternalFormatter(
+        server: LSPServerStatus?,
+        serverFormats: Bool
+    ) -> Bool {
+        guard !serverFormats else { return false }
+        return server != .starting
+    }
 }
