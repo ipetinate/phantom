@@ -198,10 +198,70 @@ final class GuiConfigStore: ObservableObject {
         return url.path
     }
 
+    /// Where **this build** reads and writes its configuration.
+    ///
+    /// The release build's answer is the one it has always given, and nothing
+    /// about it changes. Every other build — the debug one — gets a directory
+    /// of its own beside it, seeded once with a copy of the two files the
+    /// settings window writes, and diverges from there.
+    ///
+    /// Sharing was not a harmless duplicate. `gui-settings` and `config` are
+    /// watched by the running app: a debug build opened to try something out
+    /// wrote the release build's configuration underneath it, which the reader
+    /// then saw take effect in the app they were actually working in.
+    /// `PhantomStateFile` fixed the same fault for state a while ago, and left
+    /// this one — the state files are keyed by bundle id; this directory was
+    /// spelled `phantom` for everybody.
+    ///
+    /// Only the two files are copied. Themes, extensions and icon themes stay
+    /// where they are and are not duplicated: a theme is referenced from
+    /// `gui-settings` by absolute path, so the copy keeps pointing at the one
+    /// the reader installed, and a debug build with no icon themes of its own
+    /// falls back to the ones in the bundle. Copying a directory of somebody's
+    /// icon sets on launch to spare a debug build that fallback is the wrong
+    /// trade.
+    nonisolated private static func defaultConfigDir() -> URL {
+        let shared = sharedConfigDir()
+        guard let suffix = buildSuffix else { return shared }
+
+        let own = shared
+            .deletingLastPathComponent()
+            .appendingPathComponent("\(shared.lastPathComponent)-\(suffix)", isDirectory: true)
+
+        /// Copy once, never over anything, never a move — the reader's own
+        /// configuration has to survive whatever this build does next.
+        for name in [fileName, "config"] {
+            PhantomStateFile.migrate(
+                from: shared.appendingPathComponent(name),
+                to: own.appendingPathComponent(name))
+        }
+        return own
+    }
+
+    /// What marks this build's directory apart, or nil for the release build.
+    ///
+    /// The suffix comes off the bundle id, which is the same rule
+    /// `MCPServerCommand.name(forBundleID:)` uses to name the socket and the
+    /// agent entry — `com.ipetinate.phantom` is the release build and answers
+    /// nil, `com.ipetinate.phantom.debug` answers `debug`. Stated again rather
+    /// than borrowed because that one is `@MainActor` and this runs during
+    /// bootstrap, before there is a main actor to be on.
+    nonisolated static func buildSuffix(forBundleID id: String) -> String? {
+        guard let variant = id.split(separator: ".").last,
+              !variant.isEmpty,
+              variant.lowercased() != "phantom"
+        else { return nil }
+        return variant.lowercased()
+    }
+
+    nonisolated private static var buildSuffix: String? {
+        buildSuffix(forBundleID: Bundle.main.bundleIdentifier ?? "")
+    }
+
     /// Phantom is a distinct app from Ghostty and keeps its own config
     /// directory so the two never collide on the same machine — even
     /// though Phantom reads XDG first on macOS same as Ghostty does.
-    nonisolated private static func defaultConfigDir() -> URL {
+    nonisolated private static func sharedConfigDir() -> URL {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
 

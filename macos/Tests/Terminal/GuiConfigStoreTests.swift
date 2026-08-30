@@ -120,4 +120,30 @@ struct GuiConfigStoreTests {
         store.setTheme(theme)
         #expect(store.string("theme") == "Dracula")
     }
+
+    // MARK: - One config directory per build
+
+    /// The release build keeps the directory it has always had. Anything else
+    /// here would be a migration on the app the reader actually uses, for a
+    /// fault that is not theirs.
+    @Test func theReleaseBuildHasNoSuffix() {
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "com.ipetinate.phantom") == nil)
+    }
+
+    /// The fault this exists for: a debug build wrote `gui-settings` and
+    /// `config` into the release build's directory, which the running release
+    /// app watches — so trying something out in one app changed the other one
+    /// under the reader.
+    @Test func aDebugBuildIsToldApartByItsBundleID() {
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "com.ipetinate.phantom.debug") == "debug")
+    }
+
+    /// The same rule `MCPServerCommand` uses for the socket and the agent
+    /// entry, so a third build gets a third directory rather than sharing one
+    /// with whichever it resembles.
+    @Test func anyOtherVariantGetsItsOwnDirectory() {
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "com.ipetinate.phantom.nightly") == "nightly")
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "com.ipetinate.Phantom") == nil)
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "") == nil)
+    }
 }
