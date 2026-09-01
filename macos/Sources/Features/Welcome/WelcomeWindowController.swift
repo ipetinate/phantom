@@ -21,12 +21,12 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate {
     /// hosting view reads as "as tall as the screen allows" — measured at 1313
     /// points on this display, for a window meant to be 560.
     ///
-    /// The height is what the last step needs — six agent cards in three rows,
-    /// three checkboxes and the sentence under them — rather than what the
-    /// first step looks best at. The hero has a `Spacer` above and below it and
-    /// is centred by them at any height; the agents step, given less, cuts a
-    /// checkbox in half.
-    static let size = NSSize(width: 720, height: 700)
+    /// Wider than it is tall, which is what the two list steps are: short
+    /// facts that read better in two or three columns than in one long one.
+    /// The height is what the agents step needs — two rows of cards, three
+    /// checkboxes and the sentence under them — and the hero, which has a
+    /// `Spacer` above and below it, is centred by them at any height.
+    static let size = NSSize(width: 1100, height: 600)
 
     private init() {
         let window = NSWindow(
@@ -60,9 +60,33 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate {
                 .themedChrome())
         window?.setContentSize(Self.size)
         window?.center()
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        raise()
         WelcomeShownRecord.markShown()
+
+        /// Once more, a runloop turn later.
+        ///
+        /// On the launch this window exists for, the terminal windows are still
+        /// arriving: the session restore presents from async blocks and makes
+        /// one of them key after this returns, so a window ordered front here
+        /// ends up behind everything a moment later — which is where this one
+        /// was found. Ordering front twice costs nothing and outlives that.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard self?.window?.isVisible == true else { return }
+            self?.raise()
+        }
+    }
+
+    /// Front, key, and in front of the other applications too.
+    ///
+    /// `orderFrontRegardless` as well as `makeKeyAndOrderFront`, because the
+    /// app is not necessarily active when this runs — a launch at login, or a
+    /// reader who clicked away while it was starting — and an ordinary
+    /// order-front on an inactive app puts the window behind the active one's.
+    private func raise() {
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     /// The launch path. Idempotent, and safe to call from more than one place —

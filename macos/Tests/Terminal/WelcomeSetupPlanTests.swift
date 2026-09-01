@@ -12,10 +12,13 @@ struct WelcomeSetupPlanTests {
     private func state(
         hooks: Bool = false,
         mcp: Bool = false,
-        buttons: Bool = false
+        buttons: Bool = false,
+        places: Set<AgentButtonSurface>? = nil
     ) -> WelcomeSetupPlan.AgentState {
         WelcomeSetupPlan.AgentState(
-            hooksInstalled: hooks, mcpRegistered: mcp, buttonsShown: buttons)
+            hooksInstalled: hooks,
+            mcpRegistered: mcp,
+            buttonsShown: places ?? (buttons ? Set(AgentButtonSurface.allCases) : []))
     }
 
     private let everything = Set(WelcomeSetupPlan.Step.allCases)
@@ -152,6 +155,76 @@ struct WelcomeSetupPlanTests {
 
         #expect(summary.contains("Codex"))
         #expect(!summary.contains("Claude Code"))
+    }
+
+    // MARK: One agent at a time
+
+    /// The panel's own reason for existing in this shape: hooks and the MCP
+    /// server for both agents, but the buttons for only one of them. With one
+    /// set of checkboxes for everybody that took a second trip through
+    /// Settings to undo.
+    @Test func eachAgentGetsWhatItsOwnCardAsksFor() {
+        let work = WelcomeSetupPlan.items(
+            selection: [
+                .claude: WelcomeSetupPlan.Selection(
+                    steps: everything, surfaces: Set(AgentButtonSurface.allCases)),
+                .codex: WelcomeSetupPlan.Selection(steps: [.hooks, .mcp], surfaces: []),
+            ],
+            state: [.claude: state(), .codex: state()])
+
+        #expect(work.filter { $0.agent == .codex }.map(\.step) == [.hooks, .mcp])
+        #expect(work.contains { $0.agent == .claude && $0.step == .buttons })
+    }
+
+    /// The places are a set, not a flag: somebody can want the button on tab
+    /// rows and nowhere else.
+    @Test func onlyTheChosenPlacesAreWritten() {
+        let work = WelcomeSetupPlan.items(
+            selection: [
+                .claude: WelcomeSetupPlan.Selection(steps: [.buttons], surfaces: [.tabRow]),
+            ],
+            state: [.claude: state()])
+
+        #expect(work.count == 1)
+        #expect(work.first?.surfaces == [.tabRow])
+    }
+
+    /// A place the button is already on is not written again, and an agent
+    /// whose places are all covered produces no work at all.
+    @Test func placesAlreadyOnAreLeftAlone() {
+        let selection = [
+            CodingAgent.claude: WelcomeSetupPlan.Selection(
+                steps: [.buttons], surfaces: Set(AgentButtonSurface.allCases)),
+        ]
+
+        let partial = WelcomeSetupPlan.items(
+            selection: selection, state: [.claude: state(places: [.tabRow])])
+        let complete = WelcomeSetupPlan.items(
+            selection: selection,
+            state: [.claude: state(places: Set(AgentButtonSurface.allCases))])
+
+        #expect(partial.first?.surfaces == [.chrome, .groupHeader])
+        #expect(complete.isEmpty)
+    }
+
+    /// An agent whose button is on in one place out of three is not "done" —
+    /// the card still has two places to offer.
+    @Test func oneePlaceOutOfThreeIsNotComplete() {
+        #expect(!state(hooks: true, mcp: true, places: [.tabRow]).isComplete)
+        #expect(state(hooks: true, mcp: true, places: Set(AgentButtonSurface.allCases))
+            .isComplete)
+    }
+
+    /// Ticking the last place off takes the step with it, so an empty set is
+    /// never written as an empty instruction.
+    @Test func aButtonsStepWithNoPlacesIsNoWork() {
+        let work = WelcomeSetupPlan.items(
+            selection: [
+                .claude: WelcomeSetupPlan.Selection(steps: [.buttons], surfaces: []),
+            ],
+            state: [.claude: state()])
+
+        #expect(work.isEmpty)
     }
 
     /// Three or more agents read as a sentence rather than a comma-joined

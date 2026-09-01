@@ -79,6 +79,25 @@ enum AgentButtonSurface: String, CaseIterable, Sendable {
     /// The row of one terminal.
     case tabRow
 
+    /// The place, in two or three words, for a control that has room for two
+    /// or three words.
+    var shortName: String {
+        switch self {
+        case .chrome: return "Toolbar"
+        case .groupHeader: return "Group"
+        case .tabRow: return "Tab"
+        }
+    }
+
+    /// The place inside a sentence — "show it on the tab row".
+    var placeName: String {
+        switch self {
+        case .chrome: return "in the sidebar's toolbar"
+        case .groupHeader: return "on group headers"
+        case .tabRow: return "on tab rows"
+        }
+    }
+
     /// The half of the key that comes before the agent.
     ///
     /// `chrome` is the odd one and stays odd. `SidebarShowClaude` is what is on

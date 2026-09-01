@@ -35,3 +35,11 @@ vgcore.*
 
 /sprite_face_test*
 .claude/worktrees/
+
+# xcodebuild run from inside macos/ resolves the framework's output path
+# relative to that directory and writes macos/macos/GhosttyKit.xcframework —
+# three quarters of a gigabyte of build output beside the source it was built
+# from. Ignored rather than remembered: it was committed once, by a `git add
+# -A` that had no way to tell it apart from the code beside it, and GitHub
+# refuses a push carrying a 377 MB file.
+macos/macos/

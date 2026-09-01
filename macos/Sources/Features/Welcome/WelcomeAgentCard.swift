@@ -11,6 +11,16 @@ struct WelcomeAgentCard: View {
     let agent: CodingAgent
     let state: WelcomeSetupPlan.AgentState
 
+    /// What the reader has asked for on this card. Nil while the agent is
+    /// switched off — there is nothing to ask for until then.
+    let selection: WelcomeSetupPlan.Selection?
+
+    /// Ticking one of the card's own lines.
+    let onSelect: (WelcomeSetupPlan.Step, Bool) -> Void
+
+    /// Ticking one of the three places the button can go.
+    let onSelectSurface: (AgentButtonSurface, Bool) -> Void
+
     /// Where the CLI was found, or nil when it is not on the `PATH`. The path
     /// itself is shown because `pi` and `agy` are short names and `PATH` cannot
     /// tell an agent from something else called that.
@@ -42,20 +52,20 @@ struct WelcomeAgentCard: View {
     /// alignments. The layout below is therefore the *same shape* in all four
     /// states, with a header, a subtitle line and three body lines; what
     /// changes is what those lines say.
-    static let height: CGFloat = 112
+    static let height: CGFloat = 168
 
     /// The three lines under the rule, for every state. Fixed so the four
     /// states cannot each pick their own.
     private static let bodyLines = 3
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             header
             Divider().opacity(0.4)
             body(for: bodyState)
             Spacer(minLength: 0)
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Self.height, alignment: .top)
         .background(
@@ -91,11 +101,11 @@ struct WelcomeAgentCard: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(agent.displayName)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
 
                 Text(subtitle)
-                    .font(.system(size: 9.5, design: path == nil ? .default : .monospaced))
+                    .font(.system(size: 10.5, design: path == nil ? .default : .monospaced))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -136,18 +146,10 @@ struct WelcomeAgentCard: View {
             line { ProgressView().controlSize(.small) }
 
         case .present:
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(WelcomeSetupPlan.Step.allCases, id: \.self) { step in
-                    HStack(spacing: 5) {
-                        Image(systemName: self.state.has(step) ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 9))
-                            .foregroundStyle(self.state.has(step) ? .green : Color.secondary)
-                        Text(step.title)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(self.state.has(step) ? .secondary : .primary)
-                            .lineLimit(1)
-                    }
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                choice(.hooks)
+                choice(.mcp)
+                places
             }
 
         case .installing:
@@ -159,7 +161,7 @@ struct WelcomeAgentCard: View {
                         ProgressView().controlSize(.small)
                     }
                     Text("Installing…")
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                 }
 
@@ -179,12 +181,12 @@ struct WelcomeAgentCard: View {
                         Button("Install") { onInstall(install) }
                             .controlSize(.small)
                         Text("with \(install.manager.displayName)")
-                            .font(.system(size: 10))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
 
                     Text(install.command)
-                        .font(.system(size: 9, design: .monospaced))
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -194,7 +196,7 @@ struct WelcomeAgentCard: View {
                     /// No command for this one, and that is a decision rather
                     /// than a gap — see `AgentInstallPlan.withoutInstallCommand`.
                     Link("How to install it", destination: documentation)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                 }
 
                 if let failure = run.failure {
@@ -206,6 +208,84 @@ struct WelcomeAgentCard: View {
                         .help(failure)
                 }
             }
+        }
+    }
+
+    /// One of the two plain steps.
+    ///
+    /// A real `Toggle` in the checkbox style rather than a symbol somebody has
+    /// to discover is tappable. The first version drew its own square and text
+    /// and relied on a tap gesture over the row: it looked like a status line,
+    /// which is what it had been one version earlier — so nobody read it as
+    /// something to click.
+    ///
+    /// Already done is a green tick and no control at all. This panel sets up;
+    /// taking a hook back out is Settings' job, and a checkbox that could
+    /// uninstall would make Finish a destructive button.
+    @ViewBuilder
+    private func choice(_ step: WelcomeSetupPlan.Step) -> some View {
+        if state.has(step) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.green)
+                Text(step.title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .help("Already set up — remove it in Settings")
+        } else {
+            Toggle(step.title, isOn: Binding(
+                get: { selection?.steps.contains(step) ?? false },
+                set: { wanted in onSelect(step, wanted) }))
+                .toggleStyle(.checkbox)
+                .font(.system(size: 12))
+                .disabled(!isChosen)
+                .help(step.detail)
+        }
+    }
+
+    /// Where the agent's button goes: three checkboxes, labelled, on one line.
+    ///
+    /// They were capsule chips, and a chip is a thing that looks pressed or not
+    /// pressed rather than a thing you press — the reader could not tell they
+    /// were controls at all. The label in front says what the three of them are
+    /// for, which a row of bare place names does not.
+    private var places: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("Show its button")
+                .font(.system(size: 12))
+                .foregroundStyle(state.has(.buttons) ? .secondary : .primary)
+
+            ForEach(AgentButtonSurface.allCases, id: \.self) { surface in
+                place(surface)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private func place(_ surface: AgentButtonSurface) -> some View {
+        if state.buttonsShown.contains(surface) {
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.green)
+                Text(surface.shortName)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .help("Already shown \(surface.placeName)")
+        } else {
+            Toggle(surface.shortName, isOn: Binding(
+                get: { selection?.surfaces.contains(surface) ?? false },
+                set: { wanted in onSelectSurface(surface, wanted) }))
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11))
+                .disabled(!isChosen)
+                .help("Show it \(surface.placeName)")
         }
     }
 

@@ -10,6 +10,11 @@ import SwiftUI
 struct WelcomeView: View {
     let close: () -> Void
 
+    /// Everything around a step's own content: the header, the bottom bar,
+    /// their rules, and the padding a step sits in. Named here because the
+    /// steps size themselves against it — see `WelcomeBasicsStep.cardHeight`.
+    static let chromeHeight: CGFloat = 132
+
     private enum Step: Int, CaseIterable {
         case hero
         case basics
@@ -24,8 +29,13 @@ struct WelcomeView: View {
 
     @State private var hooks: [CodingAgent: Bool] = [:]
     @State private var registrations: [CodingAgent: Bool] = [:]
-    @State private var chosen: Set<CodingAgent> = []
-    @State private var steps: Set<WelcomeSetupPlan.Step> = Set(WelcomeSetupPlan.Step.allCases)
+    /// What each switched-on agent is going to get. Absent means switched off.
+    ///
+    /// Per agent, because the row of checkboxes this replaced said one thing
+    /// for everybody and the cards said another — a reader looking at six
+    /// cards, each listing three things, could not tell which of the two
+    /// Finish would obey.
+    @State private var selection: [CodingAgent: WelcomeSetupPlan.Selection] = [:]
 
     /// One install run per agent, made when that agent's first install starts.
     @State private var runs: [CodingAgent: PackageInstallRun] = [:]
@@ -50,6 +60,12 @@ struct WelcomeView: View {
                 header
                 Divider()
                 content
+
+                /// Takes the slack, so the steps start at the top and the bar
+                /// stays at the bottom. Without it the whole column is centred
+                /// in the window's fixed height and both list steps float, with
+                /// dead space above the header and below the buttons.
+                Spacer(minLength: 0)
             }
             Divider()
             footer
@@ -142,17 +158,22 @@ struct WelcomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text("""
-                    Turn on the agents you use. Phantom installs that agent's \
-                    hooks, registers its MCP server and shows its buttons — \
-                    each of them reversible in Settings.
+                    Turn on the agents you use, then tick what each one gets — \
+                    they do not have to match. Everything here is reversible in \
+                    Settings.
                     """)
-                    .font(.system(size: 11.5))
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                /// Three columns in a window 1100 wide leaves each card around
+                /// 350 points, which is what its five controls need: the hooks,
+                /// the MCP server and the three places a button can go, each a
+                /// labelled checkbox rather than a chip.
                 LazyVGrid(
-                    columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
-                    spacing: 10
+                    columns: Array(
+                        repeating: GridItem(.flexible(), spacing: 12), count: 3),
+                    spacing: 12
                 ) {
                     ForEach(CodingAgent.allCases, id: \.self) { agent in
                         card(for: agent)
@@ -161,31 +182,13 @@ struct WelcomeView: View {
 
                 Divider().padding(.vertical, 2)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(WelcomeSetupPlan.Step.allCases, id: \.self) { setupStep in
-                        Toggle(isOn: binding(for: setupStep)) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Text(setupStep.title)
-                                    .font(.system(size: 12))
-                                Text(setupStep.detail)
-                                    .font(.system(size: 10.5))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                                    .help(setupStep.detail)
-                            }
-                        }
-                        .toggleStyle(.checkbox)
-                    }
-                }
-
                 Text(summary)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 Text(AgentInstallPlan.signInNote)
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -209,11 +212,33 @@ struct WelcomeView: View {
         WelcomeAgentCard(
             agent: agent,
             state: state(of: agent),
+            selection: selection[agent],
+            onSelect: { step, wanted in
+                var current = selection[agent] ?? .everything
+                if wanted { current.steps.insert(step) } else { current.steps.remove(step) }
+                selection[agent] = current
+            },
+            onSelectSurface: { surface, wanted in
+                var current = selection[agent] ?? .everything
+                if wanted {
+                    current.surfaces.insert(surface)
+                    current.steps.insert(.buttons)
+                } else {
+                    current.surfaces.remove(surface)
+                    /// The parent line is a summary of its places, so the last
+                    /// place going off takes the step with it.
+                    if current.surfaces.isEmpty { current.steps.remove(.buttons) }
+                }
+                selection[agent] = current
+            },
             path: availability.path(for: agent),
             hasProbed: availability.hasProbed,
-            isChosen: chosen.contains(agent),
+            isChosen: selection[agent] != nil,
             onChoose: { wanted in
-                if wanted { chosen.insert(agent) } else { chosen.remove(agent) }
+                /// Switching an agent on asks for everything it is missing;
+                /// switching it off forgets what was asked for, rather than
+                /// keeping a hidden answer for the next time it is switched on.
+                selection[agent] = wanted ? .everything : nil
             },
             install: AgentInstallPlan.command(
                 for: agent, managers: availability.availableManagers),
@@ -288,8 +313,7 @@ struct WelcomeView: View {
     /// The window closes only when everything worked. Every installer here is
     /// idempotent, so pressing Finish again after a failure is the repair.
     private func finish() {
-        let work = WelcomeSetupPlan.items(
-            chosen: orderedChoice, steps: steps, state: agentState)
+        let work = WelcomeSetupPlan.items(selection: selection, state: agentState)
 
         var failed: [String] = []
         for item in work {
@@ -318,7 +342,9 @@ struct WelcomeView: View {
             return "\(agent.name): MCP entry failed\(agent.lastError().map { " — \($0)" } ?? "")"
 
         case .buttons:
-            for surface in AgentButtonSurface.allCases {
+            /// Only the places the card asked for. Writing all three would
+            /// switch on a button somebody deliberately left off.
+            for surface in item.surfaces {
                 UserDefaults.standard.set(
                     true, forKey: AgentButtonDefaults.key(surface, item.agent))
             }
@@ -340,24 +366,20 @@ struct WelcomeView: View {
     }
 
     private func state(of agent: CodingAgent) -> WelcomeSetupPlan.AgentState {
-        WelcomeSetupPlan.AgentState(
+        let shown = AgentButtonSurface.allCases.filter { surface in
+            UserDefaults.standard.object(
+                forKey: AgentButtonDefaults.key(surface, agent)) as? Bool
+                ?? AgentButtonDefaults.isShown(agent)
+        }
+
+        return WelcomeSetupPlan.AgentState(
             hooksInstalled: hooks[agent] ?? false,
             mcpRegistered: registrations[agent] ?? false,
-            buttonsShown: AgentButtonSurface.allCases.allSatisfy { surface in
-                UserDefaults.standard.object(
-                    forKey: AgentButtonDefaults.key(surface, agent)) as? Bool
-                    ?? AgentButtonDefaults.isShown(agent)
-            })
-    }
-
-    /// In the enum's order rather than the set's, so the sentence under the
-    /// checkboxes reads the same way twice.
-    private var orderedChoice: [CodingAgent] {
-        CodingAgent.allCases.filter { chosen.contains($0) }
+            buttonsShown: Set(shown))
     }
 
     private var summary: String {
-        WelcomeSetupPlan.summary(chosen: orderedChoice, steps: steps, state: agentState)
+        WelcomeSetupPlan.summary(selection: selection, state: agentState)
     }
 
     private func refreshAgentState() {
@@ -371,15 +393,9 @@ struct WelcomeView: View {
     private func seedChoicesIfNeeded() {
         guard availability.hasProbed, !didSeed else { return }
         didSeed = true
-        chosen = Set(CodingAgent.allCases.filter { availability.isInstalled($0) })
-    }
-
-    private func binding(for setupStep: WelcomeSetupPlan.Step) -> Binding<Bool> {
-        Binding(
-            get: { steps.contains(setupStep) },
-            set: { wanted in
-                if wanted { steps.insert(setupStep) } else { steps.remove(setupStep) }
-            })
+        for agent in CodingAgent.allCases where availability.isInstalled(agent) {
+            selection[agent] = .everything
+        }
     }
 
     private func run(for agent: CodingAgent) -> PackageInstallRun {

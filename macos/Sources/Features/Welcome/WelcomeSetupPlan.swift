@@ -54,26 +54,60 @@ enum WelcomeSetupPlan {
         let agent: CodingAgent
         let step: Step
 
+        /// For `.buttons` only: the places to switch the button on. A step
+        /// carries them rather than being three steps, because "show this
+        /// agent" is one decision the reader can then qualify — and because
+        /// the other two steps have nowhere to put such a thing.
+        var surfaces: Set<AgentButtonSurface> = []
+
         var id: String { "\(agent.rawValue).\(step.rawValue)" }
+    }
+
+    /// What the reader has asked for, for one agent.
+    ///
+    /// Per agent rather than one set for all of them: the panel's bottom row
+    /// says what to do with everybody, and a card can then disagree with it.
+    /// Somebody who wants the hooks everywhere but the MCP server only where
+    /// they trust it had to open Settings afterwards to take it back.
+    struct Selection: Equatable, Sendable {
+        var steps: Set<Step> = []
+        var surfaces: Set<AgentButtonSurface> = []
+
+        static let everything = Selection(
+            steps: Set(Step.allCases), surfaces: Set(AgentButtonSurface.allCases))
+
+        /// Ticking a place is also ticking "show the buttons": the parent line
+        /// is a summary of its places, not a fourth thing to remember.
+        var wantsButtons: Bool { steps.contains(.buttons) && !surfaces.isEmpty }
     }
 
     /// What the state of one agent is, as the panel found it.
     struct AgentState: Equatable, Sendable {
         var hooksInstalled: Bool
         var mcpRegistered: Bool
-        var buttonsShown: Bool
 
-        /// Nothing left for the panel to do. The card says so and offers no
-        /// action, which is the whole answer for a reader who set this machine
-        /// up months ago and is only seeing the window because it is new.
-        var isComplete: Bool { hooksInstalled && mcpRegistered && buttonsShown }
+        /// Where this agent's button is already on. A set rather than a flag,
+        /// because the three places are three preferences and a reader can
+        /// perfectly well want the button on a tab row and not in the toolbar.
+        var buttonsShown: Set<AgentButtonSurface>
+
+        /// Nothing left for the panel to do.
+        var isComplete: Bool {
+            hooksInstalled && mcpRegistered
+                && buttonsShown == Set(AgentButtonSurface.allCases)
+        }
 
         func has(_ step: Step) -> Bool {
             switch step {
             case .hooks: return hooksInstalled
             case .mcp: return mcpRegistered
-            case .buttons: return buttonsShown
+            case .buttons: return buttonsShown == Set(AgentButtonSurface.allCases)
             }
+        }
+
+        /// The places this agent's button is not on yet.
+        var missingSurfaces: Set<AgentButtonSurface> {
+            Set(AgentButtonSurface.allCases).subtracting(buttonsShown)
         }
     }
 
@@ -85,15 +119,27 @@ enum WelcomeSetupPlan {
     /// agent that has had them since March is a sentence that makes the panel
     /// less trustworthy, not more.
     static func items(
-        chosen: [CodingAgent],
-        steps: Set<Step>,
+        selection: [CodingAgent: Selection],
         state: [CodingAgent: AgentState]
     ) -> [Item] {
+        let chosen = CodingAgent.allCases.filter { selection[$0] != nil }
+
         var work: [Item] = []
-        for step in Step.allCases where steps.contains(step) {
+        for step in Step.allCases {
             for agent in chosen {
+                guard let wanted = selection[agent], wanted.steps.contains(step) else { continue }
                 let current = state[agent] ?? AgentState(
-                    hooksInstalled: false, mcpRegistered: false, buttonsShown: false)
+                    hooksInstalled: false, mcpRegistered: false, buttonsShown: [])
+
+                if step == .buttons {
+                    /// Only the places that are both asked for and not already
+                    /// on. An empty remainder is no work, not an empty write.
+                    let places = wanted.surfaces.subtracting(current.buttonsShown)
+                    guard !places.isEmpty else { continue }
+                    work.append(Item(agent: agent, step: step, surfaces: places))
+                    continue
+                }
+
                 guard !current.has(step) else { continue }
                 work.append(Item(agent: agent, step: step))
             }
@@ -101,21 +147,35 @@ enum WelcomeSetupPlan {
         return work
     }
 
-    /// The line under the checkboxes. It names what will happen and to whom,
-    /// because a switch and three ticks are not a sentence anybody can check.
-    static func summary(
+    /// The same, for one set of steps applied to everybody — which is what the
+    /// row of checkboxes at the bottom of the panel means.
+    static func items(
         chosen: [CodingAgent],
         steps: Set<Step>,
         state: [CodingAgent: AgentState]
+    ) -> [Item] {
+        let selection = Dictionary(uniqueKeysWithValues: chosen.map {
+            ($0, Selection(steps: steps, surfaces: Set(AgentButtonSurface.allCases)))
+        })
+        return items(selection: selection, state: state)
+    }
+
+    /// The line under the checkboxes. It names what will happen and to whom,
+    /// because a switch and three ticks are not a sentence anybody can check.
+    static func summary(
+        selection: [CodingAgent: Selection],
+        state: [CodingAgent: AgentState]
     ) -> String {
+        let chosen = CodingAgent.allCases.filter { selection[$0] != nil }
+
         guard !chosen.isEmpty else {
             return "Nothing selected. Finish closes this window and changes nothing."
         }
-        guard !steps.isEmpty else {
+        guard chosen.contains(where: { !(selection[$0]?.steps.isEmpty ?? true) }) else {
             return "Nothing ticked. Finish closes this window and changes nothing."
         }
 
-        let work = items(chosen: chosen, steps: steps, state: state)
+        let work = items(selection: selection, state: state)
         guard !work.isEmpty else {
             return "\(names(of: chosen)) already set up. Finish just closes this window."
         }
@@ -132,6 +192,18 @@ enum WelcomeSetupPlan {
 
         return "Finish sets up \(list(stepNames)) for \(names(of: touched)). "
             + "Every one of them is reversible in Settings."
+    }
+
+    /// The same, for one set of steps applied to everybody.
+    static func summary(
+        chosen: [CodingAgent],
+        steps: Set<Step>,
+        state: [CodingAgent: AgentState]
+    ) -> String {
+        let selection = Dictionary(uniqueKeysWithValues: chosen.map {
+            ($0, Selection(steps: steps, surfaces: Set(AgentButtonSurface.allCases)))
+        })
+        return summary(selection: selection, state: state)
     }
 
     private static func names(of agents: [CodingAgent]) -> String {
