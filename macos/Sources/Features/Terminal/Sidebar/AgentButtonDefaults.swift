@@ -24,4 +24,73 @@ enum AgentButtonDefaults {
 
     /// The per-key form the `@AppStorage` declarations need.
     static func isShown(_ agent: CodingAgent) -> Bool { shown.contains(agent) }
+
+    /// The key behind one agent's button in one place.
+    ///
+    /// The eighteen keys were spelled out as literals in four views. That is
+    /// one literal per surface per agent to get right, in files that have no
+    /// reason to be edited together — and a key typed slightly differently is
+    /// not an error anybody sees. It reads as a switch that will not stay on,
+    /// because `@AppStorage` writes the typo and the view that spelled it
+    /// correctly goes on reading the old one.
+    ///
+    /// Now the fallback and the key are named in the same place, which is what
+    /// makes them impossible to disagree.
+    static func key(_ surface: AgentButtonSurface, _ agent: CodingAgent) -> String {
+        surface.prefix + token(agent)
+    }
+
+    /// The agent's spelling inside a key, which is **not** its display name and
+    /// not its raw value.
+    ///
+    /// `OpenCode` is the one that decides the shape: the display name has no
+    /// space to drop and the raw value capitalises to `Opencode`, so neither
+    /// derivation produces the key that is already on disk. Written out, so
+    /// every one of the six is a decision rather than a coincidence that holds
+    /// for five of them.
+    private static func token(_ agent: CodingAgent) -> String {
+        switch agent {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .opencode: return "OpenCode"
+        case .antigravity: return "Antigravity"
+        case .kimi: return "Kimi"
+        case .pi: return "Pi"
+        }
+    }
+}
+
+/// Where an agent's button can appear.
+///
+/// The same three places `WorktreeEntry` names for the worktree button, and
+/// deliberately not the same type. Each feature owns the spelling of its own
+/// keys, and the two conventions do not agree: the worktree button's chrome key
+/// is `SidebarChromeShowWorktree` while an agent's is `SidebarShowClaude`, with
+/// no `Chrome` in it. One enum would have to carry both conventions and answer
+/// a different question depending on which feature asked, which is two enums
+/// wearing one name.
+enum AgentButtonSurface: String, CaseIterable, Sendable {
+    /// The sidebar's own chrome, above everything — also drawn in the titlebar.
+    case chrome
+
+    /// The header of a group of terminals.
+    case groupHeader
+
+    /// The row of one terminal.
+    case tabRow
+
+    /// The half of the key that comes before the agent.
+    ///
+    /// `chrome` is the odd one and stays odd. `SidebarShowClaude` is what is on
+    /// disk for every reader who has ever touched that switch, and a rename to
+    /// match its neighbours would silently turn their choices back into the
+    /// defaults — a migration nobody asked for, to fix an inconsistency nobody
+    /// can see.
+    var prefix: String {
+        switch self {
+        case .chrome: return "SidebarShow"
+        case .groupHeader: return "SidebarGroupShow"
+        case .tabRow: return "SidebarTabShow"
+        }
+    }
 }

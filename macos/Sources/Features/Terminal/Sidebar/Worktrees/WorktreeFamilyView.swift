@@ -47,12 +47,12 @@ struct WorktreeFamilyView: View {
     @ObservedObject private var git: GitCenter = .shared
     @ObservedObject private var palette: ThemePalette = .shared
 
-    @AppStorage("SidebarShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
-    @AppStorage("SidebarShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
-    @AppStorage("SidebarShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
-    @AppStorage("SidebarShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
-    @AppStorage("SidebarShowKimi") private var showKimi = AgentButtonDefaults.isShown(.kimi)
-    @AppStorage("SidebarShowPi") private var showPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .antigravity)) private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .kimi)) private var showKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .pi)) private var showPi = AgentButtonDefaults.isShown(.pi)
 
     @State private var ownFilter = ""
 

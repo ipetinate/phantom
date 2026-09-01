@@ -340,12 +340,12 @@ struct SidebarTitlebarChrome: View {
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
     @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
-    @AppStorage("SidebarShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
-    @AppStorage("SidebarShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
-    @AppStorage("SidebarShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
-    @AppStorage("SidebarShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
-    @AppStorage("SidebarShowKimi") private var showKimi = AgentButtonDefaults.isShown(.kimi)
-    @AppStorage("SidebarShowPi") private var showPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .antigravity)) private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .kimi)) private var showKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .pi)) private var showPi = AgentButtonDefaults.isShown(.pi)
 
     /// Whether the pane actions (new terminal, new Claude session, new
     /// group, refresh) stay visible without a hover — off by default,
@@ -713,12 +713,12 @@ private struct SidebarGroupSection: View {
     @ObservedObject private var palette: ThemePalette = .shared
 
     @AppStorage("SidebarGroupShowPullRequests") private var showPullRequests = true
-    @AppStorage("SidebarGroupShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
-    @AppStorage("SidebarGroupShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
-    @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
-    @AppStorage("SidebarGroupShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
-    @AppStorage("SidebarGroupShowKimi") private var showKimi = AgentButtonDefaults.isShown(.kimi)
-    @AppStorage("SidebarGroupShowPi") private var showPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .antigravity)) private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .kimi)) private var showKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .pi)) private var showPi = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var showWorktree = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
@@ -1403,12 +1403,12 @@ private struct SidebarTabRow: View {
 
     /// Which agents this row offers to start, mirroring the keys the sidebar
     /// header and the group header already use for their own buttons.
-    @AppStorage("SidebarTabShowClaude") private var showClaudeAction = AgentButtonDefaults.isShown(.claude)
-    @AppStorage("SidebarTabShowCodex") private var showCodexAction = AgentButtonDefaults.isShown(.codex)
-    @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = AgentButtonDefaults.isShown(.opencode)
-    @AppStorage("SidebarTabShowAntigravity") private var showAntigravityAction = AgentButtonDefaults.isShown(.antigravity)
-    @AppStorage("SidebarTabShowKimi") private var showKimiAction = AgentButtonDefaults.isShown(.kimi)
-    @AppStorage("SidebarTabShowPi") private var showPiAction = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .claude)) private var showClaudeAction = AgentButtonDefaults.isShown(.claude)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .codex)) private var showCodexAction = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .opencode)) private var showOpenCodeAction = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .antigravity)) private var showAntigravityAction = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .kimi)) private var showKimiAction = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .pi)) private var showPiAction = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarTabShowWorktree") private var showWorktreeAction = true
     @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
