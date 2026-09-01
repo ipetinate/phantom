@@ -181,8 +181,12 @@ struct WelcomeBasicsStep: View {
 /// was the widest thing in a row that is otherwise a sentence — and because
 /// seven of them down one edge is a list of links, which is not what any of
 /// those rows are about.
-private struct SettingsGearButton: View {
+///
+/// Used by the agent cards too, for the agent that is already set up: the same
+/// gesture, in the same place, meaning the same thing.
+struct SettingsGearButton: View {
     let action: () -> Void
+    var help = "Open this in Settings"
 
     @State private var isHovered = false
     @ObservedObject private var palette: ThemePalette = .shared
@@ -199,7 +203,7 @@ private struct SettingsGearButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Open this in Settings")
+        .help(help)
         .onHover { hovering in
             isHovered = hovering
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }

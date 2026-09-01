@@ -21,6 +21,10 @@ struct WelcomeAgentCard: View {
     /// Ticking one of the three places the button can go.
     let onSelectSurface: (AgentButtonSurface, Bool) -> Void
 
+    /// Where an agent that is already set up is changed: Settings, which is the
+    /// only place any of this can be taken back out.
+    let onManage: () -> Void
+
     /// Where the CLI was found, or nil when it is not on the `PATH`. The path
     /// itself is shown because `pi` and `agy` are short names and `PATH` cannot
     /// tell an agent from something else called that.
@@ -114,26 +118,29 @@ struct WelcomeAgentCard: View {
 
             Spacer(minLength: 4)
 
-            /// On every card, and disabled where there is nothing to choose.
+            /// Three states, and the middle one was the mistake worth fixing.
             ///
-            /// It used to be *hidden* in those two cases, on the grounds that a
-            /// switch which changes nothing is worse than no switch. That was
-            /// wrong on screen: five cards with a switch and one without reads
-            /// as the sixth card being broken — the first question it got was
-            /// why Claude Code could not be turned off. Disabled says the same
-            /// thing legibly, and the tooltip says which of the two reasons it
-            /// is.
+            /// It began hidden wherever it would change nothing, which read as
+            /// a card that failed to draw — five with a switch and one without.
+            /// Then it was drawn and disabled, which is worse: a control that
+            /// looks like a control and refuses to move, on the one card where
+            /// the reader most reasonably wants to change something.
             ///
-            /// What the switch still does not do is undo. An agent that is
-            /// already set up shows it on and fixed: this panel writes, and
-            /// removing a hook is Settings' job — a switch that could uninstall
-            /// would make Finish a destructive button.
-            Toggle("", isOn: Binding(get: { switchIsOn }, set: onChoose))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .labelsHidden()
-                .disabled(!canChoose)
-                .help(switchHelp)
+            /// So an agent that is already set up gets a **gear** instead. Not
+            /// the switch greyed out — the way to the only place this can be
+            /// undone. This panel writes and Settings removes, and a switch
+            /// here that could uninstall would make Finish a destructive button
+            /// on a window that opens by itself.
+            if state.isComplete {
+                SettingsGearButton(action: onManage, help: manageHelp)
+            } else {
+                Toggle("", isOn: Binding(get: { isChosen }, set: onChoose))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .disabled(!canChoose)
+                    .help(switchHelp)
+            }
         }
     }
 
@@ -141,17 +148,14 @@ struct WelcomeAgentCard: View {
         hasProbed && isInstalled && !state.isComplete
     }
 
-    /// A complete agent reads as on, because it is — everything this switch
-    /// would ask for, it already has.
-    private var switchIsOn: Bool {
-        state.isComplete || isChosen
-    }
-
     private var switchHelp: String {
         if !hasProbed { return "Looking for it on your PATH…" }
         if !isInstalled { return "Install \(agent.displayName) first" }
-        if state.isComplete { return "Already set up — change it in Settings" }
         return "Set \(agent.displayName) up when you press Finish"
+    }
+
+    private var manageHelp: String {
+        "\(agent.displayName) is set up — change or remove it in Settings"
     }
 
     private var subtitle: String {

@@ -231,6 +231,13 @@ struct WelcomeView: View {
                 }
                 selection[agent] = current
             },
+            onManage: {
+                /// The Agents pane, where the hooks come back out, and where
+                /// the MCP entry and the buttons are each a row of their own.
+                SettingsNavigation.shared.target = SettingsNavigation.Target(
+                    section: .agents, row: nil)
+                _ = NSApp.sendAction(#selector(AppDelegate.openConfig(_:)), to: nil, from: nil)
+            },
             path: availability.path(for: agent),
             hasProbed: availability.hasProbed,
             isChosen: selection[agent] != nil,
