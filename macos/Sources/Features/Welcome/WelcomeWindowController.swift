@@ -20,7 +20,13 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate {
     /// the hero step is two `Spacer`s around a logo, which an unconstrained
     /// hosting view reads as "as tall as the screen allows" — measured at 1313
     /// points on this display, for a window meant to be 560.
-    static let size = NSSize(width: 720, height: 560)
+    ///
+    /// The height is what the last step needs — six agent cards in three rows,
+    /// three checkboxes and the sentence under them — rather than what the
+    /// first step looks best at. The hero has a `Spacer` above and below it and
+    /// is centred by them at any height; the agents step, given less, cuts a
+    /// checkbox in half.
+    static let size = NSSize(width: 720, height: 700)
 
     private init() {
         let window = NSWindow(

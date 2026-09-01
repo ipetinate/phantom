@@ -26,6 +26,17 @@ enum WelcomeSetupPlan {
         }
 
         /// One line, in the reader's terms, about what this writes.
+        /// The name inside a sentence, which is not the title with its case
+        /// dropped: lowercasing `MCP server` gives `mcp server`, which is the
+        /// one thing in this panel a reader would recognise as wrong.
+        var summaryName: String {
+            switch self {
+            case .hooks: return "hooks"
+            case .mcp: return "the MCP server"
+            case .buttons: return "the sidebar buttons"
+            }
+        }
+
         var detail: String {
             switch self {
             case .hooks:
@@ -111,9 +122,15 @@ enum WelcomeSetupPlan {
 
         let stepNames = Step.allCases
             .filter { step in work.contains { $0.step == step } }
-            .map { $0.title.lowercased() }
+            .map(\.summaryName)
 
-        return "Finish sets up \(list(stepNames)) for \(names(of: chosen)). "
+        /// The agents with something left to do, not everything switched on.
+        /// An agent that is already set up stays switched on — it is a true
+        /// statement about the machine — but naming it here would promise work
+        /// that is not going to happen.
+        let touched = chosen.filter { agent in work.contains { $0.agent == agent } }
+
+        return "Finish sets up \(list(stepNames)) for \(names(of: touched)). "
             + "Every one of them is reversible in Settings."
     }
 

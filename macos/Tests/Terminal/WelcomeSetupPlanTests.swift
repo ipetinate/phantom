@@ -122,8 +122,36 @@ struct WelcomeSetupPlanTests {
             steps: everything,
             state: [.claude: state(hooks: true, buttons: true)])
 
-        #expect(summary.contains("mcp server"))
+        #expect(summary.contains("the MCP server"))
         #expect(!summary.contains("hooks"))
+    }
+
+    /// `MCP server` is not lowercased into a sentence. Reading "sets up mcp
+    /// server" is the one thing in this panel somebody would recognise as
+    /// wrong at a glance — it was, on the first build.
+    @Test func theSummaryKeepsTheSpellingOfANameThatIsAnAcronym() {
+        let summary = WelcomeSetupPlan.summary(
+            chosen: [.claude], steps: [.mcp], state: [.claude: state()])
+
+        #expect(summary.contains("the MCP server"))
+        #expect(!summary.lowercased().contains(" mcp server") || summary.contains("MCP"))
+    }
+
+    /// An agent that is already set up stays switched on — that is a true
+    /// statement about the machine — but the sentence does not promise work
+    /// for it. Measured on screen: the panel offered to set up Claude Code,
+    /// whose card said, two inches above, that it was done.
+    @Test func theSummaryNamesOnlyTheAgentsWithWorkLeft() {
+        let summary = WelcomeSetupPlan.summary(
+            chosen: [.claude, .codex],
+            steps: everything,
+            state: [
+                .claude: state(hooks: true, mcp: true, buttons: true),
+                .codex: state(),
+            ])
+
+        #expect(summary.contains("Codex"))
+        #expect(!summary.contains("Claude Code"))
     }
 
     /// Three or more agents read as a sentence rather than a comma-joined

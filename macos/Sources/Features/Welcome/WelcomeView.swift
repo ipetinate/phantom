@@ -161,17 +161,22 @@ struct WelcomeView: View {
 
                 Divider().padding(.vertical, 2)
 
-                ForEach(WelcomeSetupPlan.Step.allCases, id: \.self) { setupStep in
-                    Toggle(isOn: binding(for: setupStep)) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(setupStep.title).font(.system(size: 12))
-                            Text(setupStep.detail)
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(WelcomeSetupPlan.Step.allCases, id: \.self) { setupStep in
+                        Toggle(isOn: binding(for: setupStep)) {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(setupStep.title)
+                                    .font(.system(size: 12))
+                                Text(setupStep.detail)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .help(setupStep.detail)
+                            }
                         }
+                        .toggleStyle(.checkbox)
                     }
-                    .toggleStyle(.checkbox)
                 }
 
                 Text(summary)
