@@ -63,19 +63,25 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate {
         raise()
         WelcomeShownRecord.markShown()
 
-        /// Once more, a runloop turn later.
-        ///
-        /// On the launch this window exists for, the terminal windows are still
-        /// arriving: the session restore presents from async blocks and makes
-        /// one of them key after this returns, so a window ordered front here
-        /// ends up behind everything a moment later — which is where this one
-        /// was found. Ordering front twice costs nothing and outlives that.
+        /// Once more, a runloop turn later, for the window somebody asked for
+        /// from the menu while another app was in front.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(400))
             guard self?.window?.isVisible == true else { return }
             self?.raise()
         }
     }
+
+    /// How long the window stays above the others on the launch that opened it
+    /// by itself.
+    ///
+    /// The two order-fronts were not enough, measured: the session restore was
+    /// still presenting terminal windows after both of them, and each one it
+    /// presents takes the front. A window level outlasts that without having to
+    /// guess how long a restore takes — and it is given up, rather than kept,
+    /// because a welcome window that floats over everything for the rest of the
+    /// session is a window somebody has to fight.
+    private static let floatWindow: Duration = .seconds(3)
 
     /// Front, key, and in front of the other applications too.
     ///
@@ -104,6 +110,18 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate {
         guard WelcomeShownRecord.opensAtLaunch else { return }
         guard window?.isVisible != true else { return }
         show()
+        floatBrieflyAboveTheRestore()
+    }
+
+    /// Holds the window above the windows the restore is still presenting, then
+    /// gives the level back.
+    private func floatBrieflyAboveTheRestore() {
+        window?.level = .floating
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.floatWindow)
+            self?.window?.level = .normal
+        }
     }
 
     /// Esc closes it, following `AboutController`. A window with one way out
