@@ -114,21 +114,44 @@ struct WelcomeAgentCard: View {
 
             Spacer(minLength: 4)
 
-            /// Reserved whether or not there is a switch, so the name below it
-            /// starts in the same place on every card. Nothing to choose while
-            /// the CLI is missing or everything is already done: a switch that
-            /// changes nothing makes the rest of the card less believable.
-            Toggle("", isOn: Binding(get: { isChosen }, set: onChoose))
+            /// On every card, and disabled where there is nothing to choose.
+            ///
+            /// It used to be *hidden* in those two cases, on the grounds that a
+            /// switch which changes nothing is worse than no switch. That was
+            /// wrong on screen: five cards with a switch and one without reads
+            /// as the sixth card being broken — the first question it got was
+            /// why Claude Code could not be turned off. Disabled says the same
+            /// thing legibly, and the tooltip says which of the two reasons it
+            /// is.
+            ///
+            /// What the switch still does not do is undo. An agent that is
+            /// already set up shows it on and fixed: this panel writes, and
+            /// removing a hook is Settings' job — a switch that could uninstall
+            /// would make Finish a destructive button.
+            Toggle("", isOn: Binding(get: { switchIsOn }, set: onChoose))
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .labelsHidden()
-                .opacity(canChoose ? 1 : 0)
-                .allowsHitTesting(canChoose)
+                .disabled(!canChoose)
+                .help(switchHelp)
         }
     }
 
     private var canChoose: Bool {
         hasProbed && isInstalled && !state.isComplete
+    }
+
+    /// A complete agent reads as on, because it is — everything this switch
+    /// would ask for, it already has.
+    private var switchIsOn: Bool {
+        state.isComplete || isChosen
+    }
+
+    private var switchHelp: String {
+        if !hasProbed { return "Looking for it on your PATH…" }
+        if !isInstalled { return "Install \(agent.displayName) first" }
+        if state.isComplete { return "Already set up — change it in Settings" }
+        return "Set \(agent.displayName) up when you press Finish"
     }
 
     private var subtitle: String {
