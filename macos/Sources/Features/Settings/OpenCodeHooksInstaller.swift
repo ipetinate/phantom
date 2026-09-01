@@ -5,7 +5,7 @@ import Foundation
 /// file consumed by TabStateCenter.
 @MainActor
 enum OpenCodeHooksInstaller {
-    static let pluginName = "phantom-integration.js"
+    static let pluginName = PhantomBuild.fileName("phantom-integration.js")
 
     static var configDir: URL {
         FileManager.default.homeDirectoryForCurrentUser

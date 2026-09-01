@@ -240,22 +240,17 @@ final class GuiConfigStore: ObservableObject {
 
     /// What marks this build's directory apart, or nil for the release build.
     ///
-    /// The suffix comes off the bundle id, which is the same rule
-    /// `MCPServerCommand.name(forBundleID:)` uses to name the socket and the
-    /// agent entry — `com.ipetinate.phantom` is the release build and answers
-    /// nil, `com.ipetinate.phantom.debug` answers `debug`. Stated again rather
-    /// than borrowed because that one is `@MainActor` and this runs during
-    /// bootstrap, before there is a main actor to be on.
+    /// `PhantomBuild` owns the rule — it is the same one that names the hook
+    /// scripts and, through `MCPServerCommand`, the socket and the agent entry.
+    /// Kept as a function here because the tests pin it at this name, and
+    /// because a caller reading a *directory* suffix should not have to know
+    /// which type spells the general case.
     nonisolated static func buildSuffix(forBundleID id: String) -> String? {
-        guard let variant = id.split(separator: ".").last,
-              !variant.isEmpty,
-              variant.lowercased() != "phantom"
-        else { return nil }
-        return variant.lowercased()
+        PhantomBuild.variant(forBundleID: id)
     }
 
     nonisolated private static var buildSuffix: String? {
-        buildSuffix(forBundleID: Bundle.main.bundleIdentifier ?? "")
+        PhantomBuild.variant
     }
 
     /// Phantom is a distinct app from Ghostty and keeps its own config

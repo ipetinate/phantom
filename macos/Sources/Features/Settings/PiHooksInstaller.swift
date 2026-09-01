@@ -21,7 +21,7 @@ import Foundation
 /// erased at run time, and omitting it means the file cannot fail to resolve.
 @MainActor
 enum PiHooksInstaller {
-    static let extensionName = "phantom.ts"
+    static let extensionName = PhantomBuild.fileName("phantom.ts")
 
     /// Pi's global extension directory. The project-local `.pi/extensions`
     /// is not used: a hook that reports which tab an agent is running in is a

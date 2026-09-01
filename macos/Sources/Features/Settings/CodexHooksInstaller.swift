@@ -5,7 +5,7 @@ import Foundation
 /// used by the sidebar's Claude integration.
 @MainActor
 enum CodexHooksInstaller {
-    static let scriptName = "phantom-tab-state.sh"
+    static let scriptName = PhantomBuild.fileName("phantom-tab-state.sh")
     /// Codex can be configured with CODEX_HOME (and this installation uses
     /// ~/.codex-cli). Resolve it at use time so the settings screen and the
     /// installer always target the same home as the running Codex binary.

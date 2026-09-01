@@ -10,8 +10,16 @@ import Foundation
 /// ghostty-named script) are migrated on install.
 @MainActor
 enum ClaudeHooksInstaller {
-    static let scriptName = "phantom-tab-state.sh"
-    static let legacyScriptName = "ghostty-tab-state.sh"
+    static let scriptName = PhantomBuild.fileName("phantom-tab-state.sh")
+    /// The name this app wrote before the fork was renamed, matched so an
+    /// upgrade's leftover registration can be recognised and removed.
+    ///
+    /// Empty for anything but the release build. Only the release build ever
+    /// wrote it, and a debug build that matched on it would be reaching into
+    /// the other build's history to clean up after it.
+    static var legacyScriptName: String {
+        PhantomBuild.isRelease ? "ghostty-tab-state.sh" : ""
+    }
 
     static var claudeDir: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -377,7 +385,8 @@ enum ClaudeHooksInstaller {
 
             entries.removeAll { entry in
                 commandsIn(entry).contains {
-                    $0.contains(scriptName) || $0.contains(legacyScriptName)
+                    $0.contains(scriptName)
+                        || (!legacyScriptName.isEmpty && $0.contains(legacyScriptName))
                 }
             }
 
@@ -420,7 +429,8 @@ enum ClaudeHooksInstaller {
                 guard var entries = value as? [[String: Any]] else { continue }
                 entries.removeAll { entry in
                     commandsIn(entry).contains {
-                        $0.contains(scriptName) || $0.contains(legacyScriptName)
+                        $0.contains(scriptName)
+                        || (!legacyScriptName.isEmpty && $0.contains(legacyScriptName))
                     }
                 }
                 hooks[event] = entries

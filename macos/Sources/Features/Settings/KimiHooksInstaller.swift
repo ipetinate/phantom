@@ -25,7 +25,7 @@ import Foundation
 /// trying five spellings the way the Codex script has to.
 @MainActor
 enum KimiHooksInstaller {
-    static let scriptName = "phantom-tab-state.sh"
+    static let scriptName = PhantomBuild.fileName("phantom-tab-state.sh")
 
     /// `KIMI_CODE_HOME` relocates Kimi's whole directory, and the reader who
     /// set it did so to keep this out of their home. Writing to the default

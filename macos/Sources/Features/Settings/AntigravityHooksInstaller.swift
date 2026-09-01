@@ -37,7 +37,7 @@ import Foundation
 /// documented. Where the docs and that post disagree, the post wins.
 @MainActor
 enum AntigravityHooksInstaller {
-    static let scriptName = "phantom-tab-state.sh"
+    static let scriptName = PhantomBuild.fileName("phantom-tab-state.sh")
 
     /// The one top-level key Phantom owns in `hooks.json`. Everything the
     /// merge does is scoped to it.
