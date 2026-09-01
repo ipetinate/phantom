@@ -13,9 +13,18 @@ import SwiftUI
 final class WelcomeWindowController: NSWindowController, NSWindowDelegate {
     static let shared = WelcomeWindowController()
 
+    /// The size the window is, rather than the size it starts at.
+    ///
+    /// Declared here and applied to the SwiftUI root as a frame, because the
+    /// window is not resizable and its content decides its height otherwise:
+    /// the hero step is two `Spacer`s around a logo, which an unconstrained
+    /// hosting view reads as "as tall as the screen allows" — measured at 1313
+    /// points on this display, for a window meant to be 560.
+    static let size = NSSize(width: 720, height: 560)
+
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
+            contentRect: NSRect(origin: .zero, size: Self.size),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: true
@@ -40,7 +49,10 @@ final class WelcomeWindowController: NSWindowController, NSWindowDelegate {
     /// session is not a state worth keeping.
     func show() {
         window?.contentView = NSHostingView(
-            rootView: WelcomeView(close: { [weak self] in self?.close() }).themedChrome())
+            rootView: WelcomeView(close: { [weak self] in self?.close() })
+                .frame(width: Self.size.width, height: Self.size.height)
+                .themedChrome())
+        window?.setContentSize(Self.size)
         window?.center()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
