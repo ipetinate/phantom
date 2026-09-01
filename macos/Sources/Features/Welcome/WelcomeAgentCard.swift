@@ -21,10 +21,6 @@ struct WelcomeAgentCard: View {
     /// Ticking one of the three places the button can go.
     let onSelectSurface: (AgentButtonSurface, Bool) -> Void
 
-    /// Where an agent that is already set up is changed: Settings, which is the
-    /// only place any of this can be taken back out.
-    let onManage: () -> Void
-
     /// Where the CLI was found, or nil when it is not on the `PATH`. The path
     /// itself is shown because `pi` and `agy` are short names and `PATH` cannot
     /// tell an agent from something else called that.
@@ -118,29 +114,23 @@ struct WelcomeAgentCard: View {
 
             Spacer(minLength: 4)
 
-            /// Three states, and the middle one was the mistake worth fixing.
+            /// One switch, on every card, meaning the same thing on all of
+            /// them: whether this agent is set up here.
             ///
-            /// It began hidden wherever it would change nothing, which read as
-            /// a card that failed to draw — five with a switch and one without.
-            /// Then it was drawn and disabled, which is worse: a control that
-            /// looks like a control and refuses to move, on the one card where
-            /// the reader most reasonably wants to change something.
-            ///
-            /// So an agent that is already set up gets a **gear** instead. Not
-            /// the switch greyed out — the way to the only place this can be
-            /// undone. This panel writes and Settings removes, and a switch
-            /// here that could uninstall would make Finish a destructive button
-            /// on a window that opens by itself.
-            if state.isComplete {
-                SettingsGearButton(action: onManage, help: manageHelp)
-            } else {
-                Toggle("", isOn: Binding(get: { isChosen }, set: onChoose))
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .disabled(!canChoose)
-                    .help(switchHelp)
-            }
+            /// It went through three shapes before this one — hidden where it
+            /// would change nothing, then drawn and disabled, then replaced by
+            /// a gear pointing at Settings — and each was the same mistake in a
+            /// different coat: the reader wanted to change an agent that was
+            /// already set up, and the panel kept sending them somewhere else.
+            /// Off now asks Finish to take the agent's hooks, entry and buttons
+            /// back out, through the same `uninstall` and `remove` the Settings
+            /// panes call.
+            Toggle("", isOn: Binding(get: { isChosen }, set: onChoose))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .disabled(!canChoose)
+                .help(switchHelp)
         }
     }
 
@@ -238,39 +228,41 @@ struct WelcomeAgentCard: View {
         }
     }
 
-    /// One of the two plain steps.
+    /// One of the two plain steps, as a checkbox that means "this agent has
+    /// this".
     ///
-    /// A real `Toggle` in the checkbox style rather than a symbol somebody has
-    /// to discover is tappable. The first version drew its own square and text
-    /// and relied on a tap gesture over the row: it looked like a status line,
-    /// which is what it had been one version earlier — so nobody read it as
-    /// something to click.
+    /// The same box whether the agent has it or not, which is what makes
+    /// unticking legible as *take it out* rather than as *do not add it*. The
+    /// dot beside the label says the agent has it today: green when the tick
+    /// agrees, orange when it does not — orange is the one that reads as "this
+    /// is about to go".
     ///
-    /// Already done is a green tick and no control at all. This panel sets up;
-    /// taking a hook back out is Settings' job, and a checkbox that could
-    /// uninstall would make Finish a destructive button.
-    @ViewBuilder
+    /// It read as a status line for two versions before this, then as a status
+    /// line with a checkbox beside it for one more. It is a control.
     private func choice(_ step: WelcomeSetupPlan.Step) -> some View {
-        if state.has(step) {
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.green)
+        let has = state.has(step)
+        let wanted = selection?.steps.contains(step) ?? false
+
+        return Toggle(isOn: Binding(get: { wanted }, set: { onSelect(step, $0) })) {
+            HStack(spacing: 5) {
                 Text(step.title)
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
+                if has { dot(agrees: wanted) }
             }
-            .help("Already set up — remove it in Settings")
-        } else {
-            Toggle(step.title, isOn: Binding(
-                get: { selection?.steps.contains(step) ?? false },
-                set: { wanted in onSelect(step, wanted) }))
-                .toggleStyle(.checkbox)
-                .font(.system(size: 12))
-                .disabled(!isChosen)
-                .help(step.detail)
         }
+        .toggleStyle(.checkbox)
+        .disabled(!canChoose)
+        .help(helpFor(step, has: has, wanted: wanted))
+    }
+
+    private func helpFor(
+        _ step: WelcomeSetupPlan.Step,
+        has: Bool,
+        wanted: Bool
+    ) -> String {
+        if has && !wanted { return "Set up now — Finish will remove it" }
+        if has { return "Already set up" }
+        return step.detail
     }
 
     /// Where the agent's button goes: three checkboxes, labelled, on one line.
@@ -283,7 +275,6 @@ struct WelcomeAgentCard: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text("Show its button")
                 .font(.system(size: 12))
-                .foregroundStyle(state.has(.buttons) ? .secondary : .primary)
 
             ForEach(AgentButtonSurface.allCases, id: \.self) { surface in
                 place(surface)
@@ -293,27 +284,33 @@ struct WelcomeAgentCard: View {
         }
     }
 
-    @ViewBuilder
     private func place(_ surface: AgentButtonSurface) -> some View {
-        if state.buttonsShown.contains(surface) {
-            HStack(spacing: 4) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.green)
+        let shown = state.buttonsShown.contains(surface)
+        let wanted = selection?.surfaces.contains(surface) ?? false
+
+        return Toggle(isOn: Binding(
+            get: { wanted },
+            set: { onSelectSurface(surface, $0) })
+        ) {
+            HStack(spacing: 3) {
                 Text(surface.shortName)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                if shown { dot(agrees: wanted) }
             }
-            .help("Already shown \(surface.placeName)")
-        } else {
-            Toggle(surface.shortName, isOn: Binding(
-                get: { selection?.surfaces.contains(surface) ?? false },
-                set: { wanted in onSelectSurface(surface, wanted) }))
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11))
-                .disabled(!isChosen)
-                .help("Show it \(surface.placeName)")
         }
+        .toggleStyle(.checkbox)
+        .disabled(!canChoose)
+        .help(shown && !wanted
+            ? "Shown \(surface.placeName) — Finish will hide it"
+            : "Show it \(surface.placeName)")
+    }
+
+    /// The mark that says "the agent has this today", and whether the tick
+    /// beside it agrees.
+    private func dot(agrees: Bool) -> some View {
+        Circle()
+            .fill(agrees ? Color.green : Color.orange)
+            .frame(width: 5, height: 5)
     }
 
     /// One body line's worth of height, for the states with less to say than

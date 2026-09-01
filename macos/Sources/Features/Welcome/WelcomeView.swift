@@ -231,21 +231,15 @@ struct WelcomeView: View {
                 }
                 selection[agent] = current
             },
-            onManage: {
-                /// The Agents pane, where the hooks come back out, and where
-                /// the MCP entry and the buttons are each a row of their own.
-                SettingsNavigation.shared.target = SettingsNavigation.Target(
-                    section: .agents, row: nil)
-                _ = NSApp.sendAction(#selector(AppDelegate.openConfig(_:)), to: nil, from: nil)
-            },
             path: availability.path(for: agent),
             hasProbed: availability.hasProbed,
-            isChosen: selection[agent] != nil,
+            isChosen: selection[agent]?.isEmpty == false,
             onChoose: { wanted in
-                /// Switching an agent on asks for everything it is missing;
-                /// switching it off forgets what was asked for, rather than
-                /// keeping a hidden answer for the next time it is switched on.
-                selection[agent] = wanted ? .everything : nil
+                /// On asks for everything the agent does not have; off asks for
+                /// nothing, which is how the panel says "take it apart" —
+                /// `items` reads the difference between that and what the agent
+                /// has today.
+                selection[agent] = wanted ? .everything : WelcomeSetupPlan.Selection()
             },
             install: AgentInstallPlan.command(
                 for: agent, managers: availability.availableManagers),
@@ -334,26 +328,38 @@ struct WelcomeView: View {
     }
 
     /// Nil when it worked, otherwise the sentence to show.
+    ///
+    /// Both directions. The removals go through the same installers' own
+    /// `uninstall` and `remove`, which are what the Settings panes call — so
+    /// there is one way out of each of these and this is not a second one.
     private func perform(_ item: WelcomeSetupPlan.Item) -> String? {
+        let removing = item.direction == .remove
+
         switch item.step {
         case .hooks:
             guard let agent = AgentHooksRegistration.agents.first(where: { $0.id == item.agent })
             else { return nil }
-            guard !agent.install() else { return nil }
-            return "\(agent.name): hooks failed\(agent.lastError().map { " — \($0)" } ?? "")"
+            guard !(removing ? agent.uninstall() : agent.install()) else { return nil }
+            let what = removing ? "removing the hooks failed" : "hooks failed"
+            return "\(agent.name): \(what)\(agent.lastError().map { " — \($0)" } ?? "")"
 
         case .mcp:
             guard let agent = MCPServerRegistration.agents.first(where: { $0.id == item.agent })
             else { return nil }
-            guard !agent.register() else { return nil }
-            return "\(agent.name): MCP entry failed\(agent.lastError().map { " — \($0)" } ?? "")"
+            guard !(removing ? agent.remove() : agent.register()) else { return nil }
+            let what = removing ? "removing the MCP entry failed" : "MCP entry failed"
+            return "\(agent.name): \(what)\(agent.lastError().map { " — \($0)" } ?? "")"
 
         case .buttons:
-            /// Only the places the card asked for. Writing all three would
-            /// switch on a button somebody deliberately left off.
+            /// Only the places the card named. Writing all three either way
+            /// would move a button somebody had deliberately set the other way.
+            ///
+            /// `false` rather than removing the key: absent means "the default
+            /// for this agent", which for Claude Code is *on* — so deleting the
+            /// key would switch the button back on instead of off.
             for surface in item.surfaces {
                 UserDefaults.standard.set(
-                    true, forKey: AgentButtonDefaults.key(surface, item.agent))
+                    !removing, forKey: AgentButtonDefaults.key(surface, item.agent))
             }
             return nil
         }
@@ -400,8 +406,26 @@ struct WelcomeView: View {
     private func seedChoicesIfNeeded() {
         guard availability.hasProbed, !didSeed else { return }
         didSeed = true
-        for agent in CodingAgent.allCases where availability.isInstalled(agent) {
-            selection[agent] = .everything
+
+        for agent in CodingAgent.allCases {
+            let current = state(of: agent)
+
+            if availability.isInstalled(agent) {
+                /// The suggestion, for an agent that is here: all of it. What
+                /// it already has then produces no work, and what it does not
+                /// is what Finish adds.
+                selection[agent] = .everything
+                continue
+            }
+
+            /// Not installed, but configured — hooks from a machine that had it
+            /// once, a button somebody switched on. The card starts by asking
+            /// for exactly what is there, so nothing is removed by a panel the
+            /// reader only opened to look at.
+            let existing = WelcomeSetupPlan.Selection(
+                steps: Set(WelcomeSetupPlan.Step.allCases.filter { current.has($0) }),
+                surfaces: current.buttonsShown)
+            if !existing.isEmpty { selection[agent] = existing }
         }
     }
 

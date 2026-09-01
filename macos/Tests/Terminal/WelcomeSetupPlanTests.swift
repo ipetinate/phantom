@@ -96,7 +96,7 @@ struct WelcomeSetupPlanTests {
 
         #expect(summary.contains("Claude Code and Codex"))
         #expect(summary.contains("hooks"))
-        #expect(summary.contains("reversible in Settings"))
+        #expect(summary.contains("in Settings"))
     }
 
     /// The three states in which Finish does nothing all say so, because a
@@ -112,9 +112,9 @@ struct WelcomeSetupPlanTests {
             steps: everything,
             state: [.claude: state(hooks: true, mcp: true, buttons: true)])
 
-        #expect(nothingChosen.contains("changes nothing"))
-        #expect(nothingTicked.contains("changes nothing"))
-        #expect(alreadyDone.contains("already set up"))
+        for summary in [nothingChosen, nothingTicked, alreadyDone] {
+            #expect(summary.contains("Nothing to change"), "\(summary)")
+        }
     }
 
     /// The summary only names steps that are actually left, so an agent that
@@ -225,6 +225,103 @@ struct WelcomeSetupPlanTests {
             state: [.claude: state()])
 
         #expect(work.isEmpty)
+    }
+
+    // MARK: Taking things back out
+
+    /// The panel's other half, and the one it refused to have for three
+    /// versions: a tick that comes off is an instruction to remove, not an
+    /// instruction to skip. The reader had to leave for Settings to say it.
+    @Test func untickingSomethingTheAgentHasRemovesIt() {
+        let work = WelcomeSetupPlan.items(
+            selection: [
+                /// Everything but the MCP server, which is the tick that came
+                /// off. The places stay, so `.buttons` stays with them — the
+                /// step is the gate and the places qualify it.
+                .claude: WelcomeSetupPlan.Selection(
+                    steps: [.hooks, .buttons], surfaces: Set(AgentButtonSurface.allCases)),
+            ],
+            state: [.claude: state(hooks: true, mcp: true, buttons: true)])
+
+        #expect(work.count == 1)
+        #expect(work.first?.step == .mcp)
+        #expect(work.first?.direction == .remove)
+    }
+
+    /// Switching an agent off asks for nothing, and everything it has comes
+    /// out — which is what "disable this agent" means here.
+    @Test func anAgentSwitchedOffIsTakenApart() {
+        let work = WelcomeSetupPlan.items(
+            selection: [.claude: WelcomeSetupPlan.Selection()],
+            state: [.claude: state(hooks: true, mcp: true, buttons: true)])
+
+        #expect(work.map(\.direction) == [.remove, .remove, .remove])
+        #expect(Set(work.map(\.step)) == Set(WelcomeSetupPlan.Step.allCases))
+        #expect(work.first { $0.step == .buttons }?.surfaces
+            == Set(AgentButtonSurface.allCases))
+    }
+
+    /// One place off and two on: only the place that came off is hidden.
+    @Test func aPlaceCanBeHiddenWithoutTouchingTheOthers() {
+        let work = WelcomeSetupPlan.items(
+            selection: [
+                .claude: WelcomeSetupPlan.Selection(
+                    steps: [.hooks, .mcp, .buttons], surfaces: [.tabRow, .groupHeader]),
+            ],
+            state: [.claude: state(hooks: true, mcp: true, buttons: true)])
+
+        #expect(work.count == 1)
+        #expect(work.first?.direction == .remove)
+        #expect(work.first?.surfaces == [.chrome])
+    }
+
+    /// Removals happen before additions, so an agent being switched off and
+    /// another being switched on in one press cannot interleave.
+    @Test func everythingComesOutBeforeAnythingGoesIn() {
+        let work = WelcomeSetupPlan.items(
+            selection: [
+                .claude: WelcomeSetupPlan.Selection(),
+                .codex: .everything,
+            ],
+            state: [
+                .claude: state(hooks: true, mcp: true, buttons: true),
+                .codex: state(),
+            ])
+
+        let directions = work.map(\.direction)
+        #expect(directions.first == .remove)
+        #expect(directions.last == .add)
+        #expect(directions == directions.sorted { a, _ in a == .remove })
+    }
+
+    /// An agent nobody has touched and nothing is configured for produces no
+    /// work in either direction — the panel does not remove what was never
+    /// there.
+    @Test func anEmptyAgentIsLeftAlone() {
+        let work = WelcomeSetupPlan.items(
+            selection: [.claude: WelcomeSetupPlan.Selection()],
+            state: [.claude: state()])
+
+        #expect(work.isEmpty)
+    }
+
+    /// The sentence says both halves, because a Finish that removes something
+    /// has to say so before it is pressed.
+    @Test func theSummarySaysWhatComesOutAsWellAsWhatGoesIn() {
+        let summary = WelcomeSetupPlan.summary(
+            selection: [
+                .claude: WelcomeSetupPlan.Selection(),
+                .codex: .everything,
+            ],
+            state: [
+                .claude: state(hooks: true, mcp: true, buttons: true),
+                .codex: state(),
+            ])
+
+        #expect(summary.contains("removes"))
+        #expect(summary.contains("sets up"))
+        #expect(summary.contains("Claude Code"))
+        #expect(summary.contains("Codex"))
     }
 
     /// Three or more agents read as a sentence rather than a comma-joined

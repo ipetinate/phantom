@@ -49,26 +49,42 @@ enum WelcomeSetupPlan {
         }
     }
 
+    /// Which way one item is going.
+    enum Direction: String, Equatable, Sendable {
+        case add
+        case remove
+    }
+
     /// One thing that will be done to one agent.
     struct Item: Equatable, Identifiable, Sendable {
         let agent: CodingAgent
         let step: Step
 
-        /// For `.buttons` only: the places to switch the button on. A step
-        /// carries them rather than being three steps, because "show this
-        /// agent" is one decision the reader can then qualify — and because
-        /// the other two steps have nowhere to put such a thing.
+        /// Both directions, because the card is the agent's **state** and not a
+        /// list of things to add. A reader who unticks the hooks is saying the
+        /// hooks should not be there, and the panel that refused to hear that
+        /// was a panel they had to leave, for Settings, to say it.
+        var direction: Direction = .add
+
+        /// For `.buttons` only: the places to switch the button on, or off. A
+        /// step carries them rather than being three steps, because "show this
+        /// agent" is one decision the reader can then qualify — and because the
+        /// other two steps have nowhere to put such a thing.
         var surfaces: Set<AgentButtonSurface> = []
 
-        var id: String { "\(agent.rawValue).\(step.rawValue)" }
+        var id: String { "\(agent.rawValue).\(step.rawValue).\(direction.rawValue)" }
     }
 
-    /// What the reader has asked for, for one agent.
+    /// What the reader wants this agent to *be*, when they press Finish.
     ///
-    /// Per agent rather than one set for all of them: the panel's bottom row
-    /// says what to do with everybody, and a card can then disagree with it.
-    /// Somebody who wants the hooks everywhere but the MCP server only where
-    /// they trust it had to open Settings afterwards to take it back.
+    /// The end state, not a list of additions. Everything in it that the agent
+    /// does not have is installed; everything the agent has that is not in it
+    /// is removed. That is what makes the card a control rather than a form:
+    /// the same three ticks that set an agent up are the ones that take it
+    /// apart again.
+    ///
+    /// Per agent, because the row of checkboxes this replaced said one thing
+    /// for everybody while the cards said another.
     struct Selection: Equatable, Sendable {
         var steps: Set<Step> = []
         var surfaces: Set<AgentButtonSurface> = []
@@ -79,6 +95,10 @@ enum WelcomeSetupPlan {
         /// Ticking a place is also ticking "show the buttons": the parent line
         /// is a summary of its places, not a fourth thing to remember.
         var wantsButtons: Bool { steps.contains(.buttons) && !surfaces.isEmpty }
+
+        /// Nothing asked for — which is what a switched-off agent is, and is
+        /// read by `items` as "take out whatever it has".
+        var isEmpty: Bool { steps.isEmpty && surfaces.isEmpty }
     }
 
     /// What the state of one agent is, as the panel found it.
@@ -122,26 +142,44 @@ enum WelcomeSetupPlan {
         selection: [CodingAgent: Selection],
         state: [CodingAgent: AgentState]
     ) -> [Item] {
-        let chosen = CodingAgent.allCases.filter { selection[$0] != nil }
-
         var work: [Item] = []
-        for step in Step.allCases {
-            for agent in chosen {
-                guard let wanted = selection[agent], wanted.steps.contains(step) else { continue }
-                let current = state[agent] ?? AgentState(
-                    hooksInstalled: false, mcpRegistered: false, buttonsShown: [])
 
-                if step == .buttons {
-                    /// Only the places that are both asked for and not already
-                    /// on. An empty remainder is no work, not an empty write.
-                    let places = wanted.surfaces.subtracting(current.buttonsShown)
-                    guard !places.isEmpty else { continue }
-                    work.append(Item(agent: agent, step: step, surfaces: places))
-                    continue
+        /// Removals first, and per step rather than per agent, so a plan reads
+        /// the way it happens: everything that is coming out comes out before
+        /// anything goes in. An agent being switched off and another being
+        /// switched on in the same press then cannot interleave.
+        for direction in [Direction.remove, Direction.add] {
+            for step in Step.allCases {
+                for agent in CodingAgent.allCases {
+                    let current = state[agent] ?? AgentState(
+                        hooksInstalled: false, mcpRegistered: false, buttonsShown: [])
+
+                    /// A missing selection is a switched-off agent, which wants
+                    /// nothing — not an agent with no opinion.
+                    let wanted = selection[agent] ?? Selection()
+
+                    if step == .buttons {
+                        /// The step is the gate and the places qualify it, the
+                        /// same way the card treats them: a selection holding
+                        /// places but not `.buttons` is asking for no button at
+                        /// all, and reading the places alone there would switch
+                        /// on three of them.
+                        let asked = wanted.steps.contains(.buttons) ? wanted.surfaces : []
+                        let places = direction == .add
+                            ? asked.subtracting(current.buttonsShown)
+                            : current.buttonsShown.subtracting(asked)
+                        guard !places.isEmpty else { continue }
+                        work.append(
+                            Item(agent: agent, step: step, direction: direction,
+                                 surfaces: places))
+                        continue
+                    }
+
+                    let has = current.has(step)
+                    let asked = wanted.steps.contains(step)
+                    guard direction == .add ? (asked && !has) : (has && !asked) else { continue }
+                    work.append(Item(agent: agent, step: step, direction: direction))
                 }
-
-                guard !current.has(step) else { continue }
-                work.append(Item(agent: agent, step: step))
             }
         }
         return work
@@ -155,7 +193,9 @@ enum WelcomeSetupPlan {
         state: [CodingAgent: AgentState]
     ) -> [Item] {
         let selection = Dictionary(uniqueKeysWithValues: chosen.map {
-            ($0, Selection(steps: steps, surfaces: Set(AgentButtonSurface.allCases)))
+            ($0, Selection(
+                steps: steps,
+                surfaces: steps.contains(.buttons) ? Set(AgentButtonSurface.allCases) : []))
         })
         return items(selection: selection, state: state)
     }
@@ -166,42 +206,40 @@ enum WelcomeSetupPlan {
         selection: [CodingAgent: Selection],
         state: [CodingAgent: AgentState]
     ) -> String {
-        let chosen = CodingAgent.allCases.filter { selection[$0] != nil }
-
-        guard !chosen.isEmpty else {
-            return "Nothing selected. Finish closes this window and changes nothing."
-        }
-        guard chosen.contains(where: { !(selection[$0]?.steps.isEmpty ?? true) }) else {
-            return "Nothing ticked. Finish closes this window and changes nothing."
-        }
-
         let work = items(selection: selection, state: state)
         guard !work.isEmpty else {
-            return "\(names(of: chosen)) already set up. Finish just closes this window."
+            return "Nothing to change. Finish just closes this window."
         }
 
-        let stepNames = Step.allCases
-            .filter { step in work.contains { $0.step == step } }
-            .map(\.summaryName)
+        let sentences = [Direction.add, .remove].compactMap { direction -> String? in
+            let part = work.filter { $0.direction == direction }
+            guard !part.isEmpty else { return nil }
 
-        /// The agents with something left to do, not everything switched on.
-        /// An agent that is already set up stays switched on — it is a true
-        /// statement about the machine — but naming it here would promise work
-        /// that is not going to happen.
-        let touched = chosen.filter { agent in work.contains { $0.agent == agent } }
+            let steps = Step.allCases
+                .filter { step in part.contains { $0.step == step } }
+                .map(\.summaryName)
+            let agents = CodingAgent.allCases
+                .filter { agent in part.contains { $0.agent == agent } }
+                .map(\.displayName)
 
-        return "Finish sets up \(list(stepNames)) for \(names(of: touched)). "
-            + "Every one of them is reversible in Settings."
+            let verb = direction == .add ? "sets up" : "removes"
+            return "\(verb) \(list(steps)) for \(list(agents))"
+        }
+
+        return "Finish " + list(sentences) + ". Everything here is in Settings too."
     }
 
-    /// The same, for one set of steps applied to everybody.
+    /// The same, for one set of steps applied to everybody — the shape the
+      /// tests use to say "these agents, all of it".
     static func summary(
         chosen: [CodingAgent],
         steps: Set<Step>,
         state: [CodingAgent: AgentState]
     ) -> String {
         let selection = Dictionary(uniqueKeysWithValues: chosen.map {
-            ($0, Selection(steps: steps, surfaces: Set(AgentButtonSurface.allCases)))
+            ($0, Selection(
+                steps: steps,
+                surfaces: steps.contains(.buttons) ? Set(AgentButtonSurface.allCases) : []))
         })
         return summary(selection: selection, state: state)
     }
