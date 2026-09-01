@@ -524,6 +524,13 @@
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <menu key="submenu" title="Help" systemMenu="help" id="F2S-fz-NVQ">
                         <items>
+                            <menuItem title="Welcome to Phantom" id="Wl1-cm-P01">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="showWelcome:" target="bbz-4X-AYv" id="Wl2-cm-P02"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="Wl3-cm-P03"/>
                             <menuItem title="Phantom Help" keyEquivalent="?" id="FKE-Sm-Kum">
                                 <connections>
                                     <action selector="showHelp:" target="bbz-4X-AYv" id="tiy-ow-xSw"/>

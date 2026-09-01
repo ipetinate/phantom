@@ -128,6 +128,11 @@ struct GeneralSettingsView: View {
 
     @AppStorage("SidebarRestoreAgentSessions") private var restoreAgentSessions = true
 
+    /// Off is the default, and it is not the same as "never show it": the
+    /// window opens once on its own from `WelcomeShownRecord`, and this is the
+    /// switch for wanting it every time.
+    @AppStorage(WelcomeShownRecord.showsAtLaunchKey) private var showsWelcomeAtLaunch = false
+
     @State private var restoreWindows = true
 
     var body: some View {
@@ -154,6 +159,13 @@ struct GeneralSettingsView: View {
                 Toggle("Resume Agent Sessions on Restore", isOn: $restoreAgentSessions)
                     .toggleStyle(.switch)
                     .disabled(!restoreWindows)
+
+                /// The same switch the welcome window carries in its own
+                /// corner, so somebody who turned it on there can find where
+                /// to turn it off. Off means the window has been seen once and
+                /// will not open by itself again — it stays under Help.
+                Toggle("Open the Welcome Window at Startup", isOn: $showsWelcomeAtLaunch)
+                    .toggleStyle(.switch)
             } header: {
                 Text("On Launch")
             } footer: {

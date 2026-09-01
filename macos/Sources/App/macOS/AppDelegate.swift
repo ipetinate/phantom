@@ -446,6 +446,19 @@ class AppDelegate: NSObject,
 
     @objc private func applicationDidFinishRestoringWindows(_ notification: Notification) {
         PhantomSessionStore.shared.scheduleSave()
+
+        /// The first of two places the welcome window can open from, and the
+        /// better one: this is where the fork already treats restore as
+        /// settled. `showOnFirstLaunchIfNeeded` is idempotent, so whichever of
+        /// the two fires first wins and the other does nothing.
+        ///
+        /// Hopped to the main actor rather than assumed onto it: this is a
+        /// notification callback, and `MainActor.assumeIsolated` is a
+        /// precondition — off the main thread it would take the process down
+        /// rather than answer.
+        Task { @MainActor in
+            WelcomeWindowController.shared.showOnFirstLaunchIfNeeded()
+        }
     }
 
     func applicationDidHide(_ notification: Notification) {
@@ -466,6 +479,15 @@ class AppDelegate: NSObject,
             //   - if we're opening a URL since `application(_:openFile:)` is called before this.
             //   - if we're restoring from persisted state
             openInitialWindowIfNothingIsOnScreen()
+
+            /// The second place, for the launch that restores nothing and so
+            /// never posts `didFinishRestoringWindows`. A turn later than the
+            /// terminal window, so the welcome panel ends up in front of it
+            /// rather than behind — restore presents from async blocks and
+            /// makes one key after this returns.
+            Task { @MainActor in
+                WelcomeWindowController.shared.showOnFirstLaunchIfNeeded()
+            }
         }
     }
 
@@ -1214,6 +1236,11 @@ class AppDelegate: NSObject,
     @IBAction func closeAllWindows(_ sender: Any?) {
         TerminalController.closeAllWindows()
         AboutController.shared.hide()
+        WelcomeWindowController.shared.close()
+    }
+
+    @IBAction func showWelcome(_ sender: Any?) {
+        WelcomeWindowController.shared.show()
     }
 
     @IBAction func showAbout(_ sender: Any?) {
