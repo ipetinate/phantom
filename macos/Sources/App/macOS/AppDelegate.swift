@@ -273,12 +273,7 @@ class AppDelegate: NSObject,
         /// Scoped to the writes rather than returning early: everything after
         /// them is this app's own state, and a test host wants it.
         if !MCPServer.isTesting {
-            ClaudeHooksInstaller.repairIfStale()
-            CodexHooksInstaller.repairIfStale()
-            OpenCodeHooksInstaller.repairIfStale()
-            AntigravityHooksInstaller.repairIfStale()
-            KimiHooksInstaller.repairIfStale()
-            PiHooksInstaller.repairIfStale()
+            AgentHooksRegistration.repairAll()
         }
 
         // The one object that puts the permission question on screen, and it

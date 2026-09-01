@@ -408,98 +408,38 @@ struct SidebarSettingsView: View {
 }
 
 /// Integration with AI coding agents: installs the terminal-side hooks
-/// that surface agent activity in the sidebar. Claude Code today; more
-/// agents later.
+/// that surface agent activity in the sidebar.
 struct AgentsSettingsView: View {
-    @State private var claudeInstalled = ClaudeHooksInstaller.isInstalled
-    @State private var codexInstalled = CodexHooksInstaller.isInstalled
-    @State private var openCodeInstalled = OpenCodeHooksInstaller.isInstalled
-    @State private var antigravityInstalled = AntigravityHooksInstaller.isInstalled
-    @State private var kimiInstalled = KimiHooksInstaller.isInstalled
-    @State private var piInstalled = PiHooksInstaller.isInstalled
+    /// One dictionary, not six booleans.
+    ///
+    /// The six were the fault. The activation refresh below updated four of
+    /// them, and Kimi and Pi were updated from inside Antigravity's install
+    /// closure — so a hook installed anywhere else showed as missing here until
+    /// the pane was reopened. A state read as a whole cannot cover four sixths
+    /// of itself, and `AgentHooksRegistration` is what makes reading it as a
+    /// whole one line.
+    @State private var installed = AgentHooksRegistration.status()
     @State private var feedback: String?
 
     @AppStorage("AgentNotificationsEnabled") private var agentNotifications = true
 
+    /// Pi is drawn in its own section below, because what it installs is an
+    /// extension rather than a hook and the sentence under it says so.
+    private var hookAgents: [AgentHooksRegistration.Agent] {
+        AgentHooksRegistration.agents.filter { $0.id != .pi }
+    }
+
     var body: some View {
         Form {
             Section {
-                agentHookRow(
-                    title: "Claude Code",
-                    icon: AnyView(ClaudeIcon(size: 14, tint: .original)),
-                    installed: claudeInstalled,
-                    install: {
-                        let ok = ClaudeHooksInstaller.install()
-                        claudeInstalled = ClaudeHooksInstaller.isInstalled
-                        feedback = ok && claudeInstalled ? "Claude hooks installed ✓" : "Claude install failed: \(ClaudeHooksInstaller.lastError ?? "status did not update")"
-                    },
-                    uninstall: {
-                        let ok = ClaudeHooksInstaller.uninstall()
-                        claudeInstalled = ClaudeHooksInstaller.isInstalled
-                        feedback = ok && !claudeInstalled ? "Claude hooks removed" : "Claude removal failed"
-                    }
-                )
-                agentHookRow(
-                    title: "Codex",
-                    icon: AnyView(CodexIcon(size: 14, originalColors: true)),
-                    installed: codexInstalled,
-                    install: {
-                        let ok = CodexHooksInstaller.install()
-                        codexInstalled = CodexHooksInstaller.isInstalled
-                        feedback = ok && codexInstalled ? "Codex hooks installed ✓" : "Codex install failed: \(CodexHooksInstaller.lastError ?? "status did not update")"
-                    },
-                    uninstall: {
-                        let ok = CodexHooksInstaller.uninstall()
-                        codexInstalled = CodexHooksInstaller.isInstalled
-                        feedback = ok && !codexInstalled ? "Codex hooks removed" : "Codex removal failed"
-                    }
-                )
-                agentHookRow(
-                    title: "OpenCode",
-                    icon: AnyView(OpenCodeIcon(size: 14, originalColors: true)),
-                    installed: openCodeInstalled,
-                    install: {
-                        openCodeInstalled = OpenCodeHooksInstaller.install()
-                        feedback = openCodeInstalled ? "OpenCode hooks installed ✓" : "OpenCode install failed"
-                    },
-                    uninstall: {
-                        openCodeInstalled = !OpenCodeHooksInstaller.uninstall()
-                        feedback = openCodeInstalled ? "OpenCode removal failed" : "OpenCode hooks removed"
-                    }
-                )
-                agentHookRow(
-                    title: "Antigravity",
-                    icon: AnyView(AntigravityIcon(size: 14, tint: .original)),
-                    installed: antigravityInstalled,
-                    install: {
-                        let ok = AntigravityHooksInstaller.install()
-                        antigravityInstalled = AntigravityHooksInstaller.isInstalled
-            kimiInstalled = KimiHooksInstaller.isInstalled
-            piInstalled = PiHooksInstaller.isInstalled
-                        feedback = ok && antigravityInstalled ? "Antigravity hooks installed ✓" : "Antigravity install failed: \(AntigravityHooksInstaller.lastError ?? "status did not update")"
-                    },
-                    uninstall: {
-                        let ok = AntigravityHooksInstaller.uninstall()
-                        antigravityInstalled = AntigravityHooksInstaller.isInstalled
-                        feedback = ok && !antigravityInstalled ? "Antigravity hooks removed" : "Antigravity removal failed"
-                    }
-                )
-                agentHookRow(
-                    title: "Kimi Code",
-                    icon: AnyView(KimiIcon(size: 14, tint: .original)),
-                    installed: kimiInstalled,
-                    install: {
-                        let ok = KimiHooksInstaller.install()
-                        kimiInstalled = KimiHooksInstaller.isInstalled
-                        feedback = ok && kimiInstalled ? "Kimi hooks installed ✓" : "Kimi install failed: \(KimiHooksInstaller.lastError ?? "status did not update")"
-                    },
-                    uninstall: {
-                        let ok = KimiHooksInstaller.uninstall()
-                        kimiInstalled = KimiHooksInstaller.isInstalled
-                        feedback = ok && !kimiInstalled ? "Kimi hooks removed" : "Kimi removal failed"
-                    }
-                )
-                if let feedback { Text(feedback).font(.caption).foregroundStyle(feedback.contains("failed") ? .red : .secondary) }
+                ForEach(hookAgents) { agent in
+                    agentHookRow(agent, noun: "Hooks")
+                }
+                if let feedback {
+                    Text(feedback)
+                        .font(.caption)
+                        .foregroundStyle(feedback.contains("failed") ? .red : .secondary)
+                }
             } header: {
                 Text("Hooks")
             } footer: {
@@ -509,21 +449,9 @@ struct AgentsSettingsView: View {
             }
 
             Section {
-                agentHookRow(
-                    title: "Pi",
-                    icon: AnyView(PiIcon(size: 14, tint: .original)),
-                    installed: piInstalled,
-                    install: {
-                        let ok = PiHooksInstaller.install()
-                        piInstalled = PiHooksInstaller.isInstalled
-                        feedback = ok && piInstalled ? "Pi extension installed ✓" : "Pi install failed: \(PiHooksInstaller.lastError ?? "status did not update")"
-                    },
-                    uninstall: {
-                        let ok = PiHooksInstaller.uninstall()
-                        piInstalled = PiHooksInstaller.isInstalled
-                        feedback = ok && !piInstalled ? "Pi extension removed" : "Pi removal failed"
-                    }
-                )
+                if let pi = AgentHooksRegistration.agents.first(where: { $0.id == .pi }) {
+                    agentHookRow(pi, noun: "Extension")
+                }
                 CopyableValueRow(title: "Installed at", value: PiHooksInstaller.extensionURL.path)
             } header: {
                 Text("Pi Extension")
@@ -548,10 +476,7 @@ struct AgentsSettingsView: View {
         .navigationTitle("Agents")
         .onAppear {
             ClaudeHooksInstaller.logStatus()
-            claudeInstalled = ClaudeHooksInstaller.isInstalled
-            codexInstalled = CodexHooksInstaller.isInstalled
-            openCodeInstalled = OpenCodeHooksInstaller.isInstalled
-            antigravityInstalled = AntigravityHooksInstaller.isInstalled
+            refresh()
         }
         // Claude Code owns this settings file too and rewrites it when its
         // own settings change, which can drop our registrations. Recheck on
@@ -560,31 +485,62 @@ struct AgentsSettingsView: View {
             NotificationCenter.default.publisher(
                 for: NSApplication.didBecomeActiveNotification
             )
-        ) { _ in
-            claudeInstalled = ClaudeHooksInstaller.isInstalled
-            codexInstalled = CodexHooksInstaller.isInstalled
-            openCodeInstalled = OpenCodeHooksInstaller.isInstalled
-            antigravityInstalled = AntigravityHooksInstaller.isInstalled
-        }
+        ) { _ in refresh() }
+    }
+
+    private func refresh() {
+        installed = AgentHooksRegistration.status()
     }
 
     private func agentHookRow(
-        title: String,
-        icon: AnyView,
-        installed: Bool,
-        install: @escaping () -> Void,
-        uninstall: @escaping () -> Void
+        _ agent: AgentHooksRegistration.Agent,
+        noun: String
     ) -> some View {
-        LabeledContent {
+        let isInstalled = installed[agent.id] ?? false
+
+        return LabeledContent {
             HStack(spacing: 10) {
                 HStack(spacing: 4) {
-                    Circle().fill(installed ? Color.green : Color.secondary).frame(width: 7, height: 7)
-                    Text(installed ? "Hooks installed" : "Not installed").font(.caption).foregroundStyle(.secondary)
+                    Circle()
+                        .fill(isInstalled ? Color.green : Color.secondary)
+                        .frame(width: 7, height: 7)
+                    Text(isInstalled ? "\(noun) installed" : "Not installed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Button(installed ? "Uninstall" : "Install") { installed ? uninstall() : install() }
+                Button(isInstalled ? "Uninstall" : "Install") {
+                    apply(agent, uninstalling: isInstalled, noun: noun.lowercased())
+                }
             }
         } label: {
-            HStack(spacing: 6) { icon; Text(title) }
+            HStack(spacing: 6) {
+                AgentBrandMark(agent: agent.id, size: 14)
+                Text(agent.name)
+            }
+        }
+    }
+
+    /// The same shape as `MCPSettingsView.apply`, including the part that
+    /// matters: the state is re-read from disk before the sentence is written,
+    /// so "installed" is what the file says rather than what the call returned.
+    private func apply(
+        _ agent: AgentHooksRegistration.Agent,
+        uninstalling: Bool,
+        noun: String
+    ) {
+        let worked = uninstalling ? agent.uninstall() : agent.install()
+        refresh()
+        let now = installed[agent.id] ?? false
+        let detail = agent.lastError().map { " \u{2014} \($0)" } ?? ""
+
+        if uninstalling {
+            feedback = worked && !now
+                ? "\(agent.name): \(noun) removed"
+                : "\(agent.name): removal failed\(detail)"
+        } else {
+            feedback = worked && now
+                ? "\(agent.name): \(noun) installed"
+                : "\(agent.name): install failed\(detail)"
         }
     }
 }
