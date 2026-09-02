@@ -555,6 +555,21 @@ final class SidebarTabManager: ObservableObject {
     /// window arriving from nowhere instead of the tab they asked for. A row
     /// that has outlived its window is stale rather than actionable, so the
     /// list is re-formed instead and the row goes away.
+    /// Whether a select may fetch its window, as a rule rather than as an
+    /// expression inside a method — the shape `WindowGhostRescue.shouldRescue`
+    /// established for the same reason: the interesting part is when the answer
+    /// is *no*, and no is the answer nobody sees happen.
+    ///
+    /// - Parameters:
+    ///   - appIsActive: `NSApp.isActive`. True for every select the reader
+    ///     makes, because their click landed in this app.
+    ///   - isOnActiveSpace: `NSWindow.isOnActiveSpace`. False when the window
+    ///     is on a Space other than the one in front — where ordering it front
+    ///     moves it rather than switching to it.
+    static func mayOrderFront(appIsActive: Bool, isOnActiveSpace: Bool) -> Bool {
+        appIsActive || isOnActiveSpace
+    }
+
     func select(_ model: SidebarTabModel) {
         guard let w = model.window, Self.isLiveTab(w) else {
             WindowBreadcrumbs.note(
@@ -564,7 +579,36 @@ final class SidebarTabManager: ObservableObject {
         }
         WindowBreadcrumbs.note(
             "sidebar select: window=\(w.windowNumber) group=\(w.tabGroup?.windows.count ?? 0) "
-            + "visible=\(w.isVisible) occl=\(w.occlusionState.rawValue)")
+            + "visible=\(w.isVisible) occl=\(w.occlusionState.rawValue) "
+            + "active=\(NSApp.isActive) onActiveSpace=\(w.isOnActiveSpace)")
+
+        /// **A select that nobody in this app asked for does not fetch the
+        /// window.**
+        ///
+        /// `makeKeyAndOrderFront` on a window that is not on the active Space
+        /// does not switch Spaces — it *moves the window* to the Space in
+        /// front. For the reader's own click that is invisible, because their
+        /// click happened in this app, on the Space they are looking at. For a
+        /// select that arrives from somewhere else it is the bug reported
+        /// against 0.13: an agent's command opened a browser, the reader's
+        /// Space switched to it, something selected a tab — and the terminal
+        /// window followed them onto the browser's Space, out of the Space they
+        /// keep it on.
+        ///
+        /// So when this app is not the active one and the window is elsewhere,
+        /// the tab is selected *inside its group* and nothing is ordered
+        /// anywhere. The reader finds it selected when they come back, which is
+        /// what a select is for; being yanked across Spaces is not.
+        guard Self.mayOrderFront(appIsActive: NSApp.isActive, isOnActiveSpace: w.isOnActiveSpace)
+        else {
+            WindowBreadcrumbs.note(
+                "sidebar select: deferred — app inactive and window=\(w.windowNumber) "
+                + "is on another Space; selecting in its group instead")
+            w.tabGroup?.selectedWindow = w
+            refresh()
+            return
+        }
+
         w.makeKeyAndOrderFront(nil)
 
         /// Verified rather than trusted, a turn later. This family of bugs
@@ -596,6 +640,16 @@ final class SidebarTabManager: ObservableObject {
             /// key elsewhere, and rescuing the previous window would steal
             /// the focus right back.
             guard let w, w.isKeyWindow else { return }
+
+            /// A window on another Space is reported offscreen by the
+            /// WindowServer, and it is not a ghost — it is a window where the
+            /// reader put it. Rescuing it would drag it to whichever Space is
+            /// in front, which is the fault this rescue would otherwise become.
+            guard w.isOnActiveSpace else {
+                WindowBreadcrumbs.note(
+                    "select rescue: window=\(w.windowNumber) is on another Space — not a ghost")
+                return
+            }
             guard !Self.windowServerShowsOnScreen(w) else { return }
             WindowBreadcrumbs.note(
                 "select rescue: window=\(w.windowNumber) key but offscreen "
