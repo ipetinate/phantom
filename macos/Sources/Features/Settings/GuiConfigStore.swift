@@ -20,7 +20,26 @@ final class GuiConfigStore: ObservableObject {
 
     var guiFileURL: URL { configDir.appendingPathComponent(Self.fileName) }
     var mainConfigURL: URL { configDir.appendingPathComponent("config") }
+    /// Where a theme the reader imports or creates is *written*.
     var themesDirURL: URL { configDir.appendingPathComponent("themes", isDirectory: true) }
+
+    /// Every directory a theme may be *read* from, nearest first.
+    ///
+    /// A second build keeps its own configuration directory so it cannot write
+    /// over the reader's — see `defaultConfigDir` — and only two files are
+    /// copied across when it makes one. So its `themes` directory starts
+    /// empty, and a reader who opened Appearance in the debug build found
+    /// their own theme gone, along with the section it would have been in.
+    ///
+    /// Reading both is what makes a second build usable for looking at the
+    /// app. Writing stays where it was: a theme created here lands in this
+    /// build's directory, so nothing a debug build does can reach the
+    /// configuration the reader actually works in.
+    var themeSearchDirs: [URL] {
+        let shared = Self.sharedConfigDir().appendingPathComponent("themes", isDirectory: true)
+        guard shared != themesDirURL else { return [themesDirURL] }
+        return [themesDirURL, shared]
+    }
 
     /// Where user-installed file-icon themes live. Any SVG-based VS Code
     /// icon theme works: copy the extension's folder in, one directory per
@@ -256,7 +275,7 @@ final class GuiConfigStore: ObservableObject {
     /// Phantom is a distinct app from Ghostty and keeps its own config
     /// directory so the two never collide on the same machine — even
     /// though Phantom reads XDG first on macOS same as Ghostty does.
-    nonisolated private static func sharedConfigDir() -> URL {
+    nonisolated static func sharedConfigDir() -> URL {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
 
@@ -307,8 +326,10 @@ final class GuiConfigStore: ObservableObject {
         guard let value = string("theme"), !value.isEmpty else { return nil }
         if value.hasPrefix("/") { return URL(fileURLWithPath: value) }
 
-        let user = themesDirURL.appendingPathComponent(value)
-        if FileManager.default.fileExists(atPath: user.path) { return user }
+        for dir in themeSearchDirs {
+            let user = dir.appendingPathComponent(value)
+            if FileManager.default.fileExists(atPath: user.path) { return user }
+        }
 
         return Bundle.main.resourceURL?
             .appendingPathComponent("ghostty", isDirectory: true)

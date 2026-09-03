@@ -36,7 +36,7 @@ struct AppearanceSettingsView: View {
     init(ghostty: Ghostty.App, store: GuiConfigStore) {
         self.ghostty = ghostty
         self.store = store
-        _catalog = StateObject(wrappedValue: ThemeCatalog(userThemesDir: store.themesDirURL))
+        _catalog = StateObject(wrappedValue: ThemeCatalog(userThemesDirs: store.themeSearchDirs))
     }
 
     private var currentTheme: String {
@@ -1247,7 +1247,7 @@ private struct ThemeCreatorWindowView: View {
         self.ghostty = ghostty
         self.store = store
         self.onSaved = onSaved
-        _catalog = StateObject(wrappedValue: ThemeCatalog(userThemesDir: store.themesDirURL))
+        _catalog = StateObject(wrappedValue: ThemeCatalog(userThemesDirs: store.themeSearchDirs))
     }
 
     var body: some View {
@@ -1311,7 +1311,7 @@ private struct AllThemesView: View {
     init(ghostty: Ghostty.App, store: GuiConfigStore) {
         self.ghostty = ghostty
         self.store = store
-        _catalog = StateObject(wrappedValue: ThemeCatalog(userThemesDir: store.themesDirURL))
+        _catalog = StateObject(wrappedValue: ThemeCatalog(userThemesDirs: store.themeSearchDirs))
     }
 
     private var currentTheme: String {

@@ -146,4 +146,44 @@ struct GuiConfigStoreTests {
         #expect(GuiConfigStore.buildSuffix(forBundleID: "com.ipetinate.Phantom") == nil)
         #expect(GuiConfigStore.buildSuffix(forBundleID: "") == nil)
     }
+
+    // MARK: What a second build may read, and where it writes
+
+    /// The release build has one directory and reads it. Nothing to fall back
+    /// to, and no duplicate of itself in the list.
+    @Test func theReleaseBuildReadsOneThemeDirectory() {
+        let store = GuiConfigStore(configDir: GuiConfigStore.sharedConfigDir())
+        #expect(store.themeSearchDirs == [store.themesDirURL])
+    }
+
+    /// A second build reads its own first and the reader's after. This is the
+    /// defect it was written for: only the config files are copied when a
+    /// build makes its own directory, so its `themes` starts empty and the
+    /// reader's own theme vanished from Appearance along with its section.
+    @Test func asecondBuildFallsBackToTheReadersThemes() {
+        let own = GuiConfigStore.sharedConfigDir()
+            .deletingLastPathComponent()
+            .appendingPathComponent("phantom-debug", isDirectory: true)
+        let store = GuiConfigStore(configDir: own)
+
+        let dirs = store.themeSearchDirs
+        #expect(dirs.count == 2)
+        #expect(dirs.first == store.themesDirURL)
+        #expect(dirs.last == GuiConfigStore.sharedConfigDir()
+            .appendingPathComponent("themes", isDirectory: true))
+    }
+
+    /// And it still writes into its own. Reading the reader's configuration is
+    /// what makes a second build usable; writing to it is the thing the
+    /// separate directory exists to prevent.
+    @Test func asecondBuildStillWritesIntoItsOwn() {
+        let own = GuiConfigStore.sharedConfigDir()
+            .deletingLastPathComponent()
+            .appendingPathComponent("phantom-debug", isDirectory: true)
+        let store = GuiConfigStore(configDir: own)
+
+        #expect(store.themesDirURL.path.hasPrefix(own.path))
+        #expect(store.themesDirURL != GuiConfigStore.sharedConfigDir()
+            .appendingPathComponent("themes", isDirectory: true))
+    }
 }
