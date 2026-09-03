@@ -356,13 +356,13 @@ enum CodeTagClose {
     ///
     /// `.jsx` is markup-*bearing*, not markup: a `.tsx` file is JavaScript
     /// with tags in its expressions, and every line of it lexes as
-    /// JavaScript. Only `.html` and an SFC's template answer yes — which is
-    /// why this is not the same predicate as `Scan.isInRawText`, which is
-    /// true in a `.tsx` file because tags can be closed there.
+    /// JavaScript. Only `.html`, `.xml` and an SFC's template answer yes —
+    /// which is why this is not the same predicate as `Scan.isInRawText`,
+    /// which is true in a `.tsx` file because tags can be closed there.
     static func isInMarkup(_ text: NSString, caret: Int, dialect: CodeTagDialect) -> Bool {
         switch dialect {
         case .none, .jsx: return false
-        case .html: return true
+        case .html, .xml: return true
         case .sfc: return isOutsideScriptAndStyleBlocks(text, caret: caret)
         }
     }
@@ -418,6 +418,10 @@ enum CodeTagClose {
     /// Elements HTML parses as void: no closing tag exists for them, so
     /// offering one writes markup the parser will reject.
     ///
+    /// Consulted only where `CodeTagDialect.parsesVoidElements` says it
+    /// applies. XML has no such list, and every name on this one is somebody's
+    /// element there.
+    ///
     /// The thirteen the current HTML spec lists, plus `param` — removed from
     /// the spec but still parsed as void for legacy content, so `</param>`
     /// would be wrong in exactly the files that still contain it.
@@ -446,6 +450,7 @@ enum CodeTagClose {
     )
 
     private static func isVoid(_ name: NSRange, in text: NSString, dialect: CodeTagDialect) -> Bool {
+        guard dialect.parsesVoidElements else { return false }
         guard (2...6).contains(name.length) else { return false }
 
         var key: UInt64 = 0

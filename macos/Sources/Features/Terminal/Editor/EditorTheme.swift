@@ -115,6 +115,17 @@ enum EditorSettings {
     static let closesQuotesKey = "EditorClosesQuotes"
     static let closesTagsKey = "EditorClosesTags"
 
+    /// Whether a closed opening tag also opens the element for typing: the
+    /// closing tag on its own line, the caret indented between the two.
+    ///
+    /// A fourth key rather than a second meaning for `closesTagsKey`, on the
+    /// reasoning stated above: somebody writing inline markup wants
+    /// `<div></div>` on one line, somebody writing a document wants the
+    /// three-line shape, and neither should have to switch closing tags off
+    /// to escape the other. On by default — it is the shape every editor
+    /// with this feature produces.
+    static let expandsTagsKey = "EditorExpandsTags"
+
     /// Tidy the file with the project's formatter when it is saved.
     ///
     /// Off by default. Formatting on save is a preference people hold

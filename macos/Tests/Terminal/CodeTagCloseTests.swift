@@ -38,8 +38,16 @@ struct CodeTagCloseTests {
     /// The dialect table, row by row — each one a judgement someone may
     /// want to revise on its own.
     @Test func markupExtensionsResolveToHTML() {
-        for name in ["page.html", "page.htm", "feed.xml", "logo.svg"] {
+        for name in ["page.html", "page.htm"] {
             #expect(CodeTagDialect.resolve(fileName: name) == .html, "\(name)")
+        }
+    }
+
+    /// XML is its own row for one fact: it has no void elements, so `<link>`
+    /// there opens an element that HTML would refuse to close. SVG is XML.
+    @Test func xmlExtensionsResolveToXML() {
+        for name in ["feed.xml", "logo.svg"] {
+            #expect(CodeTagDialect.resolve(fileName: name) == .xml, "\(name)")
         }
     }
 
@@ -192,6 +200,28 @@ struct CodeTagCloseTests {
         #expect(closing("<img src=\"a.png\">", .html) == nil)
         #expect(closing("<input type=\"text\">", .jsx) == nil)
         #expect(closing("<hr>", .jsx) == nil)
+    }
+
+    /// XML has no void element set at all: every name on HTML's list is
+    /// somebody's element there, and refusing to close it writes a document
+    /// no parser accepts.
+    @Test func xmlClosesTheNamesHTMLCallsVoid() {
+        #expect(closing("<link>", .xml) == "</link>")
+        #expect(closing("<source src=\"a.mp4\">", .xml) == "</source>")
+        #expect(closing("<br>", .xml) == "</br>")
+
+        #expect(closing("<link>", .html) == nil)
+    }
+
+    @Test func xmlPutsThoseNamesOnTheStack() {
+        #expect(stackNames("<ul><br><li>", .xml) == ["ul", "br", "li"])
+    }
+
+    /// And XML names are case sensitive, which is every dialect's rule but
+    /// HTML's.
+    @Test func xmlMatchesNamesWithRegardToCase() {
+        #expect(stackNames("<Item></item>", .xml) == ["Item"])
+        #expect(stackNames("<Item></Item>", .xml).isEmpty)
     }
 
     /// A rule, not an accident: in JSX lowercase means DOM element and a
@@ -403,6 +433,7 @@ struct CodeTagCloseTests {
     @Test func onlyMarkupFirstDialectsAreMarkup() {
         let text = "<div>x" as NSString
         #expect(CodeTagClose.isInMarkup(text, caret: text.length, dialect: .html) == true)
+        #expect(CodeTagClose.isInMarkup(text, caret: text.length, dialect: .xml) == true)
         #expect(CodeTagClose.isInMarkup(text, caret: text.length, dialect: .jsx) == false)
         #expect(CodeTagClose.isInMarkup(text, caret: text.length, dialect: CodeTagDialect.none) == false)
 

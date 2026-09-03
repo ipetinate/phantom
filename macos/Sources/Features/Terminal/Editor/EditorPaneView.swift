@@ -398,6 +398,7 @@ private struct DocumentView: View {
 
     @AppStorage(EditorSettings.usesPrettierKey) private var usesPrettier = true
     @AppStorage(EditorSettings.markdownSnippetsKey) private var markdownSnippets = true
+    @AppStorage(EditorSettings.expandsTagsKey) private var expandsTags = true
     @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
 
     /// Read here as well as inside `MarkdownWidthToggle`, which is what keeps
@@ -839,6 +840,10 @@ private struct DocumentView: View {
             /// are the same `CodeLanguage`, and a tag closed in `.ts` is
             /// always wrong because a `<` there can only be a generic.
             tagDialect: CodeTagDialect.resolve(fileName: document.url.lastPathComponent),
+            /// Beside the dialect rather than inside the configuration,
+            /// because it is read on the keystroke that types a `>` and not
+            /// on the pass that decides how the text is drawn.
+            expandsTags: expandsTags,
             /// Asked of the running servers rather than of the file name: it
             /// is true only while something is attached that can answer inside
             /// a `class` attribute, and it turns back off by itself when that
