@@ -123,7 +123,10 @@ enum GitDiffLoader {
         let result = GitCommand.run(arguments, in: root)
         guard result.succeeded else { return .failed(failure(from: result)) }
 
-        return outcome(for: result.stdout, path: path)
+        return outcome(for: result.stdout, path: path) { file in
+            guard GitDiffHighlight.needsWholeFile(file) else { return .none }
+            return wholeFile(of: file, side: side, in: root)
+        }
     }
 
     /// The diff for a file git has never seen.
@@ -199,7 +202,14 @@ enum GitDiffLoader {
         }
     }
 
-    private static func outcome(for output: String, path: String) -> GitDiffOutcome {
+    /// - Parameter source: asked for the parsed diff, and only once there is
+    ///   one. It runs `git` again, so a diff that turns out to be unchanged,
+    ///   conflicted or too large must not pay for it.
+    private static func outcome(
+        for output: String,
+        path: String,
+        source: (GitFileDiff) -> GitDiffSource = { _ in .none }
+    ) -> GitDiffOutcome {
         /// `git diff --cached` on a conflicted path prints this one line and
         /// no diff at all.
         if output.hasPrefix("* Unmerged path") { return .conflicted }
@@ -211,7 +221,77 @@ enum GitDiffLoader {
         guard let file = match(path, in: files) else { return .unchanged }
         if file.isCombined { return .conflicted }
 
-        return .diff(GitDiffDocument(file: file))
+        return .diff(GitDiffDocument(file: file, source: source(file)))
+    }
+
+    // MARK: The versions themselves
+
+    /// Both versions of a file, for a highlighter that cannot work from the
+    /// hunks alone — argued in full on ``GitDiffHighlight``.
+    ///
+    /// Nil on either side rather than an error: a version that cannot be read
+    /// is a column that colours the way it did before, which is the same
+    /// degradation the text budget already has.
+    static func wholeFile(
+        of file: GitFileDiff,
+        side: GitDiffSide,
+        in root: String
+    ) -> GitDiffSource {
+        guard let revisions = revisions(for: side, in: root) else { return .none }
+        return GitDiffSource(
+            old: blob(revisions.old, at: file.previousPath ?? file.path, in: root),
+            new: blob(revisions.new, at: file.path, in: root)
+        )
+    }
+
+    /// The two versions a side compares, named the way `git show` can ask for
+    /// them.
+    ///
+    /// `nil` for the new side of a working-tree diff, which is the file on
+    /// disk and not an object in the repository at all — git prints a hash for
+    /// it in the diff header, and that hash names nothing `git cat-file` can
+    /// find.
+    ///
+    /// Nil for the whole answer where a side names no revision this can
+    /// resolve. The three-dot range compares against the merge base, so that
+    /// is the version the old column's line numbers belong to, and `git show`
+    /// cannot be handed the range — it is resolved here, and a base that is
+    /// not a revision at all comes back as no source rather than as the wrong
+    /// one.
+    static func revisions(for side: GitDiffSide, in root: String) -> (old: String, new: String?)? {
+        switch side {
+        case .unstaged:
+            return (old: ":0", new: nil)
+        case .staged:
+            return (old: "HEAD", new: ":0")
+        case .branch(let base):
+            guard let merged = GitCommand.output(["merge-base", base, "HEAD"], in: root)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                !merged.isEmpty
+            else { return nil }
+            return (old: merged, new: "HEAD")
+        }
+    }
+
+    /// One version of a file, or nil for a version the highlighter would
+    /// refuse anyway.
+    ///
+    /// The budget is checked here as well as where it is spent, so a minified
+    /// bundle is not carried through the document to be dropped at the far
+    /// end.
+    private static func blob(_ revision: String?, at path: String, in root: String) -> String? {
+        let text: String?
+        if let revision {
+            text = GitCommand.output(["show", "\(revision):\(path)"], in: root)
+        } else {
+            let file = (root as NSString).appendingPathComponent(path)
+            text = try? String(contentsOfFile: file, encoding: .utf8)
+        }
+
+        guard let text, !text.isEmpty, text.utf16.count <= GitDiffHighlight.textBudget else {
+            return nil
+        }
+        return text
     }
 
     /// Picks the file the caller asked about.

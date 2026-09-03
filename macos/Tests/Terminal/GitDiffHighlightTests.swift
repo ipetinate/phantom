@@ -179,3 +179,234 @@ struct GitDiffHighlightTests {
         #expect(document.highlight.spans(forRow: count - 1, side: .right).isEmpty)
     }
 }
+
+/// Colouring a fragment of a document made of blocks.
+///
+/// `SFCRegions` finds a `.vue` file's blocks by their tags, so a hunk from
+/// the middle of one has nothing to say which block it is in: it matched no
+/// region and lexed to nothing, and the card drew flat text until the reader
+/// expanded the file far enough to pull a tag into the fragment. The whole
+/// version of the file answers instead, mapped on by line number.
+struct GitDiffWholeFileHighlightTests {
+    /// Sixteen lines, and the change is on the fifth — four lines below the
+    /// `<script>` tag and one above `</script>`, so a two-line hunk carries
+    /// neither.
+    private let component = """
+    <script setup lang="ts">
+    import { ref } from 'vue';
+
+    const searchTerm = ref('');
+    const total = 1;
+    </script>
+
+    <template>
+      <div class="filters">{{ total }}</div>
+    </template>
+
+    <style scoped lang="scss">
+    .filters {
+      display: flex;
+    }
+    </style>
+    """
+
+    private var updated: String {
+        component.replacingOccurrences(of: "const total = 1;", with: "const total = 2;")
+    }
+
+    private let fragment = """
+    diff --git a/App.vue b/App.vue
+    --- a/App.vue
+    +++ b/App.vue
+    @@ -4,2 +4,2 @@
+     const searchTerm = ref('');
+    -const total = 1;
+    +const total = 2;
+    """
+
+    private func document(_ output: String, source: GitDiffSource = .none) throws -> GitDiffDocument {
+        GitDiffDocument(
+            file: try #require(GitDiffParser.parse(unified: output).first),
+            source: source)
+    }
+
+    private func drawn(_ span: GitDiffHighlight.Span, of line: GitDiffLine?) throws -> String {
+        (try #require(line).displayText as NSString).substring(with: span.range)
+    }
+
+    /// **The defect, pinned.** The fragment carries no block tag, so the diff
+    /// alone cannot say it is script.
+    @Test func theFragmentHasNoColourFromTheDiffAlone() throws {
+        let document = try document(fragment)
+        let row = try #require(document.rows.first { $0.left?.kind == .removed })
+
+        #expect(document.highlight.spans(forRow: row.id, side: .left).isEmpty)
+        #expect(document.highlight.spans(forRow: row.id, side: .right).isEmpty)
+    }
+
+    @Test func theWholeFileColoursTheSameFragment() throws {
+        let document = try document(
+            fragment,
+            source: GitDiffSource(old: component, new: updated))
+        let row = try #require(document.rows.first { $0.left?.kind == .removed })
+
+        let left = document.highlight.spans(forRow: row.id, side: .left)
+        let right = document.highlight.spans(forRow: row.id, side: .right)
+
+        #expect(left.map(\.kind) == [.keyword, .number])
+        #expect(right.map(\.kind) == [.keyword, .number])
+        #expect(try left.map { try drawn($0, of: row.left) } == ["const", "1"])
+        #expect(try right.map { try drawn($0, of: row.right) } == ["const", "2"])
+    }
+
+    /// The context lines too — they are most of a fragment, and they are the
+    /// lines the reader has to read the change against.
+    @Test func theContextLinesAreColouredAsWell() throws {
+        let document = try document(
+            fragment,
+            source: GitDiffSource(old: component, new: updated))
+        let row = try #require(document.rows.first { $0.left?.kind == .context })
+
+        let kinds = document.highlight.spans(forRow: row.id, side: .right).map(\.kind)
+        #expect(kinds.contains(.keyword))
+        #expect(kinds.contains(.function))
+    }
+
+    /// One side read and the other not is an ordinary state — a rename whose
+    /// old name is gone, a base that could not be resolved — and the side
+    /// with nothing falls back rather than taking the other's answer.
+    @Test func oneSideWithNoVersionLeavesTheOtherAlone() throws {
+        let document = try document(fragment, source: GitDiffSource(old: nil, new: updated))
+        let row = try #require(document.rows.first { $0.left?.kind == .removed })
+
+        #expect(document.highlight.spans(forRow: row.id, side: .left).isEmpty)
+        #expect(document.highlight.spans(forRow: row.id, side: .right).map(\.kind) == [.keyword, .number])
+    }
+
+    /// A version that is not the one the diff was taken against maps onto
+    /// nothing, and the diff's own text answers instead. Colouring a line
+    /// from the wrong file is the failure this refuses.
+    @Test func aVersionThatDoesNotMatchIsDiscarded() throws {
+        let document = try document(
+            fragment,
+            source: GitDiffSource(old: "something else\n", new: "something else\n"))
+        let row = try #require(document.rows.first { $0.left?.kind == .removed })
+
+        #expect(document.highlight.spans(forRow: row.id, side: .right).isEmpty)
+    }
+
+    /// The fallback, with a version in hand: a file this build cannot lex
+    /// draws plain whatever else is known about it.
+    @Test func aLanguageWithNoRulesIsStillPlain() throws {
+        let output = """
+        diff --git a/data.bin b/data.bin
+        --- a/data.bin
+        +++ b/data.bin
+        @@ -4,2 +4,2 @@
+         const searchTerm = ref('');
+        -const total = 1;
+        +const total = 2;
+        """
+        let document = try document(output, source: GitDiffSource(old: component, new: updated))
+        let row = try #require(document.rows.first { $0.left?.kind == .removed })
+
+        #expect(document.highlight.spans(forRow: row.id, side: .left).isEmpty)
+        #expect(document.highlight.spans(forRow: row.id, side: .right).isEmpty)
+    }
+
+    /// A tag inside the fragment is not a second answer: the whole file is
+    /// still the one being lexed, and the tag keeps the tokens it has in the
+    /// editor.
+    @Test func aTagInsideTheFragmentIsStillTakenApart() throws {
+        let output = """
+        diff --git a/App.vue b/App.vue
+        --- a/App.vue
+        +++ b/App.vue
+        @@ -1,2 +1,2 @@
+         <script setup lang="ts">
+        -import { ref } from 'vue';
+        +import { ref, computed } from 'vue';
+        """
+        let source = component.replacingOccurrences(
+            of: "import { ref } from 'vue';",
+            with: "import { ref, computed } from 'vue';")
+        let document = try document(output, source: GitDiffSource(old: component, new: source))
+        let row = try #require(document.rows.first { $0.left?.kind == .context })
+
+        let spans = document.highlight.spans(forRow: row.id, side: .right)
+        #expect(spans.map(\.kind) == [.punctuation, .keyword, .attribute, .attribute, .punctuation, .string, .punctuation])
+        #expect(try spans.map { try drawn($0, of: row.right) }
+            == ["<", "script", "setup", "lang", "=", "\"ts\"", ">"])
+    }
+}
+
+/// Which diffs pay for reading both versions of their file.
+struct GitDiffWholeFileNeedTests {
+    private func file(_ output: String) throws -> GitFileDiff {
+        try #require(GitDiffParser.parse(unified: output).first)
+    }
+
+    private func diff(_ path: String) -> String {
+        """
+        diff --git a/\(path) b/\(path)
+        --- a/\(path)
+        +++ b/\(path)
+        @@ -4,1 +4,1 @@
+        -const total = 1;
+        +const total = 2;
+        """
+    }
+
+    @Test func aChangedComponentAsksForIt() throws {
+        #expect(GitDiffHighlight.needsWholeFile(try file(diff("App.vue"))))
+        #expect(GitDiffHighlight.needsWholeFile(try file(diff("page.html"))))
+    }
+
+    /// A language that is one language needs nothing but the hunks: its rules
+    /// do not depend on where in the file a line sits.
+    @Test func aLanguageThatIsOnlyItselfDoesNot() throws {
+        #expect(!GitDiffHighlight.needsWholeFile(try file(diff("src/total.ts"))))
+        #expect(!GitDiffHighlight.needsWholeFile(try file(diff("assets/data.bin"))))
+    }
+
+    /// A file arriving or leaving already has every line of itself in the
+    /// hunks, and a branch of new work is mostly made of those.
+    @Test func aWholeFileArrivingOrLeavingDoesNot() throws {
+        let added = """
+        diff --git a/App.vue b/App.vue
+        new file mode 100644
+        --- /dev/null
+        +++ b/App.vue
+        @@ -0,0 +1,1 @@
+        +const total = 1;
+        """
+        let deleted = """
+        diff --git a/App.vue b/App.vue
+        deleted file mode 100644
+        --- a/App.vue
+        +++ /dev/null
+        @@ -1,1 +0,0 @@
+        -const total = 1;
+        """
+        #expect(!GitDiffHighlight.needsWholeFile(try file(added)))
+        #expect(!GitDiffHighlight.needsWholeFile(try file(deleted)))
+    }
+}
+
+/// Which two versions each side of a diff compares, named for `git show`.
+struct GitDiffRevisionTests {
+    /// The new side of a working-tree diff is the file on disk. Git prints a
+    /// hash for it in the diff header and that hash names no object — so nil
+    /// here means "read the file", not "give up".
+    @Test func aWorkingTreeDiffComparesTheIndexAgainstTheDisk() {
+        let revisions = GitDiffLoader.revisions(for: .unstaged, in: "/")
+        #expect(revisions?.old == ":0")
+        #expect(revisions?.new == nil)
+    }
+
+    @Test func aStagedDiffComparesTheCommitAgainstTheIndex() {
+        let revisions = GitDiffLoader.revisions(for: .staged, in: "/")
+        #expect(revisions?.old == "HEAD")
+        #expect(revisions?.new == ":0")
+    }
+}

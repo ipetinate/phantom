@@ -1,5 +1,22 @@
 import Foundation
 
+/// The whole version of a file on each side of a diff, for the colouring
+/// pass that cannot work from the hunks alone.
+///
+/// Nil rather than empty for a side that could not be read: an empty string
+/// is a file with no lines, and every row would map onto nothing.
+struct GitDiffSource: Equatable {
+    /// The old version, matching the diff's left column line for line.
+    let old: String?
+
+    /// The new version, matching its right column.
+    let new: String?
+
+    /// What every diff got before there was a source, and what the ones that
+    /// do not need one still get.
+    static let none = GitDiffSource(old: nil, new: nil)
+}
+
 /// The syntax colouring for a diff's two sides, worked out once when the
 /// document is built.
 ///
@@ -24,6 +41,18 @@ import Foundation
 /// context git left out is missing from it. That costs colour where a
 /// construct opened in a hidden line — the whole file is one button away in
 /// the row above, and it is the editor's job.
+///
+/// **Except for a document made of blocks, where the missing context is not
+/// a shade of colour but all of it.** ``SFCRegions`` finds a `.vue` file's
+/// `<script>`, `<template>` and `<style>` by their tags, so a hunk from the
+/// middle of one carries nothing to say which block it is in: it falls
+/// outside every region and lexes to nothing, and the card drew flat text
+/// until the reader expanded the file far enough to bring a tag into the
+/// fragment. Guessing `.javascript` for a tagless fragment is the wrong
+/// answer and `SFCRegions` says why — the same bytes are a keyword in one
+/// block and an attribute in another. So the whole version of the file is
+/// lexed instead and its tokens are mapped onto the diff's lines by line
+/// number. ``needsWholeFile(_:)`` names the files that pay for it.
 struct GitDiffHighlight: Equatable {
     /// One coloured run inside a single line, in UTF-16 offsets from the
     /// start of that line's `displayText`.
@@ -61,11 +90,43 @@ struct GitDiffHighlight: Equatable {
     ///   — `api.js` renamed to `api.ts` is one diff whose columns are two
     ///   different languages — and the left column is the old file, so it is
     ///   lexed by the name the old file had.
-    static func make(for rows: [GitDiffRow], file: GitFileDiff) -> GitDiffHighlight {
+    /// - Parameter source: the whole version of each side, when the loader
+    ///   read it. A side with none is lexed from the diff's own text, which
+    ///   is what every side was lexed from before.
+    static func make(
+        for rows: [GitDiffRow],
+        file: GitFileDiff,
+        source: GitDiffSource = .none
+    ) -> GitDiffHighlight {
         GitDiffHighlight(
-            left: spans(in: rows, side: .left, path: file.previousPath ?? file.path),
-            right: spans(in: rows, side: .right, path: file.path)
+            left: spans(
+                in: rows,
+                side: .left,
+                path: file.previousPath ?? file.path,
+                whole: source.old),
+            right: spans(in: rows, side: .right, path: file.path, whole: source.new)
         )
+    }
+
+    /// Whether the diff's own text is enough to lex this file, or whether the
+    /// loader has to read both versions of it.
+    ///
+    /// True only for a document made of blocks — `.vue` and `.html`, the two
+    /// ``SFCRegions/Container`` cases — and only where the diff is a change
+    /// rather than a whole file arriving or leaving. A file added or deleted
+    /// has every one of its lines in the hunks already, which is the case a
+    /// branch of new work is mostly made of.
+    ///
+    /// **The cost is two `git show` calls, on a card the reader opened.** A
+    /// review holds up to 449 files and loads a diff only when its card
+    /// expands, so this is paid per opened `.vue`, off the main actor, in the
+    /// same background task that already ran `git diff` and `git log` for
+    /// that row.
+    static func needsWholeFile(_ file: GitFileDiff) -> Bool {
+        guard file.status != .added, file.status != .deleted else { return false }
+        return [file.previousPath ?? file.path, file.path].contains {
+            SFCRegions.container(of: language(forPath: $0)) != nil
+        }
     }
 
     /// The language a path is drawn in.
@@ -80,11 +141,28 @@ struct GitDiffHighlight: Equatable {
     private static func spans(
         in rows: [GitDiffRow],
         side: GitDiffPaneSide,
-        path: String
+        path: String,
+        whole: String?
     ) -> [[Span]] {
         let language = language(forPath: path)
         guard language != .plain else { return [] }
 
+        if let whole, !whole.isEmpty, (whole as NSString).length <= textBudget {
+            let mapped = spans(in: rows, side: side, language: language, whole: whole)
+            /// Empty means the mapping failed rather than that the file has
+            /// no tokens — a blob that is not the version the diff was taken
+            /// against. The diff's own text is still an answer.
+            if !mapped.isEmpty { return mapped }
+        }
+
+        return spans(in: rows, side: side, language: language)
+    }
+
+    private static func spans(
+        in rows: [GitDiffRow],
+        side: GitDiffPaneSide,
+        language: CodeLanguage
+    ) -> [[Span]] {
         let joined = join(rows, side: side)
         guard !joined.lines.isEmpty else { return [] }
 
@@ -95,6 +173,59 @@ struct GitDiffHighlight: Equatable {
         )
         for token in tokens {
             distribute(token, over: joined.lines, into: &spans)
+        }
+        return spans
+    }
+
+    /// The spans of a diff's lines, read off the whole version of the file.
+    ///
+    /// Line numbers do the mapping, which is what makes it exact: the numbers
+    /// in the diff's own gutter *are* line numbers in this text, so nothing
+    /// has to match one string against another to find out where a hunk sits.
+    ///
+    /// A line whose length disagrees with the row's is dropped rather than
+    /// painted. That means the text is not the version the diff was taken
+    /// against — a working tree edited between the two commands — and half a
+    /// line coloured from one file and half from another reads worse than no
+    /// colour at all.
+    private static func spans(
+        in rows: [GitDiffRow],
+        side: GitDiffPaneSide,
+        language: CodeLanguage,
+        whole text: String
+    ) -> [[Span]] {
+        var rowByNumber: [Int: (id: Int, length: Int)] = [:]
+        for row in rows {
+            guard let line = side == .left ? row.left : row.right else { continue }
+            guard let number = side == .left ? line.oldNumber : line.newNumber else { continue }
+            rowByNumber[number] = (id: row.id, length: line.displayText.utf16.count)
+        }
+        guard !rowByNumber.isEmpty else { return [] }
+
+        let ns = text as NSString
+        var lines: [Line] = []
+        var number = 0
+        /// `byLines` and not a split on `\n`, for the reason the spans are
+        /// measured on `displayText`: the range it reports excludes the line
+        /// terminator, so a CRLF file's lines are already the strings the
+        /// pane draws.
+        ns.enumerateSubstrings(
+            in: NSRange(location: 0, length: ns.length),
+            options: [.byLines, .substringNotRequired]
+        ) { _, range, _, _ in
+            number += 1
+            guard let row = rowByNumber[number], row.length == range.length else { return }
+            lines.append(Line(rowID: row.id, range: range))
+        }
+        guard !lines.isEmpty else { return [] }
+
+        var spans = [[Span]](repeating: [], count: rows.count)
+        let tokens = SyntaxHighlighter(language: language).tokens(
+            in: text,
+            range: NSRange(location: 0, length: ns.length)
+        )
+        for token in tokens {
+            distribute(token, over: lines, into: &spans)
         }
         return spans
     }
