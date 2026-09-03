@@ -1709,6 +1709,13 @@ pub const CAPI = struct {
         return surface.core_surface.getProcessInfo(.foreground_pid) orelse 0;
     }
 
+    /// Whether the surface is showing the alternate screen, which is how a
+    /// full-screen program (an editor, a pager) is told apart from a command
+    /// that prints and exits.
+    export fn ghostty_surface_alternate_screen(surface: *Surface) bool {
+        return surface.core_surface.isAlternateScreen();
+    }
+
     /// Returns the PTY name for the surface. The returned string must be
     /// freed by the caller via ghostty_string_free.
     export fn ghostty_surface_tty_name(surface: *Surface) String {

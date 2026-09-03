@@ -354,6 +354,14 @@ pub const Action = union(Key) {
     /// Move a tab to a new window.
     move_tab_to_new_window,
 
+    /// A command has started.
+    ///
+    /// The paired report to `command_finished`, from the same OSC 133
+    /// sequence. An apprt that draws anything about a running command needs
+    /// the start as an event too: the finish alone can only be reported
+    /// after the fact.
+    command_started,
+
     /// Sync with: ghostty_action_tag_e
     pub const Key = enum(c_int) {
         quit,
@@ -424,6 +432,7 @@ pub const Action = union(Key) {
         readonly,
         copy_title_to_clipboard,
         move_tab_to_new_window,
+        command_started,
 
         test "ghostty.h Action.Key" {
             try lib.checkGhosttyHEnum(Key, "GHOSTTY_ACTION_");

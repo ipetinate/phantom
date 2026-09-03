@@ -3,21 +3,26 @@ import Foundation
 import Testing
 
 /// The inferred half of the tab-state vocabulary: what a row says about a
-/// command that reports nothing about itself.
+/// command that no agent hook reports.
 ///
 /// Every case here is a transition, which is why the rule is a pure function
 /// in the first place. A wrong transition does not look wrong in a screenshot
 /// of a working row — it shows up as a spinner that never stops on a tab
-/// running a dev server, or as a dot for a command that never ran.
+/// running an editor, or as a dot for a command that never ran.
 struct CommandRunRuleTests {
     private let start = Date(timeIntervalSince1970: 1_000_000)
 
-    /// One turn of `SidebarTabManager`'s metadata poll, which is the only
-    /// thing that observes a foreground process.
-    private var tick: TimeInterval { CommandRunRule.minimumDuration }
+    /// One turn of `SidebarTabManager`'s metadata poll, which is all the
+    /// resolution a tab without shell integration has.
+    private var pollTick: TimeInterval { CommandRunRule.pollMinimumDuration }
+
+    /// The wait after a reported start, which a full-screen program is
+    /// expected to spend reaching the alternate screen.
+    private var shellWait: TimeInterval { CommandRunRule.shellMinimumDuration }
 
     private func facts(
-        _ foreground: CommandRunRule.Foreground,
+        _ foreground: CommandRunRule.Foreground = .unknown,
+        alternateScreen: Bool = false,
         agentState: Bool = false,
         liveAgent: Bool = false,
         devServerPort: Bool = false,
@@ -25,6 +30,7 @@ struct CommandRunRuleTests {
     ) -> CommandRunRule.Facts {
         CommandRunRule.Facts(
             foreground: foreground,
+            isAlternateScreen: alternateScreen,
             hasAgentState: agentState,
             hasLiveAgent: liveAgent,
             hasDevServerPort: devServerPort,
@@ -32,37 +38,193 @@ struct CommandRunRuleTests {
         )
     }
 
-    /// The whole feature, in the order it happens: a `brew install` starts in
-    /// a tab nobody is looking at, spins while it runs, and leaves a dot.
-    @Test func aCommandStartsAndStops() {
-        var phase = CommandRunRule.next(after: nil, facts: facts(.command), now: start)
-        #expect(phase == .pending(since: start))
-        #expect(phase?.mark == nil)
-
-        phase = CommandRunRule.next(after: phase, facts: facts(.command), now: start + tick)
-        #expect(phase == .running)
-        #expect(phase?.mark == .running)
-
-        phase = CommandRunRule.next(after: phase, facts: facts(.shell), now: start + 2 * tick)
-        #expect(phase == .finished)
-        #expect(phase?.mark == .finished)
+    private func next(
+        _ previous: CommandRun?,
+        _ signal: CommandRunRule.Signal,
+        _ facts: CommandRunRule.Facts,
+        at now: Date
+    ) -> CommandRun? {
+        CommandRunRule.next(after: previous, signal: signal, facts: facts, now: now)
     }
 
-    /// The minimum duration, from both sides. A command has to still be there
-    /// a full poll later to earn a spinner, so nothing that finishes inside
-    /// one tick can flash — and a refresh landing between two polls (a window
-    /// becoming key) does not promote it early.
-    @Test func aCommandShorterThanOnePollDrawsNothing() {
-        let seen = CommandRunRule.next(after: nil, facts: facts(.command), now: start)
+    /// A reported command that outlives the wait, from start to result. The
+    /// whole point of the shell's report: the spinner is up a second in, not
+    /// a poll in, and the dot does not need the foreground process to agree.
+    @Test func aReportedCommandStartsAndStops() {
+        var run = next(nil, .shellStarted, facts(), at: start)
+        #expect(run?.phase == .pending(since: start))
+        #expect(run?.mark == nil)
+        #expect(run?.isShellReported == true)
 
-        let early = CommandRunRule.next(
-            after: seen, facts: facts(.command), now: start + tick - 1
+        run = next(run, .tick, facts(), at: start + shellWait)
+        #expect(run?.phase == .running)
+        #expect(run?.mark == .running)
+
+        run = next(
+            run,
+            .shellFinished(exitCode: 0, duration: 1.9),
+            facts(.shell),
+            at: start + 1.9
         )
-        #expect(early == .pending(since: start))
-        #expect(early?.mark == nil)
+        #expect(run?.phase == .finished)
+        #expect(run?.mark == .finished)
+    }
 
-        let gone = CommandRunRule.next(after: seen, facts: facts(.shell), now: start + 1)
-        #expect(gone == nil)
+    /// The exit code, which only the shell can report. A non-zero one is the
+    /// red mark, and it is kept on a tab the reader is looking at — the agent
+    /// states treat `failed` the same way, while a `done` they watched is not
+    /// news.
+    @Test func aFailedCommandShowsItsExitCode() {
+        let run = next(
+            .init(phase: .running, isShellReported: true),
+            .shellFinished(exitCode: 1, duration: 12),
+            facts(.shell),
+            at: start
+        )
+        #expect(run?.phase == .failed(exitCode: 1))
+        #expect(run?.mark == .failed(exitCode: 1))
+
+        let watched = next(
+            .init(phase: .running, isShellReported: true),
+            .shellFinished(exitCode: 130, duration: 0.2),
+            facts(.shell, selected: true),
+            at: start
+        )
+        #expect(watched?.mark == .failed(exitCode: 130))
+    }
+
+    /// A shell that reports no exit code is not a shell reporting zero. The
+    /// difference is the whole reason the signal carries an optional.
+    @Test func anUnreportedExitCodeIsNotAFailure() {
+        let run = next(
+            .init(phase: .running, isShellReported: true),
+            .shellFinished(exitCode: nil, duration: 12),
+            facts(.shell),
+            at: start
+        )
+        #expect(run?.phase == .finished)
+    }
+
+    /// The minimum duration, on the reported path. A command that ends inside
+    /// the wait was never drawn, so nothing about it appears or disappears —
+    /// and the duration comes from the shell rather than from how many ticks
+    /// happened to land.
+    @Test func aReportedCommandUnderTheWaitDrawsNothing() {
+        let started = next(nil, .shellStarted, facts(), at: start)
+        let early = next(started, .tick, facts(), at: start + shellWait - 0.5)
+        #expect(early?.phase == .pending(since: start))
+
+        let run = next(
+            started,
+            .shellFinished(exitCode: 0, duration: 0.3),
+            facts(.shell),
+            at: start + 0.3
+        )
+        #expect(run?.mark == nil)
+        #expect(run?.isShellReported == true)
+    }
+
+    /// The reason the wait exists at all. A full-screen program reaches the
+    /// alternate screen inside it, so an editor draws nothing — not a spinner
+    /// that is taken away again — and its exit is not a result anybody was
+    /// waiting for.
+    @Test func aFullScreenProgramDrawsNothingAndLeavesNothing() {
+        let started = next(nil, .shellStarted, facts(), at: start)
+
+        let editor = next(started, .tick, facts(alternateScreen: true), at: start + shellWait)
+        #expect(editor?.phase == .interactive)
+        #expect(editor?.mark == nil)
+
+        let quit = next(
+            editor,
+            .shellFinished(exitCode: 0, duration: 900),
+            facts(.shell),
+            at: start + 900
+        )
+        #expect(quit?.mark == nil)
+    }
+
+    /// A pager that opens after the wait — `git log` handing off to `less` —
+    /// takes the spinner away rather than keeping it forever.
+    @Test func aProgramThatGoesFullScreenLateStopsTheSpinner() {
+        let run = next(
+            .init(phase: .running, isShellReported: true),
+            .tick,
+            facts(alternateScreen: true),
+            at: start
+        )
+        #expect(run?.phase == .interactive)
+    }
+
+    /// The tab a poll drives: no shell integration, so the foreground process
+    /// is all there is, at the resolution of the poll.
+    @Test func aPolledCommandStartsAndStops() {
+        var run = next(nil, .tick, facts(.command), at: start)
+        #expect(run?.phase == .pending(since: start))
+        #expect(run?.isShellReported == false)
+
+        run = next(run, .tick, facts(.command), at: start + pollTick)
+        #expect(run?.mark == .running)
+
+        run = next(run, .tick, facts(.shell), at: start + 2 * pollTick)
+        #expect(run?.mark == .finished)
+    }
+
+    /// The poll's own minimum duration, from both sides. A command has to
+    /// still be there a full poll later to earn a spinner, so nothing that
+    /// finishes inside one tick can flash — and a refresh landing between two
+    /// polls (a window becoming key) does not promote it early.
+    @Test func aPolledCommandShorterThanOnePollDrawsNothing() {
+        let seen = next(nil, .tick, facts(.command), at: start)
+
+        let early = next(seen, .tick, facts(.command), at: start + pollTick - 1)
+        #expect(early?.phase == .pending(since: start))
+
+        let gone = next(seen, .tick, facts(.shell), at: start + 1)
+        #expect(gone?.mark == nil)
+    }
+
+    /// The alternate screen answers for the polled tab too, and without
+    /// waiting: there is no start to wait from, so an editor is recognised on
+    /// the first tick that sees it.
+    @Test func aPolledFullScreenProgramDrawsNothing() {
+        let run = next(nil, .tick, facts(.command, alternateScreen: true), at: start)
+        #expect(run?.phase == .interactive)
+        #expect(run?.mark == nil)
+
+        let quit = next(run, .tick, facts(.shell), at: start + pollTick)
+        #expect(quit?.mark == nil)
+    }
+
+    /// The asymmetry that makes the two signals one feature: once a shell has
+    /// reported, a poll tick may change what is drawn but may not start or end
+    /// a run. A shell function or a builtin looks like a prompt to the poll
+    /// while the command is still running.
+    @Test func anEventWinsOverAPollTickThatDisagrees() {
+        let running = CommandRun(phase: .running, isShellReported: true)
+        #expect(next(running, .tick, facts(.shell), at: start)?.phase == .running)
+
+        let pending = CommandRun(phase: .pending(since: start), isShellReported: true)
+        #expect(
+            next(pending, .tick, facts(.shell), at: start + 0.1)?.phase
+                == .pending(since: start)
+        )
+
+        let finished = CommandRun(phase: .finished, isShellReported: true)
+        #expect(next(finished, .tick, facts(.command), at: start)?.phase == .finished)
+    }
+
+    /// The report is a property of the shell, not of one command, so the
+    /// latch survives everything that clears the marks.
+    @Test func theShellReportLatchSurvivesAClearedRow() {
+        let finished = CommandRun(phase: .finished, isShellReported: true)
+
+        let seen = next(finished, .tick, facts(.shell, selected: true), at: start)
+        #expect(seen?.mark == nil)
+        #expect(seen?.isShellReported == true)
+
+        let agent = next(finished, .tick, facts(.shell, liveAgent: true), at: start)
+        #expect(agent?.isShellReported == true)
     }
 
     /// The exclusion the reader asked for by name. A dev server holds its
@@ -70,49 +232,50 @@ struct CommandRunRuleTests {
     ///
     /// The second half is the one that would have been missed: the port is
     /// resolved by a scan that runs on its own interval, so it arrives *after*
-    /// the server is already the foreground process. A port appearing has to
-    /// clear the phase, not finish it — otherwise starting a dev server leaves
-    /// a dot behind for a command that never ended.
+    /// the server is already running. A port appearing has to clear the row,
+    /// not finish it — otherwise starting a dev server leaves a dot behind for
+    /// a command that never ended.
     @Test func aDevServerNeverSpins() {
-        #expect(CommandRunRule.next(
-            after: nil, facts: facts(.command, devServerPort: true), now: start
-        ) == nil)
+        #expect(next(nil, .tick, facts(.command, devServerPort: true), at: start) == nil)
 
-        let running = CommandRunRule.next(
-            after: CommandRunRule.next(after: nil, facts: facts(.command), now: start),
-            facts: facts(.command),
-            now: start + tick
+        let running = CommandRun(phase: .running, isShellReported: true)
+        let served = next(running, .tick, facts(.command, devServerPort: true), at: start)
+        #expect(served?.mark == nil)
+
+        let reportedStart = next(
+            running, .shellStarted, facts(.command, devServerPort: true), at: start
         )
-        #expect(running == .running)
-
-        #expect(CommandRunRule.next(
-            after: running,
-            facts: facts(.command, devServerPort: true),
-            now: start + 2 * tick
-        ) == nil)
+        #expect(reportedStart?.mark == nil)
     }
 
     /// An agent tab is not running "a command": its hooks own that row and
-    /// they report more than this rule can infer. Both readings of liveness
-    /// count — the state a hook wrote, and the record naming a live session,
-    /// which is the one that survives the idle stretch between turns.
+    /// they report more than this rule can. Both readings of liveness count —
+    /// the state a hook wrote, and the record naming a live session, which is
+    /// the one that survives the idle stretch between turns.
     @Test func anAgentTabIsLeftAlone() {
         let foregrounds: [CommandRunRule.Foreground] = [.command, .shell, .unknown]
-        let phases: [CommandRunPhase?] = [nil, .running, .finished, .pending(since: start)]
+        let phases: [CommandRun.Phase] = [
+            .running, .finished, .failed(exitCode: 1), .pending(since: start), .interactive,
+        ]
+        let signals: [CommandRunRule.Signal] = [
+            .tick, .shellStarted, .shellFinished(exitCode: 1, duration: 30),
+        ]
 
         for foreground in foregrounds {
-            for previous in phases {
-                #expect(CommandRunRule.next(
-                    after: previous,
-                    facts: facts(foreground, agentState: true),
-                    now: start
-                ) == nil)
+            for phase in phases {
+                for signal in signals {
+                    for reported in [true, false] {
+                        let previous = CommandRun(phase: phase, isShellReported: reported)
 
-                #expect(CommandRunRule.next(
-                    after: previous,
-                    facts: facts(foreground, liveAgent: true),
-                    now: start
-                ) == nil)
+                        #expect(next(
+                            previous, signal, facts(foreground, agentState: true), at: start
+                        )?.mark == nil)
+
+                        #expect(next(
+                            previous, signal, facts(foreground, liveAgent: true), at: start
+                        )?.mark == nil)
+                    }
+                }
             }
         }
     }
@@ -120,12 +283,10 @@ struct CommandRunRuleTests {
     /// A tab sitting at its prompt has finished nothing. Without this the
     /// whole sidebar would come up wearing dots on the first poll.
     @Test func aTabThatWasNeverRunningDoesNotBecomeDone() {
-        #expect(CommandRunRule.next(after: nil, facts: facts(.shell), now: start) == nil)
+        #expect(next(nil, .tick, facts(.shell), at: start) == nil)
 
-        let seen = CommandRunRule.next(after: nil, facts: facts(.command), now: start)
-        #expect(CommandRunRule.next(
-            after: seen, facts: facts(.shell), now: start + tick
-        ) == nil)
+        let seen = next(nil, .tick, facts(.command), at: start)
+        #expect(next(seen, .tick, facts(.shell), at: start + pollTick)?.mark == nil)
     }
 
     /// A dot is news, and a command the reader watched finish is not. Both
@@ -133,57 +294,55 @@ struct CommandRunRuleTests {
     /// a mark, and one that already earned it loses it when the tab is looked
     /// at — the same moment `TabStateCenter.clearDone` fires for an agent.
     @Test func lookingAtTheTabClearsTheMark() {
-        let running = CommandRunRule.next(
-            after: CommandRunRule.next(after: nil, facts: facts(.command), now: start),
-            facts: facts(.command),
-            now: start + tick
-        )
+        let running = CommandRun(phase: .running, isShellReported: false)
+        #expect(next(running, .tick, facts(.shell, selected: true), at: start)?.mark == nil)
 
-        #expect(CommandRunRule.next(
-            after: running, facts: facts(.shell, selected: true), now: start + 2 * tick
-        ) == nil)
+        let reported = CommandRun(phase: .running, isShellReported: true)
+        #expect(next(
+            reported,
+            .shellFinished(exitCode: 0, duration: 30),
+            facts(.shell, selected: true),
+            at: start
+        )?.mark == nil)
 
-        #expect(CommandRunRule.next(
-            after: .finished, facts: facts(.shell, selected: true), now: start
-        ) == nil)
-
-        #expect(CommandRunRule.next(
-            after: .finished, facts: facts(.shell), now: start
-        ) == .finished)
+        let finished = CommandRun(phase: .finished, isShellReported: false)
+        #expect(next(finished, .tick, facts(.shell, selected: true), at: start)?.mark == nil)
+        #expect(next(finished, .tick, facts(.shell), at: start)?.mark == .finished)
     }
 
     /// A spinner is still worth drawing on the tab the reader is looking at:
     /// only the badge is suppressed there, because only the badge is a thing
     /// to come back to.
     @Test func aSelectedTabStillSpins() {
-        let seen = CommandRunRule.next(
-            after: nil, facts: facts(.command, selected: true), now: start
-        )
-        #expect(CommandRunRule.next(
-            after: seen, facts: facts(.command, selected: true), now: start + tick
-        ) == .running)
+        let started = next(nil, .shellStarted, facts(selected: true), at: start)
+        #expect(next(
+            started, .tick, facts(.command, selected: true), at: start + shellWait
+        )?.mark == .running)
     }
 
     /// A second command supersedes the first one's result rather than running
     /// under its dot.
     @Test func aNewCommandSupersedesTheLastResult() {
-        let phase = CommandRunRule.next(
-            after: .finished, facts: facts(.command), now: start
-        )
-        #expect(phase == .pending(since: start))
-        #expect(phase?.mark == nil)
+        let finished = CommandRun(phase: .finished, isShellReported: true)
+        let run = next(finished, .shellStarted, facts(), at: start)
+        #expect(run?.phase == .pending(since: start))
+        #expect(run?.mark == nil)
+
+        let failed = CommandRun(phase: .failed(exitCode: 1), isShellReported: false)
+        #expect(next(failed, .tick, facts(.command), at: start)?.mark == nil)
     }
 
-    /// An unreadable pid says nothing, so it changes nothing. It must be able
-    /// neither to start a spinner nor to throw away a mark already earned.
-    @Test func anUnreadableForegroundHoldsThePhase() {
-        #expect(CommandRunRule.next(after: nil, facts: facts(.unknown), now: start) == nil)
-        #expect(CommandRunRule.next(
-            after: .running, facts: facts(.unknown), now: start
-        ) == .running)
-        #expect(CommandRunRule.next(
-            after: .finished, facts: facts(.unknown), now: start
-        ) == .finished)
+    /// An unreadable pid says nothing, so it changes nothing on the tab that
+    /// depends on it. It must be able neither to start a spinner nor to throw
+    /// away a mark already earned.
+    @Test func anUnreadableForegroundHoldsThePolledRow() {
+        #expect(next(nil, .tick, facts(.unknown), at: start) == nil)
+
+        let running = CommandRun(phase: .running, isShellReported: false)
+        #expect(next(running, .tick, facts(.unknown), at: start)?.phase == .running)
+
+        let finished = CommandRun(phase: .finished, isShellReported: false)
+        #expect(next(finished, .tick, facts(.unknown), at: start)?.phase == .finished)
     }
 
     /// The reading of the process name the sidebar already resolved, which is

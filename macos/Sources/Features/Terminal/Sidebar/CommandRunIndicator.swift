@@ -27,6 +27,11 @@ struct CommandRunIndicator: View {
                 .fill(themePalette.accent ?? .accentColor)
                 .frame(width: 8, height: 8)
                 .help("A command finished here")
+        case .failed(let exitCode):
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.red)
+                .help("A command exited \(exitCode)")
         }
     }
 }

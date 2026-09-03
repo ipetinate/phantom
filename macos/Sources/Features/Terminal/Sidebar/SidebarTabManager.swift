@@ -189,6 +189,25 @@ final class SidebarTabManager: ObservableObject {
         }
 
         notificationObservers.append(center.addObserver(
+            forName: .ghosttyCommandDidStart, object: nil, queue: .main
+        ) { [weak self] notification in
+            MainActor.assumeIsolated {
+                self?.applyCommandSignal(.shellStarted, from: notification)
+            }
+        })
+
+        notificationObservers.append(center.addObserver(
+            forName: .ghosttyCommandDidFinish, object: nil, queue: .main
+        ) { [weak self] notification in
+            MainActor.assumeIsolated {
+                self?.applyCommandSignal(
+                    Self.finishSignal(from: notification),
+                    from: notification
+                )
+            }
+        })
+
+        notificationObservers.append(center.addObserver(
             forName: .terminalWindowBellDidChangeNotification,
             object: nil, queue: .main
         ) { [weak self] notification in
@@ -224,7 +243,7 @@ final class SidebarTabManager: ObservableObject {
                 for model in self.models {
                     guard let surfaceId = model.surfaceId else { continue }
                     model.setAgentState(states[surfaceId])
-                    self.applyCommandPhase(model)
+                    self.applyCommandRun(model, signal: .tick)
                 }
             }
             .store(in: &centerCancellables)
@@ -241,7 +260,7 @@ final class SidebarTabManager: ObservableObject {
                 for model in self.models {
                     guard let surfaceId = model.surfaceId else { continue }
                     model.setLiveAgent(records[surfaceId]?.liveAgent)
-                    self.applyCommandPhase(model)
+                    self.applyCommandRun(model, signal: .tick)
                 }
             }
             .store(in: &centerCancellables)
@@ -270,11 +289,11 @@ final class SidebarTabManager: ObservableObject {
                 for model in self.models {
                     guard let pid = model.foregroundPID else {
                         model.setDevServerPort(nil)
-                        self.applyCommandPhase(model)
+                        self.applyCommandRun(model, signal: .tick)
                         continue
                     }
                     model.setDevServerPort(servers[pid]?.port)
-                    self.applyCommandPhase(model)
+                    self.applyCommandRun(model, signal: .tick)
                 }
             }
             .store(in: &centerCancellables)
@@ -417,32 +436,41 @@ final class SidebarTabManager: ObservableObject {
         guard let pid = surface?.surfaceModel?.foregroundPID else {
             model.setForegroundPID(nil)
             model.setDevServerPort(nil)
-            applyCommandPhase(model)
+            applyCommandRun(model, signal: .tick)
             return
         }
 
         model.setForegroundPID(pid)
         model.setDevServerPort(DevServerCenter.shared.port(forPID: pid))
         DevServerCenter.shared.requestRefresh(pid: pid)
-        applyCommandPhase(model)
+        applyCommandRun(model, signal: .tick)
     }
 
     /// Folds a tab's own facts through `CommandRunRule`, which is where the
-    /// spinner and the dot for a plain command come from.
+    /// marks for a plain command come from.
     ///
-    /// Called from every path that can change one of those facts, not from the
-    /// poll alone. The agent centers publish between polls, and a mark inferred
-    /// for a command must not outlive the moment an agent takes the row over —
-    /// the row would then draw a command's dot for a session that is running.
+    /// Every signal goes through here, the shell's reports included, so that
+    /// one function owns the state and the rule sees the same facts whichever
+    /// signal woke it. Called from every path that can change one of those
+    /// facts, not from the poll alone: the agent centers publish between
+    /// polls, and a mark inferred for a command must not outlive the moment an
+    /// agent takes the row over — the row would then draw a command's dot for
+    /// a session that is running.
     ///
-    /// Free of syscalls: every fact was gathered by the caller. The process
-    /// name in particular is the one `setForegroundPID` already resolved, so a
-    /// pass over every tab costs no more than reading published values.
-    private func applyCommandPhase(_ model: SidebarTabModel) {
-        model.setCommandPhase(CommandRunRule.next(
-            after: model.commandPhase,
+    /// The process name is the one `setForegroundPID` already resolved. The
+    /// alternate screen is read live, because it is the answer to "is this a
+    /// full-screen program" and a stale answer to that draws a spinner for an
+    /// editor.
+    private func applyCommandRun(
+        _ model: SidebarTabModel,
+        signal: CommandRunRule.Signal
+    ) {
+        model.setCommandRun(CommandRunRule.next(
+            after: model.commandRun,
+            signal: signal,
             facts: CommandRunRule.Facts(
                 foreground: CommandRunRule.foreground(name: model.foregroundName),
+                isAlternateScreen: surface(for: model)?.surfaceModel?.isAlternateScreen ?? false,
                 hasAgentState: model.agentState != nil,
                 hasLiveAgent: model.liveAgent != nil,
                 hasDevServerPort: model.devServerPort != nil,
@@ -450,6 +478,69 @@ final class SidebarTabManager: ObservableObject {
             ),
             now: Date()
         ))
+
+        if case .shellStarted = signal, case .pending = model.commandRun?.phase {
+            scheduleCommandTick(model)
+        }
+    }
+
+    /// Brings the wait after a reported start to an end.
+    ///
+    /// Without this the row would sit in `pending` until the 5-second poll
+    /// noticed, which is the latency the shell's report exists to remove. The
+    /// slack is there because the rule compares against a duration and a
+    /// deadline that lands a hair early would leave the tab waiting a whole
+    /// poll.
+    ///
+    /// Nothing is cancelled and nothing is stored. A tick that arrives after
+    /// the command already finished finds a phase the rule leaves alone, which
+    /// is cheaper than tracking one timer per tab.
+    private func scheduleCommandTick(_ model: SidebarTabModel) {
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + CommandRunRule.shellMinimumDuration + 0.1
+        ) { [weak self, weak model] in
+            guard let self, let model else { return }
+            self.applyCommandRun(model, signal: .tick)
+        }
+    }
+
+    /// The surface a row stands for, which is the one every other fact about
+    /// the tab is already read from.
+    private func surface(for model: SidebarTabModel) -> Ghostty.SurfaceView? {
+        guard let controller = model.window?.windowController as? BaseTerminalController
+        else { return nil }
+        return controller.focusedSurface ?? controller.surfaceTree.root?.leftmostLeaf()
+    }
+
+    /// Routes one of the shell's own command reports to the row it happened
+    /// in.
+    ///
+    /// Matched on the surface, not on the window: a window can hold several
+    /// splits and a row stands for one of them, the same one every other fact
+    /// on the row is read from. A report from any other split is dropped
+    /// rather than drawn on the wrong row.
+    private func applyCommandSignal(
+        _ signal: CommandRunRule.Signal,
+        from notification: Notification
+    ) {
+        guard let view = notification.object as? Ghostty.SurfaceView,
+              let model = models.first(where: { $0.surfaceId == view.id })
+        else { return }
+        applyCommandRun(model, signal: signal)
+    }
+
+    /// The finish signal, read out of the notification the app posts ahead of
+    /// the `notify-on-command-finish` settings.
+    ///
+    /// A missing exit code stays missing: `-1` means the shell reported none,
+    /// and reading that as zero would call every such command a success.
+    static func finishSignal(from notification: Notification) -> CommandRunRule.Signal {
+        let info = notification.userInfo
+        let nanoseconds = info?[Notification.Name.CommandDurationKey] as? UInt64 ?? 0
+        return .shellFinished(
+            exitCode: info?[Notification.Name.CommandExitCodeKey] as? Int,
+            duration: TimeInterval(nanoseconds) / 1_000_000_000
+        )
     }
 
     private func applyPwd(_ pwd: String?, to model: SidebarTabModel) {

@@ -377,6 +377,24 @@ extension Notification.Name {
 
     /// Focus the search field
     static let ghosttySearchFocus = Notification.Name("com.mitchellh.ghostty.searchFocus")
+
+    /// The shell reported a command starting, through OSC 133.
+    static let ghosttyCommandDidStart = Notification.Name("com.mitchellh.ghostty.commandDidStart")
+
+    /// The shell reported a command finishing, with its exit code and how
+    /// long it ran.
+    ///
+    /// Posted ahead of the `notify-on-command-finish` settings, which decide
+    /// whether a *notification* is delivered. A row that draws a running
+    /// command has to see every command that ends, whatever the reader asked
+    /// notifications to do, so the two must not share a gate.
+    static let ghosttyCommandDidFinish = Notification.Name("com.mitchellh.ghostty.commandDidFinish")
+
+    /// `Int`, the exit code, or absent when the shell reported none.
+    static let CommandExitCodeKey = ghosttyCommandDidFinish.rawValue + ".exitCode"
+
+    /// `UInt64`, nanoseconds.
+    static let CommandDurationKey = ghosttyCommandDidFinish.rawValue + ".duration"
 }
 
 // NOTE: I am moving all of these to Notification.Name extensions over time. This

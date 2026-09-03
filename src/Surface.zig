@@ -1140,6 +1140,14 @@ pub fn handleMessage(self: *Surface, msg: Message) !void {
 
         .start_command => {
             self.command_timer = .now(global.io(), .awake);
+
+            _ = self.rt_app.performAction(
+                .{ .surface = self },
+                .command_started,
+                {},
+            ) catch |err| {
+                log.warn("apprt failed to notify command start={}", .{err});
+            };
         },
 
         .stop_command => |v| timer: {
@@ -2061,6 +2069,20 @@ pub fn hasSelection(self: *const Surface) bool {
     self.renderer_state.mutex.lockUncancelable(global.io());
     defer self.renderer_state.mutex.unlock(global.io());
     return self.io.terminal.screens.active.selection != null;
+}
+
+/// Whether the alternate screen is the active one.
+///
+/// This is what separates a full-screen program from a command that prints
+/// and exits: an editor, a pager or a system monitor switches to the
+/// alternate screen so that it can restore the shell's scrollback on the way
+/// out, and `brew install` never does. An apprt that says something about a
+/// running command needs the difference — nobody waits for `vim` to finish
+/// the way they wait for an install.
+pub fn isAlternateScreen(self: *const Surface) bool {
+    self.renderer_state.mutex.lockUncancelable(global.io());
+    defer self.renderer_state.mutex.unlock(global.io());
+    return self.io.terminal.screens.active_key == .alternate;
 }
 
 /// Returns the selected text. This is allocated.
