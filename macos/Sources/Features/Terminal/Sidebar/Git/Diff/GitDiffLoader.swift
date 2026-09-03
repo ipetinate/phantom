@@ -21,6 +21,18 @@ enum GitDiffSide: Equatable {
     /// compares against the **merge base**, which is what a pull request
     /// shows and what somebody reviewing their own branch means to see.
     case branch(base: String)
+
+    /// One commit against its own parent — `git diff <sha>^!`.
+    ///
+    /// Its own case because `^!` is a *revision*, not a range, and the branch
+    /// case appends `...HEAD` to whatever it is given. Smuggled through there,
+    /// this produced `<sha>^!...HEAD`, which git refuses outright — so a
+    /// commit opened from the branch review showed no diff at all, for every
+    /// file, with no error anywhere the reader could see.
+    ///
+    /// `^!` rather than `<sha>^..<sha>` because it works on a root commit,
+    /// which has no parent to name.
+    case commit(sha: String)
 }
 
 /// What asking for a diff produced.
@@ -199,6 +211,7 @@ enum GitDiffLoader {
         case .unstaged: []
         case .staged: ["--cached"]
         case .branch(let base): ["\(base)...HEAD"]
+        case .commit(let sha): ["\(sha)^!"]
         }
     }
 
@@ -270,6 +283,12 @@ enum GitDiffLoader {
                 !merged.isEmpty
             else { return nil }
             return (old: merged, new: "HEAD")
+        case .commit(let sha):
+            /// A root commit has no `^`, so the old side comes back nil from
+            /// `blob` and that column keeps the colour it had. Which is right:
+            /// there is no previous version of a file that arrives with the
+            /// first commit.
+            return (old: "\(sha)^", new: sha)
         }
     }
 
