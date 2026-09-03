@@ -66,6 +66,7 @@ struct GitRepoView: View {
     @State private var isAmending = false
     @State private var discarding: [GitFileChange] = []
     @State private var isCreatingBranch = false
+    @State private var isSwitchingBranch = false
     @State private var isUndoingCommit = false
 
     private var status: GitStatus? { center.status(forRoot: root) }
@@ -81,7 +82,9 @@ struct GitRepoView: View {
         VStack(spacing: 0) {
             switch style {
             case .standalone:
-                header
+                header.popover(isPresented: $isSwitchingBranch, arrowEdge: .bottom) {
+                    branchSwitcher
+                }
                 commitBox
 
                 /// One scroll view, around everything that can grow.
@@ -115,6 +118,9 @@ struct GitRepoView: View {
 
             case .section(let name, let isExpanded, let onToggle):
                 sectionHeader(name: name, isExpanded: isExpanded, onToggle: onToggle)
+                    .popover(isPresented: $isSwitchingBranch, arrowEdge: .bottom) {
+                        branchSwitcher
+                    }
                 if isExpanded {
                     commitBox
                     changeList
@@ -307,6 +313,18 @@ struct GitRepoView: View {
         }
     }
 
+    /// The switcher, shared by the two header styles: one repository's
+    /// branches, filtered by what the reader types.
+    private var branchSwitcher: some View {
+        BranchPicker(
+            branches: center.branches[root] ?? [],
+            current: status?.branch,
+            onRefresh: { center.fetch(in: root) },
+            onPick: { center.checkout(branch: $0, in: root) },
+            isPresented: $isSwitchingBranch
+        )
+    }
+
     @ViewBuilder
     private var menuContents: some View {
         if let status {
@@ -320,19 +338,10 @@ struct GitRepoView: View {
 
             Divider()
 
-            Menu("Switch Branch") {
-                ForEach(center.branches[root] ?? [], id: \.self) { branch in
-                    Button {
-                        center.checkout(branch: branch, in: root)
-                    } label: {
-                        if branch == status.branch {
-                            Label(branch, systemImage: "checkmark")
-                        } else {
-                            Text(branch)
-                        }
-                    }
-                }
-            }
+            /// A popover rather than the submenu this was: the list is the
+            /// repository's whole branch list, and a menu cannot hold the
+            /// field that makes a long one usable. See `BranchPicker`.
+            Button("Switch Branch\u{2026}") { isSwitchingBranch = true }
             Button("Create Branch…") { isCreatingBranch = true }
 
             Divider()

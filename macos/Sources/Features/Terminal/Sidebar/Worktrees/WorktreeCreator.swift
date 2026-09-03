@@ -18,6 +18,7 @@ struct WorktreeCreator: View {
 
     @ObservedObject private var center: WorktreeCenter = .shared
     @ObservedObject private var git: GitCenter = .shared
+    @ObservedObject private var palette: ThemePalette = .shared
 
     private enum Mode: String, CaseIterable, Identifiable {
         case newBranch = "New branch"
@@ -35,6 +36,8 @@ struct WorktreeCreator: View {
     @State private var branchName = ""
     @State private var base = ""
     @State private var existingBranch = ""
+    @State private var isChoosingBase = false
+    @State private var isChoosingExisting = false
     @State private var opensTerminal = true
     @State private var phase: Phase = .configuring
     @State private var setupTask: Task<Void, Never>?
@@ -75,6 +78,49 @@ struct WorktreeCreator: View {
         .onChange(of: center.baseRefs[commonRoot]) { _ in adoptDefaults() }
     }
 
+    /// A branch, chosen the way branches are chosen everywhere else in the
+    /// app: a popover with a field in it.
+    ///
+    /// These two were `Picker`s, which on macOS is a pop-up menu — so a
+    /// repository with three hundred branches gave the reader a menu three
+    /// hundred items long and no way to say which one they meant. The label
+    /// stays in front so the row still reads as a form field.
+    private func branchField(
+        label: String,
+        value: String,
+        branches: [String],
+        isPresented: Binding<Bool>,
+        onPick: @escaping (String) -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(palette.font(size: 11))
+                .foregroundStyle(.secondary)
+
+            Button {
+                isPresented.wrappedValue = true
+            } label: {
+                HStack(spacing: 4) {
+                    Text(value.isEmpty ? "Choose\u{2026}" : value)
+                        .font(palette.font(size: 11))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .popover(isPresented: isPresented, arrowEdge: .bottom) {
+                BranchPicker(
+                    branches: branches,
+                    current: value.isEmpty ? nil : value,
+                    onPick: onPick,
+                    isPresented: isPresented
+                )
+            }
+        }
+    }
+
     // MARK: Configuration
 
     @ViewBuilder
@@ -99,9 +145,13 @@ struct WorktreeCreator: View {
                 .autocorrectionDisabled()
 
             HStack(spacing: 8) {
-                Picker("From", selection: baseSelection) {
-                    ForEach(baseCandidates, id: \.self) { Text($0).tag($0) }
-                }
+                branchField(
+                    label: "From",
+                    value: baseSelection.wrappedValue,
+                    branches: baseCandidates,
+                    isPresented: $isChoosingBase,
+                    onPick: { baseSelection.wrappedValue = $0 }
+                )
                 .disabled(baseCandidates.isEmpty)
 
                 if hasRemoteBase {
@@ -119,9 +169,13 @@ struct WorktreeCreator: View {
                 }
             }
         } else {
-            Picker("Branch", selection: $existingBranch) {
-                ForEach(availableBranches, id: \.self) { Text($0).tag($0) }
-            }
+            branchField(
+                label: "Branch",
+                value: existingBranch,
+                branches: availableBranches,
+                isPresented: $isChoosingExisting,
+                onPick: { existingBranch = $0 }
+            )
             .disabled(availableBranches.isEmpty)
 
             if availableBranches.isEmpty {
