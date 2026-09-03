@@ -26,8 +26,12 @@ extension View {
         )
     }
 
-    /// Fades this view out under a cluster of buttons `width` points wide at
-    /// its trailing edge.
+    /// Fades this view out under a trailing cluster `width` points wide.
+    ///
+    /// `width` is the whole cluster, not only its buttons: the status mark and
+    /// the count sit in it too, and the content has to be out from under all of
+    /// it. Measured short by one icon, the fade runs beneath the first button
+    /// and washes it out — which is what it looked like.
     ///
     /// A sidebar row's hover buttons are drawn over its content rather than
     /// beside it, so that a row reserves no width for buttons it is not
@@ -59,7 +63,10 @@ extension View {
                     )
                     .frame(width: 22)
 
-                    Color.clear.frame(width: width)
+                    /// A gap past the cluster so the leading button stands on
+                    /// the row's own background rather than on the tail of the
+                    /// gradient.
+                    Color.clear.frame(width: width + 8)
                 }
             }
         )

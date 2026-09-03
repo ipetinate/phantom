@@ -738,9 +738,9 @@ private struct SidebarGroupSection: View {
     @State private var isEditing = false
     @State private var isHeaderHovered = false
 
-    /// How wide the header's floating buttons are, measured by the layout that
-    /// draws them.
-    @State private var actionsWidth: CGFloat = 0
+    /// How wide the header's whole trailing cluster is — buttons and count —
+    /// measured by the layout that draws it.
+    @State private var clusterWidth: CGFloat = 0
     @State private var isShowingPRs = false
 
     /// The terminals "Delete Group and Close Terminals" is asking about, or
@@ -1095,16 +1095,17 @@ private struct SidebarGroupSection: View {
                 countSlot.hidden()
             }
             .fadingUnderFloatingActions(
-                width: alwaysShowActions ? 0 : actionsWidth + 6,
+                width: alwaysShowActions ? 0 : clusterWidth,
                 isRevealed: !alwaysShowActions && isHeaderHovered)
 
             HStack(spacing: 6) {
-                if !alwaysShowActions { headerActions.measuringFloatingActions() }
+                if !alwaysShowActions { headerActions }
 
                 countSlot
             }
+            .measuringFloatingActions()
         }
-        .onPreferenceChange(FloatingActionsWidthKey.self) { actionsWidth = $0 }
+        .onPreferenceChange(FloatingActionsWidthKey.self) { clusterWidth = $0 }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(headerSurface)
@@ -1460,9 +1461,9 @@ private struct SidebarTabRow: View {
 
     @State private var isHovered = false
 
-    /// How wide this row's floating buttons are, measured by the layout that
-    /// draws them.
-    @State private var actionsWidth: CGFloat = 0
+    /// How wide this row's whole trailing cluster is — buttons, status mark
+    /// and close button — measured by the layout that draws it.
+    @State private var clusterWidth: CGFloat = 0
     @State private var isCreatingGroup = false
     @State private var isCustomizing = false
     @State private var groupingWorktree: GitWorktree?
@@ -1779,16 +1780,20 @@ private struct SidebarTabRow: View {
             /// between the cluster and the status slot the content must also
             /// stay out of.
             .fadingUnderFloatingActions(
-                width: alwaysShowActions ? 0 : actionsWidth + 6,
+                width: alwaysShowActions ? 0 : clusterWidth,
                 isRevealed: !alwaysShowActions && isHovered)
 
             HStack(spacing: 6) {
-                if !alwaysShowActions { rowActions.measuringFloatingActions() }
+                if !alwaysShowActions { rowActions }
 
                 statusSlot
             }
+            /// The whole cluster, status slot included, because that is the
+            /// span the content has to be out from under. Measuring the
+            /// buttons alone left the fade running beneath the first of them.
+            .measuringFloatingActions()
         }
-        .onPreferenceChange(FloatingActionsWidthKey.self) { actionsWidth = $0 }
+        .onPreferenceChange(FloatingActionsWidthKey.self) { clusterWidth = $0 }
         .padding(.horizontal, 8)
         .padding(.vertical, isCompact ? 5 : 8)
         .background(
