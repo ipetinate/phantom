@@ -4,7 +4,7 @@ import SwiftUI
 /// How a repository presents itself inside the Git panel.
 enum GitRepoStyle {
     /// The only repository there is. The panel is about it, so it fills the
-    /// pane and scrolls its own change list.
+    /// pane and scrolls everything below the commit box.
     case standalone
 
     /// One of several under a workspace folder, behind a disclosure row.
@@ -83,7 +83,35 @@ struct GitRepoView: View {
             case .standalone:
                 header
                 commitBox
-                changeList
+
+                /// One scroll view, around everything that can grow.
+                ///
+                /// It used to sit inside `workingTreeState`, around the
+                /// changed files alone — so the branch review above them was
+                /// a rigid sibling in this stack, and a review of 64 commits
+                /// and 449 files made the panel taller than the pane. Nothing
+                /// clipped it: the pane is centred in the sidebar, so the
+                /// overflow split between the two ends and the top of the
+                /// list was drawn over the pane switcher and under the
+                /// window's traffic lights.
+                ///
+                /// The `GeometryReader` is what keeps the clean-tree
+                /// placeholder centred in the pane. Inside a scroll view the
+                /// proposed height is unbounded, so `maxHeight: .infinity`
+                /// means nothing there; given the viewport's own height as a
+                /// floor, the content is exactly as tall as the pane when
+                /// there is little of it, and taller when there is more.
+                GeometryReader { viewport in
+                    ScrollView {
+                        changeList
+                            .frame(minHeight: viewport.size.height, alignment: .top)
+                            .background(alignment: .top) { OverlayScrollers() }
+                    }
+                    /// Automatic, matching the file tree: the bar appears
+                    /// while scrolling and fades, which is the only clue the
+                    /// reader gets that there is more list below.
+                    .scrollIndicators(.automatic)
+                }
 
             case .section(let name, let isExpanded, let onToggle):
                 sectionHeader(name: name, isExpanded: isExpanded, onToggle: onToggle)
@@ -468,12 +496,7 @@ struct GitRepoView: View {
             }
         case .changes:
             if let status {
-                if isSection {
-                    changeRows(status)
-                } else {
-                    ScrollView { changeRows(status) }
-                        .scrollIndicators(.hidden)
-                }
+                changeRows(status)
             }
         }
     }

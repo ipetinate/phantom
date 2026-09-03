@@ -143,6 +143,13 @@ struct SidebarView: View {
         expanded
             .padding(.top, layout.titlebarInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            /// A guard, not a layout: a pane taller than the sidebar is a bug
+            /// in that pane, and the Git panel was one — but the way it
+            /// presented was content drawn over the pane switcher and under
+            /// the window's traffic lights, which reads as the whole app being
+            /// broken rather than as one list being too long. Clipped, the
+            /// next pane to overflow merely loses its ends.
+            .clipped()
     }
 
     /// The panels the user has switched on. Read through `@AppStorage` so
