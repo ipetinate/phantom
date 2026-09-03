@@ -6987,6 +6987,31 @@ pub const Keybinds = struct {
 
         // Mac-specific keyboard bindings.
         if (comptime builtin.target.os.tag.isDarwin()) {
+            // Phantom ships this binding; upstream ships none.
+            //
+            // Option+Delete deletes the word to the left in every other macOS
+            // text field, and in a terminal it only does so if the shell is
+            // handed `ESC DEL` — which needs Option to be Alt. Whether it is
+            // depends on `macos-option-as-alt`, whose default depends in turn
+            // on the *keyboard layout*: true for U.S. Standard and U.S.
+            // International, false for every other layout. So on a Brazilian
+            // or German keyboard the shortcut every other app has silently
+            // does nothing, and the fix — turning Option into Alt — costs the
+            // reader every Option-composed character they type.
+            //
+            // A binding is the way out of that trade. It is matched on the key
+            // event, before any text is composed, so it works whatever
+            // `macos-option-as-alt` is set to and takes no accented character
+            // away from anybody.
+            //
+            // `esc:\x7f` and not `text:`, because ESC-prefixed is exactly what
+            // readline, zsh's ZLE and every other line editor read as
+            // `backward-kill-word`.
+            try self.set.put(
+                alloc,
+                .{ .key = .{ .physical = .backspace }, .mods = .{ .alt = true } },
+                .{ .esc = "\x7f" },
+            );
             try self.set.put(
                 alloc,
                 .{ .key = .{ .unicode = 'q' }, .mods = .{ .super = true } },
@@ -10915,6 +10940,32 @@ test "theme specifying light/dark sets theme usage in conditional state" {
 
         try testing.expect(cfg.@"window-theme" == .system);
         try testing.expect(cfg._conditional_set.contains(.theme));
+    }
+}
+
+test "option+delete kills the word to the left on macOS" {
+    if (comptime !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+
+    const entry = cfg.keybind.set.get(.{
+        .key = .{ .physical = .backspace },
+        .mods = .{ .alt = true },
+    }) orelse return error.TestUnexpectedResult;
+
+    // `ESC DEL`, which is what readline and zsh's ZLE read as
+    // `backward-kill-word`. Pinned as bytes rather than as a name because the
+    // bytes are the contract: the shell never sees the binding.
+    switch (entry.value_ptr.*) {
+        .leaf => |leaf| switch (leaf.action) {
+            .esc => |data| try testing.expectEqualStrings("\x7f", data),
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
     }
 }
 
