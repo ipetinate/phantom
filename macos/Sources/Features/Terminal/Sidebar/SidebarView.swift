@@ -1992,7 +1992,14 @@ private struct SidebarTabRow: View {
                 .foregroundStyle(.orange)
                 .help("An action was denied")
         case .ended, nil:
-            if tab.needsAttention {
+            /// No agent state, so the row is free to say what the shell is
+            /// doing instead — see `CommandRunRule`, which infers a plain
+            /// command from the foreground process because a command has no
+            /// hook to report itself. Before the attention dot, because a
+            /// command running now outranks a mark left over from earlier.
+            if let mark = tab.commandMark {
+                CommandRunIndicator(mark: mark)
+            } else if tab.needsAttention {
                 Circle()
                     .fill(themePalette.accent ?? .accentColor)
                     .frame(width: 6, height: 6)
