@@ -29,4 +29,34 @@ struct AgentBrandAssetTests {
     @Test func antigravityUsesTheTemplateAndNotTheColouredCopy() {
         #expect(AgentBrandMark.asset(for: .antigravity) == "AntigravityIcon")
     }
+
+    /// The size has to be said out loud. An SF Symbol scales itself to the
+    /// menu's font; an asset carries a size and AppKit draws it at that size,
+    /// so naming the artwork put a 1024-point starburst over the menu and most
+    /// of the window.
+    @Test func aMenuIconIsSizedForAMenuRow() {
+        for agent in CodingAgent.allCases {
+            let icon = AgentBrandMark.menuIcon(for: agent)
+            #expect(icon != nil, "\(agent) has no menu icon")
+            #expect(icon?.size.width == AgentBrandMark.menuIconSide)
+            #expect(icon?.size.height == AgentBrandMark.menuIconSide)
+        }
+    }
+
+    /// Template, so the row's highlight tints it like the symbols beside it.
+    @Test func aMenuIconIsATemplate() {
+        for agent in CodingAgent.allCases {
+            #expect(AgentBrandMark.menuIcon(for: agent)?.isTemplate == true)
+        }
+    }
+
+    /// Sizing the copy must not resize the catalogue's own image, which every
+    /// other drawing of the mark reads.
+    @Test func sizingTheMenuIconLeavesTheCatalogueAlone() {
+        let name = AgentBrandMark.asset(for: .claude)
+        let before = NSImage(named: name)?.size
+        _ = AgentBrandMark.menuIcon(for: .claude)
+        #expect(NSImage(named: name)?.size == before)
+        #expect(before?.width != AgentBrandMark.menuIconSide)
+    }
 }

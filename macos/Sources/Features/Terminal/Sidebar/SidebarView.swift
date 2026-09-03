@@ -1129,6 +1129,21 @@ private struct SidebarGroupSection: View {
         }
     }
 
+    /// One agent's item in a menu: its own mark, at a size a menu row can
+    /// hold, and the shared symbol if the artwork cannot be found.
+    ///
+    /// The fallback is not decoration. An asset that goes missing from a build
+    /// returns nil, and an item with no image is an item whose neighbours are
+    /// all indented past it — worse to read than six of one glyph.
+    @ViewBuilder
+    private func agentMenuLabel(_ title: String, _ agent: CodingAgent) -> some View {
+        if let icon = AgentBrandMark.menuIcon(for: agent) {
+            Label { Text(title) } icon: { Image(nsImage: icon) }
+        } else {
+            Label(title, systemImage: "sparkles")
+        }
+    }
+
     /// The header's menu.
     ///
     /// Glyphs in the same vocabulary the tab row's menu uses — `plus` is the
@@ -1146,22 +1161,22 @@ private struct SidebarGroupSection: View {
             Label("New Terminal in Group", systemImage: "plus")
         }
         Button { onNewClaudeTab(group) } label: {
-            Label("New Claude Session in Group", image: AgentBrandMark.asset(for: .claude))
+            agentMenuLabel("New Claude Session in Group", .claude)
         }
         Button { onNewCodexTab(group) } label: {
-            Label("New Codex Session in Group", image: AgentBrandMark.asset(for: .codex))
+            agentMenuLabel("New Codex Session in Group", .codex)
         }
         Button { onNewOpenCodeTab(group) } label: {
-            Label("New OpenCode Session in Group", image: AgentBrandMark.asset(for: .opencode))
+            agentMenuLabel("New OpenCode Session in Group", .opencode)
         }
         Button { onNewAntigravityTab(group) } label: {
-            Label("New Antigravity Session in Group", image: AgentBrandMark.asset(for: .antigravity))
+            agentMenuLabel("New Antigravity Session in Group", .antigravity)
         }
         Button { onNewKimiTab(group) } label: {
-            Label("New Kimi Code Session in Group", image: AgentBrandMark.asset(for: .kimi))
+            agentMenuLabel("New Kimi Code Session in Group", .kimi)
         }
         Button { onNewPiTab(group) } label: {
-            Label("New Pi Session in Group", image: AgentBrandMark.asset(for: .pi))
+            agentMenuLabel("New Pi Session in Group", .pi)
         }
 
         Divider()

@@ -81,6 +81,31 @@ extension AgentBrandMark {
     }
 }
 
+extension AgentBrandMark {
+    /// The mark as an image a menu row can hold.
+    ///
+    /// A name is not enough, and that is the whole reason this exists beside
+    /// `asset(for:)`. An SF Symbol scales itself to the menu's font; an asset
+    /// has a size of its own and AppKit draws it at that size — so naming the
+    /// artwork put a 1024-point Claude starburst in the menu, over the rows
+    /// beneath it and most of the window. The size has to be said out loud.
+    ///
+    /// `isTemplate` is set here as well as in the catalogue, because a copy
+    /// does not have to inherit it and a coloured mark on a highlighted row is
+    /// the other half of the same problem.
+    static func menuIcon(for agent: CodingAgent) -> NSImage? {
+        guard let source = NSImage(named: asset(for: agent)) else { return nil }
+        let icon = source.copy() as? NSImage ?? source
+        icon.size = NSSize(width: menuIconSide, height: menuIconSide)
+        icon.isTemplate = true
+        return icon
+    }
+
+    /// What AppKit expects of a menu item's image, and what the SF Symbols in
+    /// the same menus come out at.
+    static let menuIconSide: CGFloat = 16
+}
+
 /// The agents' marks as bitmaps the gutter can draw, rendered once each.
 ///
 /// ## Why they are rendered at all
