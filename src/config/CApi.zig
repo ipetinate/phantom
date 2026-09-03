@@ -261,6 +261,17 @@ test "ghostty_config_trigger: default keybind" {
         try testing.expectEqual(.unicode, trigger.tag);
         try testing.expectEqual(@as(u32, ','), trigger.key.unicode);
     }
+    // The one default whose action is a byte sequence rather than a name.
+    // The Keyboard Shortcuts pane lists it, and a row whose action does not
+    // resolve draws nothing and says nothing about why — so the resolution is
+    // pinned here rather than discovered by somebody looking at an empty row.
+    if (comptime builtin.target.os.tag.isDarwin()) {
+        const kill_word = try config_trigger_(&cfg, "esc:\x7f");
+        try testing.expectEqual(.physical, kill_word.tag);
+        try testing.expectEqual(.backspace, kill_word.key.physical);
+        try testing.expect(kill_word.mods.alt);
+    }
+
     // Performable bindings are not tracked in the reverse map,
     // so config_trigger_ should return a default (empty) trigger.
     if (comptime builtin.target.os.tag.isDarwin()) {
