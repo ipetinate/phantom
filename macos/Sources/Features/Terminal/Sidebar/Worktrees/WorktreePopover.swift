@@ -85,6 +85,12 @@ struct WorktreePopover: View {
     /// is what buys it — the panel's rule, stated in `WorktreeScope.polled`.
     @State private var expanded: Set<String> = []
 
+    /// What the reader is looking for. Everything is listed until there is
+    /// something here.
+    @State private var query = ""
+
+    @FocusState private var isSearchFocused: Bool
+
     var body: some View {
         Group {
             if let target = confirming {
@@ -94,6 +100,19 @@ struct WorktreePopover: View {
             }
         }
         .onChange(of: editorCenter.tabs) { _ in refreshPlan() }
+        /// Typing is what pays for a workspace's lists.
+        ///
+        /// A collapsed section has deliberately never been listed — see
+        /// `WorktreeScope.polled` — so a query would have nothing to narrow
+        /// in it, and the field would read as broken in the one case it
+        /// exists for. Unforced, so the store answers out of its TTL and the
+        /// next letter costs no subprocess.
+        .onChange(of: query) { _ in
+            guard !query.isEmpty else { return }
+            for root in scope.roots {
+                center.requestList(commonRoot: root)
+            }
+        }
         /// Asked for again while this is open, which is what the panel does
         /// and for the same reason: `git worktree list` answers off the main
         /// thread, and a popover opened before it came back showed an empty
@@ -115,6 +134,11 @@ struct WorktreePopover: View {
                 .font(palette.font(size: 10.5, weight: .medium))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
+
+            /// Nothing to search where there is no list at all.
+            if !scope.roots.isEmpty {
+                search
+            }
 
             /// Height reserved up front, with a floor, rather than taken
             /// from the content.
@@ -182,7 +206,10 @@ struct WorktreePopover: View {
         /// stamps its check time even when git failed, so an unforced
         /// request inside the TTL would decline to ask again and the chooser
         /// would stay empty on the strength of one bad answer.
-        .onAppear { openingSections() }
+        .onAppear {
+            openingSections()
+            isSearchFocused = true
+        }
     }
 
     /// Wider with sections than without: a repository name and a branch name
@@ -200,6 +227,10 @@ struct WorktreePopover: View {
     ///
     /// Fixed at the ceiling for sections, because that is the case where the
     /// content changes size after the popover is up.
+    ///
+    /// Measured on the unfiltered list, which is the same reason again: a box
+    /// sized to the three rows a query left would clip the rows that come
+    /// back when the query is cleared.
     private var listHeight: CGFloat {
         switch scope {
         case .repository(let root):
@@ -211,13 +242,121 @@ struct WorktreePopover: View {
         }
     }
 
+    // MARK: Searching
+
+    /// The Git pickers' search row, in this popover's vocabulary.
+    ///
+    /// It owes the reader what `BranchPicker.search` owes them, and for the
+    /// same reason: thirty-five entries is a list nobody wants to point at.
+    /// Focused on open, so typing narrows immediately; Return takes the first
+    /// match, so the whole gesture is type and press.
+    private var search: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+
+            TextField("Search worktrees", text: $query)
+                .textFieldStyle(.plain)
+                .font(palette.font(size: 11))
+                .focused($isSearchFocused)
+                .onSubmit {
+                    guard let first = firstMatch else { return }
+                    choose(first)
+                }
+
+            if !query.isEmpty {
+                Text(verbatim: "\(shownCount)/\(totalCount)")
+                    .font(palette.font(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+
+                Button {
+                    query = ""
+                    isSearchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear")
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.12))
+        )
+    }
+
+    private func shown(in root: String) -> [GitWorktree] {
+        WorktreeChooserFilter.matches(offered(in: root), query: query, name: name(of:))
+    }
+
+    /// The sections a workspace draws, in `WorktreeScope`'s order and with
+    /// the query applied inside each.
+    private func shownSections(_ roots: [String]) -> [WorktreeChooserSection] {
+        WorktreeChooserFilter.sections(
+            roots.map { root in
+                WorktreeChooserSection(
+                    root: root,
+                    worktrees: offered(in: root),
+                    isListed: center.hasLoaded(root))
+            },
+            query: query,
+            name: name(of:))
+    }
+
+    /// Return's answer: the first row still drawn, which in a workspace is
+    /// the first match of the first section that has one.
+    private var firstMatch: GitWorktree? {
+        switch scope {
+        case .repository(let root):
+            return shown(in: root).first
+        case .workspace(let roots):
+            return shownSections(roots).compactMap { $0.worktrees.first }.first
+        case .none:
+            return nil
+        }
+    }
+
+    private var shownCount: Int {
+        switch scope {
+        case .repository(let root):
+            return shown(in: root).count
+        case .workspace(let roots):
+            return shownSections(roots).reduce(0) { $0 + $1.worktrees.count }
+        case .none:
+            return 0
+        }
+    }
+
+    private var totalCount: Int {
+        scope.roots.reduce(0) { $0 + offered(in: $1).count }
+    }
+
+    private var noMatch: String {
+        "No worktree matches \u{201C}\(query)\u{201D}."
+    }
+
+    /// Three ways for one family to have nothing to draw, and three
+    /// sentences for them. The unfiltered list is what tells the third
+    /// apart: a repository that has rows and draws none of them was narrowed
+    /// to nothing, and "this is the only worktree" over that answers a
+    /// question nobody asked.
+    private func emptyText(for root: String) -> String {
+        offered(in: root).isEmpty ? emptyMessage(for: root) : noMatch
+    }
+
     // MARK: One family
 
     private func family(_ root: String) -> some View {
-        let list = offered(in: root)
+        let list = shown(in: root)
         return Group {
             if list.isEmpty {
-                Text(emptyMessage(for: root))
+                Text(emptyText(for: root))
                     .font(palette.font(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -239,19 +378,36 @@ struct WorktreePopover: View {
     // MARK: Several families
 
     private func sections(_ roots: [String]) -> some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 1) {
-                ForEach(roots, id: \.self) { root in
-                    section(root)
+        let shown = shownSections(roots)
+        return Group {
+            if shown.isEmpty {
+                Text(noMatch)
+                    .font(palette.font(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(shown, id: \.root) { item in
+                            section(item)
+                        }
+                    }
                 }
+                .scrollIndicators(.automatic)
             }
         }
-        .scrollIndicators(.automatic)
     }
 
     @ViewBuilder
-    private func section(_ root: String) -> some View {
-        let isOpen = expanded.contains(root)
+    private func section(_ section: WorktreeChooserSection) -> some View {
+        let root = section.root
+
+        /// Open while there is a query, whichever sections the reader had
+        /// clicked. A field that narrowed six sections and left the matches
+        /// behind five closed triangles would hide its own answer.
+        let isOpen = expanded.contains(root) || !query.isEmpty
 
         Button {
             toggle(root)
@@ -272,9 +428,8 @@ struct WorktreePopover: View {
                 /// Only once the list is in. Asking for a count is asking
                 /// for the list, and a collapsed section is a section that
                 /// has deliberately not asked.
-                let known = offered(in: root).count
-                if known > 0 {
-                    Text(verbatim: "\(known)")
+                if !section.worktrees.isEmpty {
+                    Text(verbatim: "\(section.worktrees.count)")
                         .font(.system(size: 9.5, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
@@ -287,30 +442,34 @@ struct WorktreePopover: View {
         .buttonStyle(WorktreePopoverRowStyle())
 
         if isOpen {
-            let list = offered(in: root)
             Group {
-                if list.isEmpty {
+                if section.worktrees.isEmpty {
                     Text(emptyMessage(for: root))
                         .font(palette.font(size: 10.5))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.vertical, 2)
                 } else {
-                    ForEach(list) { worktree in
+                    ForEach(section.worktrees) { worktree in
                         row(worktree)
                     }
                 }
 
-                Button {
-                    leaving { onNewWorktree(root) }
-                } label: {
-                    Label("New Worktree…", systemImage: "plus")
-                        .font(palette.font(size: 10.5))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 4)
+                /// Left out while filtering: every other row under an open
+                /// section is one the query kept, and a row that ignores the
+                /// query is one the eye rules out again on every letter.
+                if query.isEmpty {
+                    Button {
+                        leaving { onNewWorktree(root) }
+                    } label: {
+                        Label("New Worktree…", systemImage: "plus")
+                            .font(palette.font(size: 10.5))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(WorktreePopoverRowStyle())
                 }
-                .buttonStyle(WorktreePopoverRowStyle())
             }
             .padding(.leading, 14)
         }
@@ -500,6 +659,78 @@ struct WorktreePopover: View {
         guard let target = confirming else { return }
         let source = currentWorktree?.path ?? currentPath ?? ""
         plan = editorCenter.migrationPlan(from: source, to: target.path)
+    }
+}
+
+/// One repository's worktrees as the chooser lists them.
+struct WorktreeChooserSection: Equatable {
+    let root: String
+    let worktrees: [GitWorktree]
+
+    /// Whether this family's list has arrived at all. A collapsed section
+    /// deliberately has none — see `WorktreeScope.polled` — and that is not
+    /// the same fact as a section a query emptied.
+    let isListed: Bool
+}
+
+/// Which worktrees a typed query leaves the chooser.
+///
+/// The match itself is `BranchFilter`'s, asked one name at a time rather than
+/// restated here. The Git panel's pickers and this popover are one gesture
+/// over two kinds of list, and a second definition of what a query means is
+/// how they would come to disagree about `gamma-310`. Asking also carries the
+/// parts that are easy to lose: a query of nothing but spaces is no query,
+/// and an absent one keeps everything in the caller's order.
+enum WorktreeChooserFilter {
+    /// - Parameter name: what the row shows — a branch, or a folder for a
+    ///   detached checkout. Matching anything else would narrow a list by
+    ///   text the reader cannot see.
+    static func matches(
+        _ worktrees: [GitWorktree],
+        query: String,
+        name: (GitWorktree) -> String
+    ) -> [GitWorktree] {
+        worktrees.filter { keeps(name($0), query: query) }
+    }
+
+    /// Every section, with the query applied inside each, in the order they
+    /// arrived.
+    ///
+    /// A section goes away heading and all once nothing in it matches: a
+    /// heading over nothing is a row the reader has to read to learn it is
+    /// empty, and a workspace of twenty repositories would draw nineteen of
+    /// them.
+    ///
+    /// Two kinds of section survive an empty result. One whose repository the
+    /// query names, because typing a repository is a way of asking for all of
+    /// it — so it comes back whole rather than narrowed. And one whose list
+    /// has not arrived, because most of a workspace's sections have
+    /// deliberately never been listed, and hiding them all would make one
+    /// letter look as though it had found nothing.
+    static func sections(
+        _ sections: [WorktreeChooserSection],
+        query: String,
+        name: (GitWorktree) -> String
+    ) -> [WorktreeChooserSection] {
+        sections.compactMap { section in
+            if keeps((section.root as NSString).lastPathComponent, query: query) {
+                return section
+            }
+
+            let kept = matches(section.worktrees, query: query, name: name)
+            guard kept.isEmpty else {
+                return WorktreeChooserSection(
+                    root: section.root,
+                    worktrees: kept,
+                    isListed: section.isListed)
+            }
+
+            return section.isListed ? nil : section
+        }
+    }
+
+    private static func keeps(_ name: String, query: String) -> Bool {
+        !BranchFilter.matches([name], query: query).isEmpty
     }
 }
 
