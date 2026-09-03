@@ -56,6 +56,37 @@ enum GitRowAction: Hashable, CaseIterable {
         }
     }
 
+    /// The glyph beside the title, in the vocabulary
+    /// `FileExplorerRowCommand.icon` set — the file explorer, the terminal
+    /// rows and this list are three menus in one sidebar, and a command that
+    /// appears in more than one looks the same in each.
+    ///
+    /// Three of them are the row's own hover buttons: `plus`, `minus` and
+    /// `arrow.uturn.backward` are what a reader has already been clicking on
+    /// the row to stage, unstage and discard. The diff is `text.append` for
+    /// the reason `EditorPresentationControl` gives — lines of text with a
+    /// change marked against them.
+    ///
+    /// Both copies take one glyph. They are the same action on two spellings
+    /// of one path, and two glyphs would be a difference in the icon that
+    /// says nothing the titles do not.
+    ///
+    /// Asserted to resolve in `GitRowActionTests`: an SF Symbol this build
+    /// cannot draw is a menu item with a hole where its icon should be.
+    var icon: String {
+        switch self {
+        case .openDiff: "text.append"
+        case .openFile: "doc.text"
+        case .stage: "plus"
+        case .unstage: "minus"
+        case .discardChanges: "arrow.uturn.backward"
+        case .deleteUntrackedFile: "trash"
+        case .addToGitignore: "nosign"
+        case .revealInFinder: "folder"
+        case .copyPath, .copyRelativePath: "doc.on.doc"
+        }
+    }
+
     /// The two that cannot be taken back, which is why both titles end in an
     /// ellipsis: each one asks first.
     var isDestructive: Bool {

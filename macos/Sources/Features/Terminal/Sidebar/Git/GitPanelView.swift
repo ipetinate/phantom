@@ -400,11 +400,10 @@ struct GitChangeRow: View {
             if index > 0 { Divider() }
 
             ForEach(groups[index], id: \.self) { action in
-                Button(
-                    action.title,
-                    role: action.isDestructive ? .destructive : nil
-                ) {
+                Button(role: action.isDestructive ? .destructive : nil) {
                     perform(action)
+                } label: {
+                    Label(action.title, systemImage: action.icon)
                 }
             }
         }

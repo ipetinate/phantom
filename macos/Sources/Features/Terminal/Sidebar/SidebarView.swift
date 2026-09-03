@@ -1129,21 +1129,86 @@ private struct SidebarGroupSection: View {
         }
     }
 
+    /// The header's menu.
+    ///
+    /// Glyphs in the same vocabulary the tab row's menu uses — `plus` is the
+    /// header's own New Terminal button, and an edit is a pencil wherever one
+    /// is offered. The six agent items share one, because an agent's mark is
+    /// a view this app draws rather than a symbol AppKit can put beside a
+    /// menu title, and six different symbols for one action would be six
+    /// guesses at which agent each stood for.
     @ViewBuilder
     private var groupMenu: some View {
-        Button("New Terminal in Group") { onNewTab(group) }
-        Button("New Claude Session in Group") { onNewClaudeTab(group) }
-        Button("New Codex Session in Group") { onNewCodexTab(group) }
-        Button("New OpenCode Session in Group") { onNewOpenCodeTab(group) }
-        Button("New Antigravity Session in Group") { onNewAntigravityTab(group) }
-        Button("New Kimi Code Session in Group") { onNewKimiTab(group) }
-        Button("New Pi Session in Group") { onNewPiTab(group) }
+        Button { onNewTab(group) } label: {
+            Label("New Terminal in Group", systemImage: "plus")
+        }
+        Button { onNewClaudeTab(group) } label: {
+            Label("New Claude Session in Group", systemImage: "sparkles")
+        }
+        Button { onNewCodexTab(group) } label: {
+            Label("New Codex Session in Group", systemImage: "sparkles")
+        }
+        Button { onNewOpenCodeTab(group) } label: {
+            Label("New OpenCode Session in Group", systemImage: "sparkles")
+        }
+        Button { onNewAntigravityTab(group) } label: {
+            Label("New Antigravity Session in Group", systemImage: "sparkles")
+        }
+        Button { onNewKimiTab(group) } label: {
+            Label("New Kimi Code Session in Group", systemImage: "sparkles")
+        }
+        Button { onNewPiTab(group) } label: {
+            Label("New Pi Session in Group", systemImage: "sparkles")
+        }
 
         Divider()
 
-        Button("Edit Group…") { isEditing = true }
+        Button { isEditing = true } label: {
+            Label("Edit Group…", systemImage: "pencil")
+        }
 
-        Menu("Color") {
+        colorMenu
+
+        Divider()
+
+        Button {
+            store.toggleCollapsed(group.id)
+        } label: {
+            Label(
+                collapsed ? "Expand" : "Collapse",
+                systemImage: collapsed ? "chevron.down" : "chevron.up"
+            )
+        }
+
+        Divider()
+
+        Button(role: .destructive) {
+            store.deleteGroup(group.id)
+        } label: {
+            Label("Delete Group", systemImage: "trash")
+        }
+
+        /// Hidden rather than disabled on an empty group: with no terminals
+        /// the two items would say the same thing, and the one a reader has
+        /// to think about should only be there when it means something.
+        if !tabs.isEmpty {
+            Button(role: .destructive) {
+                pendingClose = PendingGroupClose(
+                    tabs: tabs,
+                    runningProcesses: runningProcessCount
+                )
+            } label: {
+                Label("\(deleteWithTerminalsTitle)\u{2026}", systemImage: "xmark.bin")
+            }
+        }
+    }
+
+    /// The colour picker, its own property because the two grids of swatches
+    /// push the menu past what the SwiftUI type checker will solve in one
+    /// body.
+    @ViewBuilder
+    private var colorMenu: some View {
+        Menu {
             Section("General") {
                 ForEach(TerminalTabColor.allCases, id: \.self) { color in
                     Button {
@@ -1181,30 +1246,8 @@ private struct SidebarGroupSection: View {
                     }
                 }
             }
-        }
-
-        Divider()
-
-        Button(collapsed ? "Expand" : "Collapse") {
-            store.toggleCollapsed(group.id)
-        }
-
-        Divider()
-
-        Button("Delete Group", role: .destructive) {
-            store.deleteGroup(group.id)
-        }
-
-        /// Hidden rather than disabled on an empty group: with no terminals
-        /// the two items would say the same thing, and the one a reader has
-        /// to think about should only be there when it means something.
-        if !tabs.isEmpty {
-            Button("\(deleteWithTerminalsTitle)\u{2026}", role: .destructive) {
-                pendingClose = PendingGroupClose(
-                    tabs: tabs,
-                    runningProcesses: runningProcessCount
-                )
-            }
+        } label: {
+            Label("Color", systemImage: "paintpalette")
         }
     }
 
@@ -2205,15 +2248,28 @@ private struct SidebarTabRow: View {
         return AnyShapeStyle(accent.opacity(opacity))
     }
 
+    /// The row's own menu.
+    ///
+    /// Every item carries a glyph, in the vocabulary
+    /// `FileExplorerRowCommand.icon` set: the two menus sit inches apart and
+    /// share commands, so a command that appears in both looks the same in
+    /// both. The group names are the exception, as the branch names in the
+    /// Git panel's branch picker are — they are data, and a group's own icon
+    /// may be an emoji or an agent's mark rather than a symbol AppKit can
+    /// draw beside a title.
     @ViewBuilder
     private var tabMenu: some View {
-        Button("Customize Tab…") { isCustomizing = true }
-            .disabled(tab.surfaceId == nil)
+        Button { isCustomizing = true } label: {
+            Label("Customize Tab…", systemImage: "pencil")
+        }
+        .disabled(tab.surfaceId == nil)
 
         if let prNumber = tab.prNumber,
            let prURL = tab.prURL.flatMap(URL.init(string:)) {
-            Button("Open Pull Request #\(prNumber)…") {
+            Button {
                 NSWorkspace.shared.open(prURL)
+            } label: {
+                Label("Open Pull Request #\(prNumber)…", systemImage: "arrow.triangle.pull")
             }
         }
 
@@ -2225,7 +2281,7 @@ private struct SidebarTabRow: View {
 
         Divider()
 
-        Menu("Move to Group") {
+        Menu {
             ForEach(store.groups) { group in
                 Button(group.name) {
                     guard let surfaceId = tab.surfaceId else { return }
@@ -2237,22 +2293,30 @@ private struct SidebarTabRow: View {
                 Divider()
             }
 
-            Button("New Group…") {
+            Button {
                 isCreatingGroup = true
+            } label: {
+                Label("New Group…", systemImage: "plus.rectangle.on.rectangle")
             }
 
             Divider()
 
-            Button("No Group") {
+            Button {
                 guard let surfaceId = tab.surfaceId else { return }
                 store.assign(surfaceId: surfaceId, to: nil)
+            } label: {
+                Label("No Group", systemImage: "rectangle.on.rectangle.slash")
             }
+        } label: {
+            Label("Move to Group", systemImage: "rectangle.3.group")
         }
 
-        Button("Close Tab", role: .destructive) {
+        Button(role: .destructive) {
             WindowBreadcrumbs.note(
                 "sidebar context menu close: window=\(tab.window?.windowNumber ?? -1)")
             tab.window?.performClose(nil)
+        } label: {
+            Label("Close Tab", systemImage: "xmark")
         }
     }
 }

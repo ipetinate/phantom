@@ -325,42 +325,71 @@ struct GitRepoView: View {
         )
     }
 
+    /// The repository's menu.
+    ///
+    /// Push and Pull take the arrows their own count badges already wear, so
+    /// the item and the badge a reader clicked past say the same thing. The
+    /// rest is the sidebar's shared vocabulary: `arrow.uturn.backward` for
+    /// undoing and `pencil` for editing, and `trash` nowhere here because
+    /// nothing in this menu removes a file.
     @ViewBuilder
     private var menuContents: some View {
         if let status {
             if status.hasUpstream {
-                Button("Push") { center.push(in: root) }
-                Button("Pull") { center.pull(in: root) }
+                Button { center.push(in: root) } label: {
+                    Label("Push", systemImage: "arrow.up")
+                }
+                Button { center.pull(in: root) } label: {
+                    Label("Pull", systemImage: "arrow.down")
+                }
             } else if let branch = status.branch, !status.isDetached {
-                Button("Publish Branch") { center.publish(branch: branch, in: root) }
+                Button { center.publish(branch: branch, in: root) } label: {
+                    Label("Publish Branch", systemImage: "arrow.up.circle")
+                }
             }
-            Button("Fetch") { center.fetch(in: root) }
+            Button { center.fetch(in: root) } label: {
+                Label("Fetch", systemImage: "arrow.down.circle")
+            }
 
             Divider()
 
             /// A popover rather than the submenu this was: the list is the
             /// repository's whole branch list, and a menu cannot hold the
             /// field that makes a long one usable. See `BranchPicker`.
-            Button("Switch Branch\u{2026}") { isSwitchingBranch = true }
-            Button("Create Branch…") { isCreatingBranch = true }
+            Button { isSwitchingBranch = true } label: {
+                Label("Switch Branch\u{2026}", systemImage: "arrow.triangle.branch")
+            }
+            Button { isCreatingBranch = true } label: {
+                Label("Create Branch…", systemImage: "plus")
+            }
 
             Divider()
 
-            Button("Undo Last Commit…") { isUndoingCommit = true }
+            Button { isUndoingCommit = true } label: {
+                Label("Undo Last Commit…", systemImage: "arrow.uturn.backward")
+            }
 
             Divider()
 
-            Button("Stash Changes") { center.stashPush(message: nil, in: root) }
-                .disabled(status.isClean)
-            Button("Pop Stash") { center.stashPop(in: root) }
-                .disabled((center.stashes[root] ?? []).isEmpty)
+            Button { center.stashPush(message: nil, in: root) } label: {
+                Label("Stash Changes", systemImage: "tray.and.arrow.down")
+            }
+            .disabled(status.isClean)
+            Button { center.stashPop(in: root) } label: {
+                Label("Pop Stash", systemImage: "tray.and.arrow.up")
+            }
+            .disabled((center.stashes[root] ?? []).isEmpty)
 
             Divider()
 
-            Toggle("Amend Last Commit", isOn: $isAmending)
+            Toggle(isOn: $isAmending) {
+                Label("Amend Last Commit", systemImage: "pencil")
+            }
         }
 
-        Button("Refresh") { center.requestStatus(root: root, force: true) }
+        Button { center.requestStatus(root: root, force: true) } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
+        }
     }
 
     // MARK: Commit
