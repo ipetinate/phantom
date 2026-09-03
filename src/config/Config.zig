@@ -7030,23 +7030,33 @@ pub const Keybinds = struct {
             );
 
             // Undo/redo
-            try self.set.putFlags(
+            //
+            // Not performable, and that is a deliberate divergence: upstream
+            // marks all three so that a binding whose action cannot be
+            // performed "acts as if it doesn't exist" — which means the key is
+            // encoded and sent on. An undo stack is empty most of the time, so
+            // what that produced was a shortcut that typed a letter: cmd+z put
+            // `z` into whatever was reading input, cmd+shift+z put `Z`, and
+            // cmd+shift+t put `T`. Usually that reader was an agent's prompt.
+            //
+            // The flag is right for a shortcut a terminal program might want
+            // for itself. It is wrong for these three, because no macOS app
+            // answers cmd+z with a character, and a reader who presses it with
+            // nothing to undo means "undo" — not "type z".
+            try self.set.put(
                 alloc,
                 .{ .key = .{ .unicode = 't' }, .mods = .{ .super = true, .shift = true } },
                 .{ .undo = {} },
-                .{ .performable = true },
             );
-            try self.set.putFlags(
+            try self.set.put(
                 alloc,
                 .{ .key = .{ .unicode = 'z' }, .mods = .{ .super = true } },
                 .{ .undo = {} },
-                .{ .performable = true },
             );
-            try self.set.putFlags(
+            try self.set.put(
                 alloc,
                 .{ .key = .{ .unicode = 'z' }, .mods = .{ .super = true, .shift = true } },
                 .{ .redo = {} },
-                .{ .performable = true },
             );
 
             // Viewport scrolling
@@ -10940,6 +10950,44 @@ test "theme specifying light/dark sets theme usage in conditional state" {
 
         try testing.expect(cfg.@"window-theme" == .system);
         try testing.expect(cfg._conditional_set.contains(.theme));
+    }
+}
+
+test "undo and redo never type a character" {
+    if (comptime !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+
+    // A performable binding is encoded and sent on when its action cannot be
+    // performed, and an undo stack is empty most of the time — so the flag is
+    // what turned cmd+z into a way of typing `z` at an agent's prompt.
+    const Trigger = inputpkg.Binding.Trigger;
+    const Action = inputpkg.Binding.Action;
+    const cases = .{
+        .{ Trigger{ .key = .{ .unicode = 'z' }, .mods = .{ .super = true } }, Action.undo },
+        .{
+            Trigger{ .key = .{ .unicode = 'z' }, .mods = .{ .super = true, .shift = true } },
+            Action.redo,
+        },
+        .{
+            Trigger{ .key = .{ .unicode = 't' }, .mods = .{ .super = true, .shift = true } },
+            Action.undo,
+        },
+    };
+
+    inline for (cases) |case| {
+        const entry = cfg.keybind.set.get(case[0]) orelse return error.TestUnexpectedResult;
+        switch (entry.value_ptr.*) {
+            .leaf => |leaf| {
+                try testing.expectEqual(case[1], leaf.action);
+                try testing.expect(!leaf.flags.performable);
+            },
+            else => return error.TestUnexpectedResult,
+        }
     }
 }
 
