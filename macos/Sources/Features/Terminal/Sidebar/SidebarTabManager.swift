@@ -224,6 +224,7 @@ final class SidebarTabManager: ObservableObject {
                 for model in self.models {
                     guard let surfaceId = model.surfaceId else { continue }
                     model.setAgentState(states[surfaceId])
+                    self.applyCommandPhase(model)
                 }
             }
             .store(in: &centerCancellables)
@@ -240,6 +241,7 @@ final class SidebarTabManager: ObservableObject {
                 for model in self.models {
                     guard let surfaceId = model.surfaceId else { continue }
                     model.setLiveAgent(records[surfaceId]?.liveAgent)
+                    self.applyCommandPhase(model)
                 }
             }
             .store(in: &centerCancellables)
@@ -268,9 +270,11 @@ final class SidebarTabManager: ObservableObject {
                 for model in self.models {
                     guard let pid = model.foregroundPID else {
                         model.setDevServerPort(nil)
+                        self.applyCommandPhase(model)
                         continue
                     }
                     model.setDevServerPort(servers[pid]?.port)
+                    self.applyCommandPhase(model)
                 }
             }
             .store(in: &centerCancellables)
@@ -413,12 +417,39 @@ final class SidebarTabManager: ObservableObject {
         guard let pid = surface?.surfaceModel?.foregroundPID else {
             model.setForegroundPID(nil)
             model.setDevServerPort(nil)
+            applyCommandPhase(model)
             return
         }
 
         model.setForegroundPID(pid)
         model.setDevServerPort(DevServerCenter.shared.port(forPID: pid))
         DevServerCenter.shared.requestRefresh(pid: pid)
+        applyCommandPhase(model)
+    }
+
+    /// Folds a tab's own facts through `CommandRunRule`, which is where the
+    /// spinner and the dot for a plain command come from.
+    ///
+    /// Called from every path that can change one of those facts, not from the
+    /// poll alone. The agent centers publish between polls, and a mark inferred
+    /// for a command must not outlive the moment an agent takes the row over —
+    /// the row would then draw a command's dot for a session that is running.
+    ///
+    /// Free of syscalls: every fact was gathered by the caller. The process
+    /// name in particular is the one `setForegroundPID` already resolved, so a
+    /// pass over every tab costs no more than reading published values.
+    private func applyCommandPhase(_ model: SidebarTabModel) {
+        model.setCommandPhase(CommandRunRule.next(
+            after: model.commandPhase,
+            facts: CommandRunRule.Facts(
+                foreground: CommandRunRule.foreground(name: model.foregroundName),
+                hasAgentState: model.agentState != nil,
+                hasLiveAgent: model.liveAgent != nil,
+                hasDevServerPort: model.devServerPort != nil,
+                isSelected: model.isSelected
+            ),
+            now: Date()
+        ))
     }
 
     private func applyPwd(_ pwd: String?, to model: SidebarTabModel) {

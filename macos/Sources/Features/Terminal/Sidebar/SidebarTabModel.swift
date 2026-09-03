@@ -85,6 +85,15 @@ final class SidebarTabModel: ObservableObject, Identifiable {
     /// The port a dev server in this tab is listening on, if any.
     @Published private(set) var devServerPort: Int?
 
+    /// How far along a plain command in this tab is — one no agent hook
+    /// reports, so it is inferred rather than told. See `CommandRunRule`,
+    /// which owns every transition of it.
+    @Published private(set) var commandPhase: CommandRunPhase?
+
+    /// The mark the row draws for that command, which the phase before the
+    /// minimum duration deliberately has none of.
+    var commandMark: CommandRunMark? { commandPhase?.mark }
+
     var surfaceCancellables: Set<AnyCancellable> = []
 
     var directoryName: String? {
@@ -158,5 +167,9 @@ final class SidebarTabModel: ObservableObject, Identifiable {
 
     func setDevServerPort(_ value: Int?) {
         if devServerPort != value { devServerPort = value }
+    }
+
+    func setCommandPhase(_ value: CommandRunPhase?) {
+        if commandPhase != value { commandPhase = value }
     }
 }
