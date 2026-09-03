@@ -1468,6 +1468,10 @@ private struct SidebarTabRow: View {
     @State private var isCustomizing = false
     @State private var groupingWorktree: GitWorktree?
 
+    /// The plan whose file the reader has asked to delete, held while the
+    /// confirmation is up so the sheet can name it.
+    @State private var pendingPlanDelete: ClaudePlanIndex.Plan?
+
     @AppStorage("SidebarShowDirectory") private var showDirectory = true
     @AppStorage("SidebarShowGitBranch") private var showGitBranch = true
     @AppStorage("SidebarShowGitStatus") private var showGitStatus = true
@@ -1751,9 +1755,7 @@ private struct SidebarTabRow: View {
                             devServerChip(port: port)
                         }
 
-                        if showPlan,
-                           ClaudePlanIndex.tagIsVisible(liveAgent: tab.liveAgent),
-                           let plan = planCenter.plan(forTerminalAt: tab.pwd) {
+                        if let plan = visiblePlan {
                             planChip(plan: plan)
                         }
 
@@ -1869,6 +1871,18 @@ private struct SidebarTabRow: View {
                 )
             }
         }
+        .confirmationDialog(
+            "Delete this plan?",
+            isPresented: Binding(
+                get: { pendingPlanDelete != nil },
+                set: { if !$0 { pendingPlanDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            planDeleteButtons
+        } message: {
+            Text(planDeleteMessage)
+        }
     }
 
     /// Trailing status: spinner while the agent works, a raised hand
@@ -1961,6 +1975,70 @@ private struct SidebarTabRow: View {
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
         .help(plan.title)
+        .contextMenu { planMenu(plan: plan) }
+    }
+
+    /// The plan this row is wearing, if it is wearing one.
+    ///
+    /// One question asked in one place, because the tag and the menu that
+    /// clears it must not disagree: a menu offering to hide a tag that is not
+    /// on screen would write a record the reader cannot see the effect of.
+    private var visiblePlan: ClaudePlanIndex.Plan? {
+        guard showPlan, ClaudePlanIndex.tagIsVisible(liveAgent: tab.liveAgent) else { return nil }
+        return planCenter.plan(forTerminalAt: tab.pwd)
+    }
+
+    /// What a reader can do about a plan besides open it.
+    ///
+    /// Offered from the tag and from the row's own menu. The tag is where a
+    /// leftover is noticed, and it is eleven points tall — a reader who wants
+    /// the row's menu should not have to aim around it. The row's menu is
+    /// also the way in that always works: the row fades its content out
+    /// under the hover buttons with a mask, and a mask takes the clicks with
+    /// the pixels, so a tag that ends up beneath the cluster cannot be
+    /// right-clicked itself.
+    ///
+    /// Hiding is per plan and not per row, so both items say "Plan" and
+    /// neither says "this tab": the same plan wears the same tag on every
+    /// terminal in its project, and both of these clear all of them.
+    @ViewBuilder
+    private func planMenu(plan: ClaudePlanIndex.Plan) -> some View {
+        Button {
+            planCenter.hide(plan)
+        } label: {
+            Label("Hide Plan", systemImage: "eye.slash")
+        }
+
+        Button(role: .destructive) {
+            pendingPlanDelete = plan
+        } label: {
+            Label("Delete Plan…", systemImage: "trash")
+        }
+    }
+
+    /// Names the plan, where it lives and that it does not come back.
+    ///
+    /// The file is in the reader's home directory and nothing in this app
+    /// puts it back — the shape `GitRepoView` uses to warn about a commit,
+    /// with the thing being acted on quoted so the sentence is about one
+    /// plan rather than about plans.
+    private var planDeleteMessage: String {
+        guard let plan = pendingPlanDelete else { return "" }
+        return "“\(plan.title)” will be removed from ~/.claude/plans. "
+            + "This cannot be undone."
+    }
+
+    /// Cancel takes the cancel role and the default action, for the reason
+    /// the group header's close sheet gives: Return must not be the key that
+    /// deletes a file.
+    @ViewBuilder
+    private var planDeleteButtons: some View {
+        Button("Delete Plan", role: .destructive) {
+            if let plan = pendingPlanDelete { planCenter.delete(plan) }
+            pendingPlanDelete = nil
+        }
+        Button("Cancel", role: .cancel) { pendingPlanDelete = nil }
+            .keyboardShortcut(.defaultAction)
     }
 
     /// Opens a plan through the same opener a file in the panels uses, so the
@@ -2137,6 +2215,12 @@ private struct SidebarTabRow: View {
             Button("Open Pull Request #\(prNumber)…") {
                 NSWorkspace.shared.open(prURL)
             }
+        }
+
+        if let plan = visiblePlan {
+            Divider()
+
+            planMenu(plan: plan)
         }
 
         Divider()

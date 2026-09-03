@@ -65,6 +65,34 @@ enum ClaudePlanIndex {
         liveAgent == .claude
     }
 
+    /// The plan a terminal sitting at `workingDirectory` should wear, out of
+    /// the newest plan of each project and the ones the reader has hidden.
+    ///
+    /// Hidden plans go before the deepest project wins, not after. Dropping
+    /// them afterwards would let a hidden plan on a subdirectory's project
+    /// silence the visible plan its parent still has.
+    ///
+    /// Hiding never promotes the plan behind it: a project has one tag and it
+    /// is the newest plan's, hidden or not. That is what "stays away" has to
+    /// mean for a reader clearing leftovers — a tag that stepped back to the
+    /// plan before it would ask to be hidden again, once per plan the project
+    /// ever had.
+    static func plan(
+        forTerminalAt workingDirectory: String?,
+        in latestByProject: [String: Plan],
+        hidden: Set<String>
+    ) -> Plan? {
+        guard let workingDirectory, !workingDirectory.isEmpty else { return nil }
+
+        return latestByProject
+            .filter { !hidden.contains($0.value.path) }
+            .filter { project($0.key, contains: workingDirectory) }
+            // The deepest matching project wins: a plan written for a
+            // subdirectory is more specific than one for its parent.
+            .max { $0.key.count < $1.key.count }?
+            .value
+    }
+
     /// One plan on disk.
     struct Plan: Equatable, Identifiable {
         let path: String
