@@ -236,6 +236,13 @@ final class ThemePalette: ObservableObject {
         colors.count > 5 ? Color(nsColor: colors[5]) : nil
     }
 
+    /// ANSI index 3 (Yellow) — "busy, and not an error". The one state that
+    /// needs to read as neither the blue of a normal turn nor the red of a
+    /// failure, and a theme's yellow is chosen for exactly that reading.
+    var yellow: Color? {
+        colors.count > 3 ? Color(nsColor: colors[3]) : nil
+    }
+
     /// ANSI index 1 (Red) — the theme's own danger colour, so a destructive
     /// control warms to the palette the reader chose instead of to the one
     /// SwiftUI ships. Themes are picked for their reds as much as anything

@@ -1283,6 +1283,32 @@ private struct SidebarGroupSection: View {
 /// at the group level: it subscribes to every tab's publisher itself
 /// rather than trusting `tabs` to change identity when only their
 /// contents do.
+/// The mark for a tab that is compacting: the glyph for the operation, kept
+/// breathing so it cannot be read as a tab that has stopped.
+///
+/// A view of its own rather than a branch in `statusIndicator`, because the
+/// animation is the reason it exists and a repeating animation declared inside
+/// a `switch` would be built for every row that reaches that `switch`. Here it
+/// starts when a compacting row appears and stops with it.
+private struct CompactingMark: View {
+    let color: Color
+
+    @State private var isDim = false
+
+    var body: some View {
+        Image(systemName: "rectangle.compress.vertical")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(color)
+            .opacity(isDim ? 0.35 : 1)
+            .help("Compacting the conversation")
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever()) {
+                    isDim = true
+                }
+            }
+    }
+}
+
 private struct GroupStatusRollup: View {
     let tabs: [SidebarTabModel]
     let accent: Color?
@@ -1317,6 +1343,9 @@ private struct GroupStatusRollup: View {
                 .fill(accent ?? .accentColor)
                 .frame(width: 6, height: 6)
                 .help("A terminal in this group needs attention")
+        } else if tabs.contains(where: { $0.agentState == .compacting }) {
+            CompactingMark(color: themePalette.yellow ?? .orange)
+                .help("A terminal in this group is compacting its conversation")
         } else if tabs.contains(where: { $0.agentState == .working }) {
             ProgressView()
                 .controlSize(.mini)
@@ -1846,6 +1875,8 @@ private struct SidebarTabRow: View {
             Circle()
                 .fill(themePalette.accent ?? .accentColor)
                 .frame(width: 8, height: 8)
+        case .compacting:
+            CompactingMark(color: themePalette.yellow ?? .orange)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))

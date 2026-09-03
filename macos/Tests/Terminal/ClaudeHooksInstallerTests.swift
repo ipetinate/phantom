@@ -110,15 +110,16 @@ struct ClaudeHooksInstallerTests {
     /// Exactly the shape found in the user's `settings.json`: six events
     /// registered, which the old check called installed. Three were added to
     /// this build after their install (`Notification`, `PermissionDenied`,
-    /// `StopFailure`) and `SessionStart` after that, so six of ten.
+    /// `StopFailure`), `SessionStart` after that and `PreCompact` after that,
+    /// so six of twelve.
     @Test func thePartialInstallationFoundInTheWildIsDetectedAsIncomplete() {
         let partial = fullyRegisteredSettings(omitting: [
-            "SessionStart", "PostCompact", "Notification", "PermissionDenied",
-            "StopFailure",
+            "SessionStart", "PreCompact", "PostCompact", "Notification",
+            "PermissionDenied", "StopFailure",
         ])
         let registered = (partial["hooks"] as? [String: Any])?.count
         #expect(registered == 6)
-        #expect(ClaudeHooksInstaller.eventStates.count == 11)
+        #expect(ClaudeHooksInstaller.eventStates.count == 12)
         #expect(!ClaudeHooksInstaller.isRegistered(in: partial, scriptName: scriptName))
         // Still "registered for something", which is what tells repair that the
         // user asked for this integration rather than that it should install
