@@ -1573,6 +1573,16 @@ private struct SidebarTabRow: View {
         return dragState.target?.after
     }
 
+    /// Whether the terminal is sitting at its own shell prompt.
+    ///
+    /// Asked once for the row and read by everything on it that types into
+    /// that shell — the agent buttons and the worktree button, whose rules
+    /// both take it. Three separate calls would each run `proc_name`, and two
+    /// of them could come to disagree after a later edit.
+    private var isIdle: Bool {
+        TerminalIdleCheck.isIdle(foregroundPID: tab.foregroundPID)
+    }
+
     /// The agent buttons this row draws, decided by `TabRowAgentActions` — a
     /// tab already running one gets none, because these type into its shell.
     private var agentActions: [CodingAgent] {
@@ -1584,7 +1594,10 @@ private struct SidebarTabRow: View {
         if showKimiAction { shown.insert(.kimi) }
         if showPiAction { shown.insert(.pi) }
 
-        return TabRowAgentActions.agents(shown: shown, liveAgent: tab.liveAgent)
+        return TabRowAgentActions.agents(
+            shown: shown,
+            liveAgent: tab.liveAgent,
+            isIdle: isIdle)
     }
 
     /// Each agent's own mark, at the size the group header uses. Separate
@@ -1642,8 +1655,8 @@ private struct SidebarTabRow: View {
                 isEnabled: showWorktreeAction,
                 repoRoot: tab.repoRoot,
                 currentPath: tab.pwd,
-                isIdle: TerminalIdleCheck.isIdle(foregroundPID: tab.foregroundPID),
-                hasLiveAgent: tab.liveAgent != nil,
+                isIdle: isIdle,
+                hasLiveAgent: TabRowAgentActions.hasLiveAgent(tab.liveAgent, isIdle: isIdle),
                 editorCenter: tabEditorCenter,
                 terminalPwds: tabManager.models.compactMap(\.pwd),
                 onMigrate: { worktree, plan in

@@ -115,7 +115,10 @@ enum WorktreeEntryRule {
     ///     list is worse than no icon.
     ///   - isIdle: `TerminalIdleCheck.isIdle` — the foreground process is a
     ///     shell.
-    ///   - hasLiveAgent: `SidebarTabModel.liveAgent` is set.
+    ///   - hasLiveAgent: `TabRowAgentActions.hasLiveAgent` — the tab's record
+    ///     names a session *and* the foreground process does not contradict
+    ///     it. Not `SidebarTabModel.liveAgent` on its own, which stays set
+    ///     forever when an agent dies without writing its last word.
     ///
     /// Returns nil when the place shows nothing at all.
     static func action(

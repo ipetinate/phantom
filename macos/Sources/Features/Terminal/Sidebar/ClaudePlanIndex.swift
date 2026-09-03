@@ -61,6 +61,17 @@ enum ClaudePlanIndex {
     /// from `AgentTabRecord.liveAgent` — the same fact that decides whether a
     /// restore brings the session back, so the tag and the restore cannot come
     /// to disagree about whether a session exists.
+    ///
+    /// Deliberately *not* given the foreground evidence that
+    /// `TabRowAgentActions.hasLiveAgent` now takes, though the same stale file
+    /// can leave this tag up too. The two questions are different. The row's
+    /// buttons ask whether it is safe to type here, which is a fact about the
+    /// shell this instant. The tag asks which conversation the tab holds,
+    /// which is the restore's question — and the answer has to keep matching
+    /// the restore's, because a reader who quits Claude and leaves the tab
+    /// open still gets that plan's session back at the next launch. A tag that
+    /// outlives its session costs a badge; keeping the two answers in step is
+    /// what this function was added for.
     static func tagIsVisible(liveAgent: CodingAgent?) -> Bool {
         liveAgent == .claude
     }
