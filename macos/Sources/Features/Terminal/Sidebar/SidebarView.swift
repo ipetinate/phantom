@@ -737,6 +737,10 @@ private struct SidebarGroupSection: View {
     @State private var isDropTarget = false
     @State private var isEditing = false
     @State private var isHeaderHovered = false
+
+    /// How wide the header's floating buttons are, measured by the layout that
+    /// draws them.
+    @State private var actionsWidth: CGFloat = 0
     @State private var isShowingPRs = false
 
     /// The terminals "Delete Group and Close Terminals" is asking about, or
@@ -1090,16 +1094,17 @@ private struct SidebarGroupSection: View {
 
                 countSlot.hidden()
             }
+            .fadingUnderFloatingActions(
+                width: alwaysShowActions ? 0 : actionsWidth + 6,
+                isRevealed: !alwaysShowActions && isHeaderHovered)
 
             HStack(spacing: 6) {
-                if !alwaysShowActions { headerActions }
+                if !alwaysShowActions { headerActions.measuringFloatingActions() }
 
                 countSlot
             }
-            .frame(maxHeight: .infinity)
-            .floatingActionScrim(
-                headerSurface, isRevealed: !alwaysShowActions && isHeaderHovered)
         }
+        .onPreferenceChange(FloatingActionsWidthKey.self) { actionsWidth = $0 }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(headerSurface)
@@ -1454,6 +1459,10 @@ private struct SidebarTabRow: View {
     @ObservedObject private var icons: FileIconProvider = .shared
 
     @State private var isHovered = false
+
+    /// How wide this row's floating buttons are, measured by the layout that
+    /// draws them.
+    @State private var actionsWidth: CGFloat = 0
     @State private var isCreatingGroup = false
     @State private var isCustomizing = false
     @State private var groupingWorktree: GitWorktree?
@@ -1765,18 +1774,21 @@ private struct SidebarTabRow: View {
 
                 statusSlot.hidden()
             }
+            /// The content stops where the buttons start, and only while they
+            /// are on screen. Plus the stack's own spacing, which is the gap
+            /// between the cluster and the status slot the content must also
+            /// stay out of.
+            .fadingUnderFloatingActions(
+                width: alwaysShowActions ? 0 : actionsWidth + 6,
+                isRevealed: !alwaysShowActions && isHovered)
 
             HStack(spacing: 6) {
-                if !alwaysShowActions { rowActions }
+                if !alwaysShowActions { rowActions.measuringFloatingActions() }
 
                 statusSlot
             }
-            /// Full height so the fade covers the row rather than a band
-            /// across its middle: the title sits above these buttons and the
-            /// chips below them.
-            .frame(maxHeight: .infinity)
-            .floatingActionScrim(rowBackground, isRevealed: !alwaysShowActions && isHovered)
         }
+        .onPreferenceChange(FloatingActionsWidthKey.self) { actionsWidth = $0 }
         .padding(.horizontal, 8)
         .padding(.vertical, isCompact ? 5 : 8)
         .background(

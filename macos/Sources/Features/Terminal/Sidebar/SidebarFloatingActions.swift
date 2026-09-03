@@ -1,72 +1,67 @@
 import SwiftUI
 
-extension View {
-    /// Fades the row's own surface in under a cluster of floating buttons.
-    ///
-    /// A sidebar row's hover buttons are drawn *over* its content rather than
-    /// beside it, so that a row reserves no width for buttons it is not
-    /// drawing — see `SidebarTabRow.body`. That leaves a title, a branch chip
-    /// or a group's description running underneath a column of icons, which
-    /// neither of them survives without something in between.
-    ///
-    /// This is that something, and it is deliberately the row's own surface
-    /// rather than a neutral slab: the reader should read the result as the
-    /// text passing under the row's trailing edge, not as icons scribbled on
-    /// top of it. The theme background goes down first because the sidebar
-    /// paints none of its own — the window paints the theme colour behind it
-    /// — so the row's translucent wash alone would let the covered text
-    /// through.
-    ///
-    /// The leading padding is part of the deal: it is the width the fade needs,
-    /// and it widens the cluster's box to the left without moving the buttons,
-    /// which are held at the trailing edge by the layout that places them.
-    func floatingActionScrim(_ surface: AnyShapeStyle, isRevealed: Bool) -> some View {
-        modifier(FloatingActionScrim(surface: surface, isRevealed: isRevealed))
+/// How wide the buttons floating over a row are, reported from the row's own
+/// layout so its content can fade out exactly where they begin.
+struct FloatingActionsWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
-private struct FloatingActionScrim: ViewModifier {
-    let surface: AnyShapeStyle
-    let isRevealed: Bool
-
-    @ObservedObject private var palette: ThemePalette = .shared
-
-    /// How far to the left of the first button the surface fades in.
-    private static let fade: CGFloat = 18
-
-    func body(content: Content) -> some View {
-        content
-            .padding(.leading, Self.fade)
-            .background(scrim.opacity(isRevealed ? 1 : 0).allowsHitTesting(false))
+extension View {
+    /// Reports this view's width up the tree as the floating cluster's width.
+    ///
+    /// Measured rather than written down: the cluster is a worktree button and
+    /// up to six agent marks, each behind its own setting, so its width is a
+    /// number only the layout knows.
+    func measuringFloatingActions() -> some View {
+        background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: FloatingActionsWidthKey.self,
+                    value: proxy.size.width
+                )
+            }
+        )
     }
 
-    /// The row's surface, opaque, with its leading `fade` points ramping up
-    /// from nothing.
+    /// Fades this view out under a cluster of buttons `width` points wide at
+    /// its trailing edge.
     ///
-    /// Two slices rather than one masked view: a mask is sized to the view it
-    /// masks, so a single rectangle widened by a negative padding would have
-    /// its overhang masked away entirely. Slicing keeps every part of this
-    /// inside the bounds it is drawn in.
-    private var scrim: some View {
-        HStack(spacing: 0) {
-            filled
-                .frame(width: Self.fade)
-                .mask(
+    /// A sidebar row's hover buttons are drawn over its content rather than
+    /// beside it, so that a row reserves no width for buttons it is not
+    /// drawing — see `SidebarTabRow.body`. Something has to happen where the
+    /// two meet, and this is a mask rather than a backdrop behind the buttons.
+    ///
+    /// A backdrop was the first attempt and it was wrong twice. It had to
+    /// reproduce the row's own surface to be invisible, and it could not: the
+    /// window paints the theme colour with the reader's opacity and blur, a
+    /// group adds its own wash over that, and a flat repaint of the theme
+    /// colour lands somewhere near but not on it. It was also only as tall as
+    /// the buttons, because a row's vertical padding is applied outside the
+    /// layout the buttons sit in — so it read as a dark plate floating inside
+    /// the row.
+    ///
+    /// Fading the content has neither problem. Nothing new is painted, so
+    /// there is no colour to get wrong and no rectangle to be the wrong
+    /// height; the title simply stops before the icons start.
+    func fadingUnderFloatingActions(width: CGFloat, isRevealed: Bool) -> some View {
+        mask(
+            HStack(spacing: 0) {
+                Rectangle()
+
+                if isRevealed, width > 0 {
                     LinearGradient(
-                        colors: [.black.opacity(0), .black],
+                        colors: [.black, .black.opacity(0)],
                         startPoint: .leading,
                         endPoint: .trailing
                     )
-                )
+                    .frame(width: 22)
 
-            filled
-        }
-    }
-
-    private var filled: some View {
-        ZStack {
-            Color(nsColor: palette.background ?? .windowBackgroundColor)
-            Rectangle().fill(surface)
-        }
+                    Color.clear.frame(width: width)
+                }
+            }
+        )
     }
 }
