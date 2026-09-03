@@ -38,9 +38,42 @@ struct AgentBrandAssetTests {
         for agent in CodingAgent.allCases {
             let icon = AgentBrandMark.menuIcon(for: agent)
             #expect(icon != nil, "\(agent) has no menu icon")
-            #expect(icon?.size.width == AgentBrandMark.menuIconSide)
-            #expect(icon?.size.height == AgentBrandMark.menuIconSide)
+            /// The longer side, not both: squaring a mark that is not square
+            /// stretches it, and one of these is 240 by 300.
+            #expect(max(icon?.size.width ?? 0, icon?.size.height ?? 0)
+                == AgentBrandMark.menuIconSide)
         }
+    }
+
+    /// A square mark keeps its square.
+    @Test func aSquareMarkFillsTheBox() {
+        let size = AgentBrandMark.menuIconSize(for: NSSize(width: 512, height: 512))
+        #expect(size.width == AgentBrandMark.menuIconSide)
+        #expect(size.height == AgentBrandMark.menuIconSide)
+    }
+
+    /// And a tall one keeps its proportion. OpenCode's artwork is 240 by 300;
+    /// squared, it drew a quarter too wide, which changes the shape of a logo.
+    @Test func aTallMarkKeepsItsProportion() {
+        let size = AgentBrandMark.menuIconSize(for: NSSize(width: 240, height: 300))
+        #expect(size.height == AgentBrandMark.menuIconSide)
+        #expect(size.width == AgentBrandMark.menuIconSide * 240 / 300)
+        #expect(size.width < size.height)
+    }
+
+    /// A wide one too, so the rule is about the longer side and not about
+    /// height.
+    @Test func aWideMarkKeepsItsProportionAsWell() {
+        let size = AgentBrandMark.menuIconSize(for: NSSize(width: 300, height: 240))
+        #expect(size.width == AgentBrandMark.menuIconSide)
+        #expect(size.height == AgentBrandMark.menuIconSide * 240 / 300)
+    }
+
+    /// A source that reports nothing must not divide by zero.
+    @Test func anEmptySourceFallsBackToTheSquare() {
+        let size = AgentBrandMark.menuIconSize(for: .zero)
+        #expect(size.width == AgentBrandMark.menuIconSide)
+        #expect(size.height == AgentBrandMark.menuIconSide)
     }
 
     /// Template, so the row's highlight tints it like the symbols beside it —

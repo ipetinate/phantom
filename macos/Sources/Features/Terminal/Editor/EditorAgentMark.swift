@@ -96,7 +96,7 @@ extension AgentBrandMark {
     static func menuIcon(for agent: CodingAgent) -> NSImage? {
         guard let source = NSImage(named: asset(for: agent)) else { return nil }
         let icon = source.copy() as? NSImage ?? source
-        icon.size = NSSize(width: menuIconSide, height: menuIconSide)
+        icon.size = menuIconSize(for: source.size)
         icon.isTemplate = !keepsOriginalColours(for: agent)
         return icon
     }
@@ -121,6 +121,27 @@ extension AgentBrandMark {
     /// What AppKit expects of a menu item's image, and what the SF Symbols in
     /// the same menus come out at.
     static let menuIconSide: CGFloat = 16
+
+    /// The size a mark takes in a menu row: the longer side becomes
+    /// `menuIconSide`, the shorter keeps its share of it.
+    ///
+    /// Squaring it stretched the one mark that is not square. OpenCode's
+    /// artwork is 240 by 300, and forced into a 16-point square it came out a
+    /// quarter too wide — the shape of the logo changed, which is the one
+    /// thing a logo cannot afford.
+    ///
+    /// A source that reports no size at all falls back to the square rather
+    /// than dividing by zero, and a mark drawn slightly wrong is better than
+    /// a menu that cannot be built.
+    static func menuIconSize(for source: NSSize) -> NSSize {
+        let longest = max(source.width, source.height)
+        guard longest > 0 else {
+            return NSSize(width: menuIconSide, height: menuIconSide)
+        }
+
+        let scale = menuIconSide / longest
+        return NSSize(width: source.width * scale, height: source.height * scale)
+    }
 }
 
 /// The agents' marks as bitmaps the gutter can draw, rendered once each.
