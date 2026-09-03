@@ -98,6 +98,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     private var terminalPaneView: NSView?
     private var terminalTitleCancellable: AnyCancellable?
 
+    /// Watches the reader's own names for tabs, app-wide.
+    ///
+    /// App-wide because the store is: one instance serves every window, so
+    /// this fires for a rename in any of them and each window then asks
+    /// whether the answer was about its own terminal. Cheaper than it looks —
+    /// a rename is a gesture, and `syncEditorTerminalName` writes nothing
+    /// when the name it resolves is the one already on screen.
+    private var terminalNameCancellable: AnyCancellable?
+
     /// Records the session whenever the editor's arrangement changes.
     ///
     /// The surface tree already reports itself (`surfaceTreeDidChange`), and
@@ -1699,20 +1708,25 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         ])
         self.paneGridTopConstraint = gridTop
 
-        // The terminal's own tab is labelled with the window's title, which
-        // the shell rewrites as it goes. KVO rather than a one-time read, so
-        // the tab doesn't sit there naming a directory you left.
         editorGridCancellable = editorCenter.$tree
             .removeDuplicates()
             .sink { _ in
                 PhantomSessionStore.shared.scheduleSave()
             }
 
+        // KVO rather than a one-time read, so the tab doesn't sit there
+        // naming a directory you left.
         terminalTitleCancellable = window.publisher(for: \.title)
-            .map { title in title.isEmpty ? "Terminal" : title }
-            .removeDuplicates()
-            .sink { [weak self] title in
-                self?.editorCenter.terminalTitle = title
+            .sink { [weak self] _ in
+                self?.syncEditorTerminalName()
+            }
+
+        // The new table rather than the store's own, because `@Published`
+        // fires on `willSet`: reading `tabOverrides` here would answer with
+        // the names from before the rename.
+        terminalNameCancellable = SidebarGroupStore.shared.$tabOverrides
+            .sink { [weak self] overrides in
+                self?.syncEditorTerminalName(overrides: overrides)
             }
 
         let splitView = SidebarSplitView()
@@ -2104,6 +2118,39 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         sidebarChromeTrailingConstraint = trailing
 
         syncSidebarChromeWidth()
+    }
+
+    /// Names the terminal on the editor's own tab bar.
+    ///
+    /// Resolved by ``TerminalDisplayName``, which is the same rule the
+    /// sidebar row draws itself with, so the two cannot disagree — and they
+    /// did: this bar used to take the window's title and nothing else, so a
+    /// row renamed in the sidebar left the tab beside it wearing the title
+    /// the agent had reported before.
+    ///
+    /// The window's title is the terminal's side of that rule rather than the
+    /// focused surface's own, because the window already carries the answer
+    /// with the bell mark and the window-level rename applied.
+    ///
+    /// The surface asked about is the one the sidebar row stands for, which is
+    /// the focused split or, in a window that has never been focused, the
+    /// leftmost — the same expression `SidebarTabManager` resolves a row's
+    /// surface with. Anything else would read the name off a split the row
+    /// is not about.
+    private func syncEditorTerminalName(
+        overrides: [UUID: SidebarGroupStore.TabOverride]? = nil
+    ) {
+        guard let window else { return }
+
+        let table = overrides ?? SidebarGroupStore.shared.tabOverrides
+        let surfaceId = (focusedSurface ?? surfaceTree.root?.leftmostLeaf())?.id
+        let name = TerminalDisplayName.resolve(
+            custom: surfaceId.flatMap { table[$0]?.name },
+            terminalTitle: window.title
+        )
+
+        guard editorCenter.terminalTitle != name else { return }
+        editorCenter.terminalTitle = name
     }
 
     /// Keeps the chrome's trailing edge at the sidebar's right edge
@@ -2681,6 +2728,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         surfaceAppearanceCancellables.removeAll()
 
         followWorkingDirectory(of: to)
+
+        // A name belongs to one surface, so moving between splits can change
+        // which name the editor's tab bar should be wearing. The window title
+        // usually changes with the focus and would sync it anyway; two splits
+        // reporting the same title is the case where it would not.
+        syncEditorTerminalName()
 
         // When our focus changes, we update our window appearance based on the
         // currently focused surface.

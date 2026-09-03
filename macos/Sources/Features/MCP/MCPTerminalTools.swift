@@ -651,16 +651,18 @@ enum MCPTerminalTools {
 
     /// What to call a tab in an answer and in the permission sheet.
     ///
-    /// The reader's own name for it first, then the window title. A tab the
-    /// reader renamed is the one they will recognise in a sheet, and a sheet
-    /// naming the wrong terminal is worse than no sheet at all.
+    /// ``TerminalDisplayName``'s rule, so a sheet names the terminal the same
+    /// way the sidebar row does — a tab the reader renamed is the one they
+    /// will recognise, and a sheet naming the wrong terminal is worse than no
+    /// sheet at all. The fallback is the directory rather than the bare word,
+    /// because an answer about a terminal that has reported no title still has
+    /// to say which terminal it is about.
     static func displayTitle(_ tab: SidebarTabModel) -> String {
-        if let id = tab.surfaceId,
-           let name = SidebarGroupStore.shared.tabOverrides[id]?.name,
-           !name.isEmpty {
-            return name
-        }
-        return tab.title.isEmpty ? (tab.directoryName ?? "terminal") : tab.title
+        TerminalDisplayName.resolve(
+            custom: tab.surfaceId.flatMap { SidebarGroupStore.shared.tabOverrides[$0]?.name },
+            terminalTitle: tab.title,
+            fallback: tab.directoryName ?? "terminal"
+        )
     }
 }
 
