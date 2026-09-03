@@ -1588,8 +1588,7 @@ private struct SidebarTabRow: View {
     }
 
     private var displayTitle: String {
-        if let custom = override?.name, !custom.isEmpty { return custom }
-        return tab.title.isEmpty ? "Terminal" : tab.title
+        TerminalDisplayName.resolve(custom: override?.name, terminalTitle: tab.title)
     }
 
     /// The program holding a file open, for the tabs that were opened for
