@@ -114,10 +114,14 @@ struct GitDiffPane: View {
 
         case .lines(let left, let right, let inline):
             let line = side == .left ? left : right
-            let spans = side == .left ? inline?.removed : inline?.added
+            let edits = side == .left ? inline?.removed : inline?.added
 
             if let line {
-                lineRow(line, emphasis: spans, metrics)
+                lineRow(
+                    line,
+                    emphasis: edits,
+                    tokens: document.highlight.spans(forRow: row.id, side: side),
+                    metrics)
             } else {
                 /// Filler. The other side has a line here and this one does
                 /// not, so the band is drawn empty rather than skipped —
@@ -182,6 +186,7 @@ struct GitDiffPane: View {
     private func lineRow(
         _ line: GitDiffLine,
         emphasis: [NSRange]?,
+        tokens: [GitDiffHighlight.Span],
         _ metrics: GitDiffPaneMetrics
     ) -> some View {
         HStack(spacing: 0) {
@@ -206,8 +211,10 @@ struct GitDiffPane: View {
                 .frame(width: metrics.signWidth, alignment: .center)
                 .padding(.trailing, 4)
 
-            Text(text(of: line, emphasis: emphasis))
+            Text(text(of: line, emphasis: emphasis, tokens: tokens))
                 .font(Font(font))
+                /// The colour of everything the highlighter had no token
+                /// for, and of every line of a language it cannot lex.
                 .foregroundStyle(Color(nsColor: theme.foreground))
                 .fixedSize(horizontal: true, vertical: false)
 
@@ -232,34 +239,59 @@ struct GitDiffPane: View {
         side == .left ? line.oldNumber : line.newNumber
     }
 
-    /// The line, with the characters that actually differ washed a little
-    /// stronger than the rest of the band.
+    /// The line, painted in the theme's token colours, with the characters
+    /// that actually differ washed a little stronger than the rest of the
+    /// band.
+    ///
+    /// The two marks say different things and the line carries both: the
+    /// colour is what the text *is*, the wash is what changed about it. So
+    /// the tokens set a foreground and the emphasis sets a background, and
+    /// neither takes the other's answer away.
     ///
     /// `displayText` rather than `text`, so a CRLF file does not draw a
     /// stray glyph on every line — the carriage return is still in the
     /// model, which is what lets the two sides differ by only that.
-    private func text(of line: GitDiffLine, emphasis: [NSRange]?) -> AttributedString {
+    private func text(
+        of line: GitDiffLine,
+        emphasis: [NSRange]?,
+        tokens: [GitDiffHighlight.Span]
+    ) -> AttributedString {
         var attributed = AttributedString(line.displayText)
+        let string = line.displayText
+
+        for token in tokens {
+            guard let bounds = bounds(of: token.range, in: string, of: attributed) else { continue }
+            attributed[bounds].foregroundColor = Color(nsColor: theme.color(for: token.kind))
+        }
 
         guard let emphasis, !emphasis.isEmpty else { return attributed }
 
         let wash = line.kind == .added ? palette.addedEmphasis : palette.removedEmphasis
-        let string = line.displayText
-
         for range in emphasis {
-            /// Clamped against the *display* text: the ranges were measured
-            /// on `text`, which is one character longer on a CRLF line, and
-            /// an emphasis span that reached the carriage return would put
-            /// the range past the end of what is drawn.
-            guard let swiftRange = Range(range, in: string),
-                  let lower = AttributedString.Index(swiftRange.lowerBound, within: attributed),
-                  let upper = AttributedString.Index(swiftRange.upperBound, within: attributed)
-            else { continue }
-
-            attributed[lower..<upper].backgroundColor = Color(nsColor: wash)
+            guard let bounds = bounds(of: range, in: string, of: attributed) else { continue }
+            attributed[bounds].backgroundColor = Color(nsColor: wash)
         }
 
         return attributed
+    }
+
+    /// Where a range measured on the display text lands in the attributed
+    /// copy of it, or nil when it lands nowhere.
+    ///
+    /// Nil is a real answer and not a defence: an emphasis span was measured
+    /// on `text`, which is one character longer on a CRLF line, so a span
+    /// that reached the carriage return would ask for a range past the end
+    /// of what is drawn.
+    private func bounds(
+        of range: NSRange,
+        in string: String,
+        of attributed: AttributedString
+    ) -> Range<AttributedString.Index>? {
+        guard let swiftRange = Range(range, in: string),
+              let lower = AttributedString.Index(swiftRange.lowerBound, within: attributed),
+              let upper = AttributedString.Index(swiftRange.upperBound, within: attributed)
+        else { return nil }
+        return lower..<upper
     }
 
     private func background(for kind: GitDiffLine.Kind) -> Color {

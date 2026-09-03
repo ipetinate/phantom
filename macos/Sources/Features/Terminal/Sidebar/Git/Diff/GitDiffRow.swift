@@ -153,12 +153,18 @@ struct GitDiffDocument: Equatable {
     let widestLeft: Int
     let widestRight: Int
 
+    /// Which parts of each line are keywords, strings, comments — worked out
+    /// here for the same reason as the widths above, and argued in full on
+    /// ``GitDiffHighlight``.
+    let highlight: GitDiffHighlight
+
     init(file: GitFileDiff) {
         self.file = file
         let rows = GitDiffAlignment.rows(for: file)
         self.rows = rows
         self.widestLeft = Self.widest(of: rows, \.left)
         self.widestRight = Self.widest(of: rows, \.right)
+        self.highlight = GitDiffHighlight.make(for: rows, file: file)
     }
 
     private static func widest(
