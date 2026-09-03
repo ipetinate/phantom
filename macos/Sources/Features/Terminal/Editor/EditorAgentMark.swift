@@ -51,6 +51,36 @@ struct AgentBrandMark: View {
     }
 }
 
+extension AgentBrandMark {
+    /// The asset behind the mark, for the places that need an image *name*
+    /// rather than a view.
+    ///
+    /// A menu is the case this exists for. AppKit flattens a menu item to a
+    /// title and one image, so a `Label` there can carry an asset name but not
+    /// a view — which is why a group's six agent items all shared one SF
+    /// Symbol, and why none of them said which agent it stood for.
+    ///
+    /// Written out rather than derived from the agent's display name or from
+    /// its defaults key. `OpenCode` is one word in the catalogue and two in
+    /// its name, and `AgentButtonDefaults` states plainly that its own
+    /// spelling is a key and nothing else. Six lines that are each a fact
+    /// beats one line that is a coincidence holding for five of them.
+    ///
+    /// The template variant, always: a menu tints its own images, and the
+    /// coloured Antigravity artwork would come out inverted on a highlighted
+    /// row while its neighbours followed the highlight.
+    static func asset(for agent: CodingAgent) -> String {
+        switch agent {
+        case .claude: return "ClaudeIcon"
+        case .codex: return "CodexIcon"
+        case .opencode: return "OpenCodeIcon"
+        case .antigravity: return "AntigravityIcon"
+        case .kimi: return "KimiIcon"
+        case .pi: return "PiIcon"
+        }
+    }
+}
+
 /// The agents' marks as bitmaps the gutter can draw, rendered once each.
 ///
 /// ## Why they are rendered at all

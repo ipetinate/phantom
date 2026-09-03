@@ -1133,32 +1133,35 @@ private struct SidebarGroupSection: View {
     ///
     /// Glyphs in the same vocabulary the tab row's menu uses — `plus` is the
     /// header's own New Terminal button, and an edit is a pencil wherever one
-    /// is offered. The six agent items share one, because an agent's mark is
-    /// a view this app draws rather than a symbol AppKit can put beside a
-    /// menu title, and six different symbols for one action would be six
-    /// guesses at which agent each stood for.
+    /// is offered.
+    ///
+    /// The six agent items carry their own marks, the ones on the header's
+    /// buttons directly above them. They shared one SF Symbol first, on the
+    /// reasoning that a mark is a view and a menu takes a symbol — but a menu
+    /// takes an *asset* too, and the mark is one. Six rows of the same glyph
+    /// named six different agents and pointed at none of them.
     @ViewBuilder
     private var groupMenu: some View {
         Button { onNewTab(group) } label: {
             Label("New Terminal in Group", systemImage: "plus")
         }
         Button { onNewClaudeTab(group) } label: {
-            Label("New Claude Session in Group", systemImage: "sparkles")
+            Label("New Claude Session in Group", image: AgentBrandMark.asset(for: .claude))
         }
         Button { onNewCodexTab(group) } label: {
-            Label("New Codex Session in Group", systemImage: "sparkles")
+            Label("New Codex Session in Group", image: AgentBrandMark.asset(for: .codex))
         }
         Button { onNewOpenCodeTab(group) } label: {
-            Label("New OpenCode Session in Group", systemImage: "sparkles")
+            Label("New OpenCode Session in Group", image: AgentBrandMark.asset(for: .opencode))
         }
         Button { onNewAntigravityTab(group) } label: {
-            Label("New Antigravity Session in Group", systemImage: "sparkles")
+            Label("New Antigravity Session in Group", image: AgentBrandMark.asset(for: .antigravity))
         }
         Button { onNewKimiTab(group) } label: {
-            Label("New Kimi Code Session in Group", systemImage: "sparkles")
+            Label("New Kimi Code Session in Group", image: AgentBrandMark.asset(for: .kimi))
         }
         Button { onNewPiTab(group) } label: {
-            Label("New Pi Session in Group", systemImage: "sparkles")
+            Label("New Pi Session in Group", image: AgentBrandMark.asset(for: .pi))
         }
 
         Divider()
