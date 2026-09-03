@@ -23,11 +23,14 @@ enum EditorFormatRoute {
     ///   - server: the status of this file's language server, or nil when no
     ///     server is configured for the language at all.
     ///   - serverFormats: whether it advertised `documentFormattingProvider`.
+    ///   - handshakeTimedOut: whether the caller already waited out
+    ///     `serverSettleTimeout` and the server is *still* starting.
     static func usesPrettierFromPath(
         trigger: EditorFormatTrigger,
         prettierKnowsTheFile: Bool,
         server: LSPServerStatus?,
-        serverFormats: Bool
+        serverFormats: Bool,
+        handshakeTimedOut: Bool
     ) -> Bool {
         guard trigger == .command, prettierKnowsTheFile, !serverFormats else { return false }
 
@@ -36,12 +39,41 @@ enum EditorFormatRoute {
         /// "does not have it". Taking the fallback here would mean that ⇧⌘F in
         /// the first seconds of a TypeScript file formatted it with Prettier's
         /// defaults instead of with the server that was about to answer.
-        if server == .starting { return false }
+        ///
+        /// Which is why the caller waits — see `waitsForServer` — and why the
+        /// wait having expired is a separate fact from the server's state. A
+        /// handshake that has not finished after `serverSettleTimeout` is not
+        /// an answer the reader should keep being told about: the first ⇧⌘F on
+        /// a Markdown file, typed while `marksman` was still loading the
+        /// folder, reported "this language server doesn't offer formatting"
+        /// about a server that had not yet said anything at all.
+        if server == .starting, !handshakeTimedOut { return false }
 
         /// Every other state is a real answer, failures included. A `.md` file
         /// whose `marksman` is not installed is better served by Prettier than
         /// by a sentence about `marksman`.
         return true
+    }
+
+    /// How long ⇧⌘F waits for a handshake before routing without it.
+    ///
+    /// Long enough for a server that is going to answer — the ones here
+    /// advertise their capabilities in the first exchange, well inside this —
+    /// and short enough that a reader who pressed a key does not think the key
+    /// did nothing.
+    static let serverSettleTimeout: TimeInterval = 3
+
+    /// Whether to wait at all before reading the server's answer.
+    ///
+    /// Only for ⇧⌘F, and only while the handshake is actually in flight. A
+    /// save must never stall on the network: format-on-save runs on every ⌘S,
+    /// and a reader who saves during a restart would be waiting three seconds
+    /// for a file they already have.
+    static func waitsForServer(
+        trigger: EditorFormatTrigger,
+        server: LSPServerStatus?
+    ) -> Bool {
+        trigger == .command && server == .starting
     }
 
     /// Whether the external formatter for this file gets to run.

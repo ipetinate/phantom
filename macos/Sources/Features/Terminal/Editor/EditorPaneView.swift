@@ -1589,10 +1589,39 @@ private struct DocumentView: View {
         /// typing, but ⌘S with format-on-save turned on would still rewrite
         /// the file from underneath the banner saying it cannot be edited.
         guard divergence?.isReadOnly != true else { return }
+
+        let timedOut = await settleLanguageServer(trigger)
         if await formatWithPrettier(trigger) { return }
-        if await formatWithPrettierFromPath(trigger) { return }
+        if await formatWithPrettierFromPath(trigger, handshakeTimedOut: timedOut) { return }
         if await formatWithExternalFormatter(trigger) { return }
         await formatWithLanguageServer(trigger)
+    }
+
+    /// Waits out a handshake that is in flight, and answers whether it gave up.
+    ///
+    /// The routing below reads three facts off the language server, and all
+    /// three are unanswerable while it is still starting: what it is, whether
+    /// it formats, and whether the fallbacks should defer to it. Asking anyway
+    /// is how the first ⇧⌘F in a freshly opened Markdown file — pressed in the
+    /// second between `marksman` launching and it reporting its capabilities —
+    /// answered with a sentence about `marksman` not offering formatting.
+    ///
+    /// Polling rather than a continuation, because the status is `@Published`
+    /// state on a `@MainActor` object and every reader of it is a view. A
+    /// hundred milliseconds is far below the threshold where a reader suspects
+    /// their keystroke was lost, and the loop ends the moment the state moves.
+    private func settleLanguageServer(_ trigger: EditorFormatTrigger) async -> Bool {
+        let path = document.url.path
+        guard EditorFormatRoute.waitsForServer(
+            trigger: trigger, server: lsp.status(forPath: path))
+        else { return false }
+
+        let deadline = Date().addingTimeInterval(EditorFormatRoute.serverSettleTimeout)
+        while Date() < deadline {
+            guard lsp.status(forPath: path) == .starting else { return false }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return lsp.status(forPath: path) == .starting
     }
 
     private func format() {
@@ -1655,7 +1684,10 @@ private struct DocumentView: View {
     /// Returns false when this route does not apply, leaving the language
     /// server to answer and to say what it has to say. See
     /// `EditorFormatRoute.usesPrettierFromPath` for when it does.
-    private func formatWithPrettierFromPath(_ trigger: EditorFormatTrigger) async -> Bool {
+    private func formatWithPrettierFromPath(
+        _ trigger: EditorFormatTrigger,
+        handshakeTimedOut: Bool
+    ) async -> Bool {
         guard usesPrettier else { return false }
 
         let path = document.url.path
@@ -1664,7 +1696,8 @@ private struct DocumentView: View {
             trigger: trigger,
             prettierKnowsTheFile: PrettierProject.parserCanBeInferred(for: name),
             server: lsp.status(forPath: path),
-            serverFormats: lsp.hasCapability("documentFormattingProvider", forPath: path))
+            serverFormats: lsp.hasCapability("documentFormattingProvider", forPath: path),
+            handshakeTimedOut: handshakeTimedOut)
         else { return false }
 
         let revision = document.revision
@@ -1900,6 +1933,12 @@ private struct DocumentView: View {
 
         if status.isFailure {
             notice = "The language server \(status.summary)."
+        } else if status == .starting {
+            /// Still starting, after the routing already waited it out. It has
+            /// not said whether it formats, so neither sentence below is true
+            /// about it — and the one about capabilities is the one that read
+            /// as a verdict on a server that had not spoken yet.
+            notice = "The language server is still starting."
         } else if !lsp.hasCapability(capability, forPath: path) {
             notice = whenUnsupported
         } else {

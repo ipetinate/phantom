@@ -13,13 +13,15 @@ struct EditorFormatRouteTests {
         _ trigger: EditorFormatTrigger = .command,
         knows: Bool = true,
         server: LSPServerStatus? = .running,
-        formats: Bool = false
+        formats: Bool = false,
+        timedOut: Bool = false
     ) -> Bool {
         EditorFormatRoute.usesPrettierFromPath(
             trigger: trigger,
             prettierKnowsTheFile: knows,
             server: server,
-            serverFormats: formats)
+            serverFormats: formats,
+            handshakeTimedOut: timedOut)
     }
 
     // MARK: When Prettier gets the last word
@@ -104,5 +106,35 @@ struct EditorFormatRouteTests {
 
     @Test func aServerStillStartingIsWaitedForHereToo() {
         #expect(!external(server: .starting))
+    }
+
+    // MARK: The handshake the reader pressed a key during
+
+    /// The bug this pair exists for. The first ⇧⌘F in a freshly opened
+    /// Markdown file lands in the second between `marksman` launching and it
+    /// reporting what it can do, and the reader was told that server does not
+    /// offer formatting — a verdict on something that had not spoken yet.
+    @Test func aHandshakeInFlightStillDefersToTheServer() {
+        #expect(!route(server: .starting))
+    }
+
+    @Test func aHandshakeThatNeverFinishesStopsBlockingPrettier() {
+        #expect(route(server: .starting, timedOut: true))
+    }
+
+    /// Waiting is for the reader who pressed a key, never for a save: format
+    /// on save runs on every ⌘S, and stalling one on a restarting server would
+    /// hold up a file the reader already has.
+    @Test func onlyTheCommandWaitsForAHandshake() {
+        #expect(EditorFormatRoute.waitsForServer(trigger: .command, server: .starting))
+        #expect(!EditorFormatRoute.waitsForServer(trigger: .save, server: .starting))
+    }
+
+    /// And only while one is actually in flight — every other state is an
+    /// answer already.
+    @Test func aServerThatIsNotStartingIsNotWaitedFor() {
+        #expect(!EditorFormatRoute.waitsForServer(trigger: .command, server: .running))
+        #expect(!EditorFormatRoute.waitsForServer(trigger: .command, server: .notInstalled))
+        #expect(!EditorFormatRoute.waitsForServer(trigger: .command, server: nil))
     }
 }
