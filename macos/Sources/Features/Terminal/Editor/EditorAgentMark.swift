@@ -97,8 +97,25 @@ extension AgentBrandMark {
         guard let source = NSImage(named: asset(for: agent)) else { return nil }
         let icon = source.copy() as? NSImage ?? source
         icon.size = NSSize(width: menuIconSide, height: menuIconSide)
-        icon.isTemplate = true
+        icon.isTemplate = !keepsOriginalColours(for: agent)
         return icon
+    }
+
+    /// Whether the mark has to keep its own colours, because tinting it
+    /// destroys it.
+    ///
+    /// A template image is read through its alpha channel alone: every pixel
+    /// that is not transparent becomes the tint. That works for a silhouette
+    /// and only for a silhouette.
+    ///
+    /// OpenCode is not one. Its file paints a near-white path over the whole
+    /// canvas and knocks the mark out of it with a second, darker fill — so
+    /// the alpha channel *is* the canvas, and the tint filled it in. What the
+    /// reader got was a solid white block where a logo should be. The
+    /// catalogue declares every one of these template, which is why this is a
+    /// fact about the artwork kept here rather than a setting read from there.
+    static func keepsOriginalColours(for agent: CodingAgent) -> Bool {
+        agent == .opencode
     }
 
     /// What AppKit expects of a menu item's image, and what the SF Symbols in

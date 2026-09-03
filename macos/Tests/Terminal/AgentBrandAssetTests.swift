@@ -43,11 +43,27 @@ struct AgentBrandAssetTests {
         }
     }
 
-    /// Template, so the row's highlight tints it like the symbols beside it.
-    @Test func aMenuIconIsATemplate() {
-        for agent in CodingAgent.allCases {
+    /// Template, so the row's highlight tints it like the symbols beside it —
+    /// for every mark that is a silhouette.
+    @Test func aSilhouetteIsATemplate() {
+        for agent in CodingAgent.allCases where !AgentBrandMark.keepsOriginalColours(for: agent) {
             #expect(AgentBrandMark.menuIcon(for: agent)?.isTemplate == true)
         }
+    }
+
+    /// And never for one that is not. A template is read through its alpha
+    /// alone, and OpenCode's file paints the whole canvas and knocks the mark
+    /// out of it in a second fill — so tinting it produced a solid block.
+    @Test func aMarkThatIsNotASilhouetteKeepsItsColours() {
+        #expect(AgentBrandMark.keepsOriginalColours(for: .opencode))
+        #expect(AgentBrandMark.menuIcon(for: .opencode)?.isTemplate == false)
+    }
+
+    /// One exception, and it is named. Every other mark tints, and a second
+    /// one appearing here should be a decision somebody made on purpose.
+    @Test func opencodeIsTheOnlyException() {
+        let exceptions = CodingAgent.allCases.filter(AgentBrandMark.keepsOriginalColours)
+        #expect(exceptions == [.opencode])
     }
 
     /// Sizing the copy must not resize the catalogue's own image, which every
