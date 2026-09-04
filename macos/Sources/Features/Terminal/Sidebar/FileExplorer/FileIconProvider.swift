@@ -228,7 +228,7 @@ struct FileIconView: View {
             Image(nsImage: image)
                 .resizable()
                 .interpolation(.high)
-                .aspectRatio(contentMode: .fit)
+                .scaledToFit()
                 .frame(width: size, height: size)
         case .symbol(let name, let color):
             Image(systemName: name)

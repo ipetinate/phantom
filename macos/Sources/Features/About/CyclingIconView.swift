@@ -24,7 +24,7 @@ struct CyclingIconView: View {
         icon
             .resizable()
             .interpolation(.high)
-            .aspectRatio(contentMode: .fit)
+            .scaledToFit()
             .frame(height: 128)
             .scaleEffect(viewModel.isHovering ? 1.05 : 1)
             .animation(.easeInOut(duration: 0.2), value: viewModel.isHovering)

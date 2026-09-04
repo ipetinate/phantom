@@ -1272,7 +1272,7 @@ struct LanguageIconView: View {
         if let name {
             Image(name)
                 .resizable()
-                .aspectRatio(contentMode: .fit)
+                .scaledToFit()
                 .frame(width: size, height: size)
         } else {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
