@@ -370,10 +370,15 @@ struct AntigravityHooksInstallerTests {
     /// A registration short of one event is not installed — but is still
     /// *something*, which is what lets `repairIfStale` finish it and what stops
     /// `uninstall` from calling a partial removal a success.
+    /// The command names the script, and the script's name carries the build
+    /// — `phantom-debug-tab-state.sh` in a second build — so the fixture asks
+    /// the installer for it rather than spelling it. Spelled out, this pinned
+    /// one build and failed in the other.
     @Test func aPartialRegistrationIsIncompleteButPresent() throws {
+        let script = AntigravityHooksInstaller.scriptName
         let file = try settings("""
-        {"phantom-tab-state":{"Stop":[{"type":"command",\
-        "command":"'/x/phantom-tab-state.sh' done Stop"}]}}
+        {"\(AntigravityHooksInstaller.hookName)":{"Stop":[{"type":"command",\
+        "command":"'/x/\(script)' done Stop"}]}}
         """)
 
         #expect(!AntigravityHooksInstaller.isRegistered(in: file))

@@ -437,14 +437,28 @@ struct CodexMCPInstallerTests {
         #expect(CodexMCPInstaller.table.hasPrefix("mcp_servers."))
     }
 
+    /// The arguments come from `MCPServerCommand` rather than being written
+    /// out here, and that is the point rather than convenience: they carry the
+    /// socket path, which carries the build. Spelled as a literal, this test
+    /// pinned one build's entry and failed in the other — and it failed only
+    /// in a full run, because the drift is invisible to the class on its own.
     @Test func theBlockIsACommandAndAnArgumentList() {
         let block = CodexMCPInstaller.block(executable: "/x/Phantom.app/Contents/MacOS/ghostty")
+        let args = MCPServerCommand.arguments
+            .map { "\"\($0)\"" }
+            .joined(separator: ", ")
 
         #expect(block == """
         [mcp_servers.\(MCPServerCommand.name)]
         command = "/x/Phantom.app/Contents/MacOS/ghostty"
-        args = ["+mcp-server"]
+        args = [\(args)]
         """)
+
+        /// The two facts the spelling above would otherwise hide: the action
+        /// comes first, and the socket is named rather than left to whatever
+        /// the environment happens to say.
+        #expect(MCPServerCommand.arguments.first == "+mcp-server")
+        #expect(MCPServerCommand.arguments.contains { $0.hasPrefix("--socket=") })
     }
 
     /// A basic TOML string takes exactly two characters badly, and a reader's
@@ -708,7 +722,7 @@ struct CodexMCPInstallerTests {
         let entry = try #require(KimiMCPInstaller.entry)
 
         #expect(entry["command"] as? String == MCPServerCommand.executablePath)
-        #expect(entry["args"] as? [String] == ["+mcp-server"])
+        #expect(entry["args"] as? [String] == MCPServerCommand.arguments)
         #expect(KimiMCPInstaller.configURL.path.hasSuffix("/mcp.json"))
         #expect(KimiMCPInstaller.key == "mcpServers")
     }
