@@ -1599,7 +1599,25 @@ private struct DocumentView: View {
         if await formatWithPrettier(trigger) { return }
         if await formatWithPrettierFromPath(trigger, handshakeTimedOut: timedOut) { return }
         if await formatWithExternalFormatter(trigger) { return }
-        await formatWithLanguageServer(trigger)
+        if await formatWithLanguageServer(trigger) { return }
+
+        /// The server was asked and had nothing. Shell is the case: with
+        /// `bash-language-server` installed, it advertises formatting and
+        /// shells out to `shfmt` — so the external formatter defers to it, and
+        /// a server that cannot find `shfmt` on its own `PATH` answers with an
+        /// empty edit list while the tool sits installed and working. The
+        /// reader gets a sentence about a server instead of a formatted file.
+        ///
+        /// The same lesson Markdown taught: a server advertising a capability
+        /// is not the same as a server having it.
+        if await formatWithExternalFormatter(trigger, serverReturnedNothing: true) { return }
+
+        guard trigger == .command else { return }
+        reportEmpty(
+            whenHealthyAndEmpty: "The language server returned no formatting.",
+            whenUnsupported: "This language server doesn't offer formatting.",
+            capability: "documentFormattingProvider"
+        )
     }
 
     /// Waits out a handshake that is in flight, and answers whether it gave up.
@@ -1736,7 +1754,10 @@ private struct DocumentView: View {
     /// something else; these four are the only formatter their language has on
     /// this machine, which is the same position the language server's own
     /// formatter is in — and each is a switch in Settings.
-    private func formatWithExternalFormatter(_ trigger: EditorFormatTrigger) async -> Bool {
+    private func formatWithExternalFormatter(
+        _ trigger: EditorFormatTrigger,
+        serverReturnedNothing: Bool = false
+    ) async -> Bool {
         let path = document.url.path
         let name = (path as NSString).lastPathComponent
 
@@ -1744,7 +1765,8 @@ private struct DocumentView: View {
               let formatter = ExternalFormatterStore.effective(known),
               EditorFormatRoute.usesExternalFormatter(
                 server: lsp.status(forPath: path),
-                serverFormats: lsp.hasCapability("documentFormattingProvider", forPath: path))
+                serverFormats: lsp.hasCapability("documentFormattingProvider", forPath: path),
+                serverReturnedNothing: serverReturnedNothing)
         else { return false }
 
         let revision = document.revision
@@ -1820,7 +1842,11 @@ private struct DocumentView: View {
     }
 
     /// What formatting was before Prettier: ask the language server.
-    private func formatWithLanguageServer(_ trigger: EditorFormatTrigger) async {
+    /// - Returns: whether the server formatted the file. False means it was
+    ///   asked and had nothing, which is a different answer from a failure and
+    ///   is what lets an external formatter follow it.
+    @discardableResult
+    private func formatWithLanguageServer(_ trigger: EditorFormatTrigger) async -> Bool {
             /// Captured before the request, compared after it.
             ///
             /// A formatting reply is a list of ranges computed against the
@@ -1843,16 +1869,12 @@ private struct DocumentView: View {
                 tabSize: configuration.tabWidth,
                 insertSpaces: configuration.insertsSpacesForTab
             )
-            guard !edits.isEmpty else {
-                guard trigger == .command else { return }
-                reportEmpty(
-                    whenHealthyAndEmpty: "The language server returned no formatting.",
-                    whenUnsupported: "This language server doesn't offer formatting.",
-                    capability: "documentFormattingProvider"
-                )
-                return
-            }
-            guard document.revision == revision else { return }
+            /// Nothing back, and the reporting is deliberately *not* here any
+            /// more: a server that advertised formatting and then returned
+            /// nothing is exactly when a tool that formats this language
+            /// should get its turn. See `formatDocument`.
+            guard !edits.isEmpty else { return false }
+            guard document.revision == revision else { return true }
             let formatted = LSPTextEdit.apply(edits, to: document.currentText)
             document.replaceText(formatted, named: "Formatting")
 
@@ -1867,6 +1889,7 @@ private struct DocumentView: View {
             /// positions that no longer exist. It repairs itself on the next
             /// keystroke, by accident, which is why nobody notices.
             lsp.didChange(path: document.url.path, text: formatted)
+            return true
     }
 
     /// Applies a rename across every file the server named.

@@ -137,4 +137,38 @@ struct EditorFormatRouteTests {
         #expect(!EditorFormatRoute.waitsForServer(trigger: .command, server: .notInstalled))
         #expect(!EditorFormatRoute.waitsForServer(trigger: .command, server: nil))
     }
+
+    // MARK: The server that says yes and does nothing
+
+    /// Shell is the case. `bash-language-server` advertises formatting and
+    /// shells out to `shfmt`, so the tool defers to it — and a server that
+    /// cannot find `shfmt` on its own `PATH` answers with an empty edit list
+    /// while the tool sits installed and working. The reader gets a sentence
+    /// about a server instead of a formatted file.
+    @Test func aServerThatFormatsBlocksTheToolUntilItAnswersNothing() {
+        #expect(!EditorFormatRoute.usesExternalFormatter(
+            server: .running, serverFormats: true))
+
+        #expect(EditorFormatRoute.usesExternalFormatter(
+            server: .running, serverFormats: true, serverReturnedNothing: true))
+    }
+
+    /// The order is unchanged: a server that formats is still asked first, and
+    /// the tool only follows a real answer.
+    @Test func theToolStillGoesSecond() {
+        #expect(EditorFormatRoute.usesExternalFormatter(
+            server: .running, serverFormats: false))
+        #expect(EditorFormatRoute.usesExternalFormatter(
+            server: .notInstalled, serverFormats: false))
+    }
+
+    /// A handshake in flight is not an answer, so the tool waits — except
+    /// after the server has been asked and returned nothing, which can only
+    /// have happened because it did answer.
+    @Test func aStartingServerStillHoldsTheTool() {
+        #expect(!EditorFormatRoute.usesExternalFormatter(
+            server: .starting, serverFormats: false))
+        #expect(EditorFormatRoute.usesExternalFormatter(
+            server: .starting, serverFormats: false, serverReturnedNothing: true))
+    }
 }

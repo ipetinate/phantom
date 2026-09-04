@@ -89,11 +89,22 @@ enum EditorFormatRoute {
     /// position — they are the only formatter their language has here, which
     /// is where the language server's own formatter stands, and that one has
     /// always run on a save. Each of them is also a switch in Settings.
+    /// - Parameter serverReturnedNothing: whether the server has already been
+    ///   asked and came back with no edits. It lifts the deference, and only
+    ///   that: a server that formats is still asked first.
+    ///
+    ///   Shell is why it exists. `bash-language-server` advertises formatting
+    ///   and shells out to `shfmt`, so the deference below hands it the file —
+    ///   and a server that cannot find `shfmt` on its own `PATH` answers with
+    ///   an empty edit list while the tool sits installed and working. Asking
+    ///   the tool afterwards costs one process on a path that had already
+    ///   failed, and turns a sentence about a server into a formatted file.
     static func usesExternalFormatter(
         server: LSPServerStatus?,
-        serverFormats: Bool
+        serverFormats: Bool,
+        serverReturnedNothing: Bool = false
     ) -> Bool {
-        guard !serverFormats else { return false }
-        return server != .starting
+        guard !serverFormats || serverReturnedNothing else { return false }
+        return server != .starting || serverReturnedNothing
     }
 }
