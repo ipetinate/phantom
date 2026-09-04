@@ -163,7 +163,6 @@ enum CommandRunRule {
         var hasAgentState: Bool = false
         var hasLiveAgent: Bool = false
         var hasDevServerPort: Bool = false
-        var isSelected: Bool = false
     }
 
     /// How long a reported command must run before the row says anything
@@ -233,7 +232,7 @@ enum CommandRunRule {
             return .init(phase: .failed(exitCode: exitCode), isShellReported: true)
         }
 
-        guard duration >= shellMinimumDuration, !facts.isSelected else { return silent }
+        guard duration >= shellMinimumDuration else { return silent }
         return .init(phase: .finished, isShellReported: true)
     }
 
@@ -260,11 +259,14 @@ enum CommandRunRule {
             guard facts.isAlternateScreen else { return previous }
             return .init(phase: .interactive, isShellReported: true)
 
-        case .finished:
-            guard facts.isSelected else { return previous }
-            return previous.cleared
-
-        case .interactive, .failed, .idle:
+        case .finished, .interactive, .failed, .idle:
+            /// A dot waits for the reader, it does not expire. Selection used
+            /// to clear it here, on the reasoning that a command somebody
+            /// watched finish is not news — but the reader asked for the mark
+            /// and tested it on the tab they were looking at, which is the tab
+            /// a command is usually run in. It goes when they tap the row or
+            /// when the next command starts, which is what an agent's `done`
+            /// already does.
             return previous
         }
     }
@@ -297,11 +299,9 @@ enum CommandRunRule {
         case .shell:
             switch previous?.phase {
             case .running:
-                guard !facts.isSelected else { return previous?.cleared }
                 return .init(phase: .finished, isShellReported: false)
             case .finished:
-                guard facts.isSelected else { return previous }
-                return previous?.cleared
+                return previous
             case .failed:
                 return previous
             default:

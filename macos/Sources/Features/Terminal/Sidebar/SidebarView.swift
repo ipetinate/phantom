@@ -1878,6 +1878,7 @@ private struct SidebarTabRow: View {
         .contentShape(Rectangle())
         .onTapGesture {
             tabManager.select(tab)
+            tabManager.clearCommandMark(tab)
             if let surfaceId = tab.surfaceId {
                 TabStateCenter.shared.clearDone(surfaceId: surfaceId)
             }

@@ -25,16 +25,14 @@ struct CommandRunRuleTests {
         alternateScreen: Bool = false,
         agentState: Bool = false,
         liveAgent: Bool = false,
-        devServerPort: Bool = false,
-        selected: Bool = false
+        devServerPort: Bool = false
     ) -> CommandRunRule.Facts {
         CommandRunRule.Facts(
             foreground: foreground,
             isAlternateScreen: alternateScreen,
             hasAgentState: agentState,
             hasLiveAgent: liveAgent,
-            hasDevServerPort: devServerPort,
-            isSelected: selected
+            hasDevServerPort: devServerPort
         )
     }
 
@@ -84,13 +82,15 @@ struct CommandRunRuleTests {
         #expect(run?.phase == .failed(exitCode: 1))
         #expect(run?.mark == .failed(exitCode: 1))
 
-        let watched = next(
+        /// A failure ignores the minimum duration: a command that fell over
+        /// in a fifth of a second is the one worth marking.
+        let quick = next(
             .init(phase: .running, isShellReported: true),
             .shellFinished(exitCode: 130, duration: 0.2),
-            facts(.shell, selected: true),
+            facts(.shell),
             at: start
         )
-        #expect(watched?.mark == .failed(exitCode: 130))
+        #expect(quick?.mark == .failed(exitCode: 130))
     }
 
     /// A shell that reports no exit code is not a shell reporting zero. The
@@ -219,9 +219,9 @@ struct CommandRunRuleTests {
     @Test func theShellReportLatchSurvivesAClearedRow() {
         let finished = CommandRun(phase: .finished, isShellReported: true)
 
-        let seen = next(finished, .tick, facts(.shell, selected: true), at: start)
-        #expect(seen?.mark == nil)
-        #expect(seen?.isShellReported == true)
+        let started = next(finished, .shellStarted, facts(.shell), at: start)
+        #expect(started?.mark == nil)
+        #expect(started?.isShellReported == true)
 
         let agent = next(finished, .tick, facts(.shell, liveAgent: true), at: start)
         #expect(agent?.isShellReported == true)
@@ -293,31 +293,44 @@ struct CommandRunRuleTests {
     /// paths are covered: one that ends while the tab is selected never earns
     /// a mark, and one that already earned it loses it when the tab is looked
     /// at — the same moment `TabStateCenter.clearDone` fires for an agent.
-    @Test func lookingAtTheTabClearsTheMark() {
+    /// A dot waits for the reader rather than expiring. Selection used to
+    /// clear it, on the reasoning that a command somebody watched finish is
+    /// not news — but the tab a command runs in is usually the tab in front,
+    /// so that rule meant the mark the reader asked for almost never showed.
+    /// It goes on a tap or on the next command, which is what an agent's
+    /// `done` already does.
+    @Test func aFinishedMarkWaitsRatherThanExpiring() {
         let running = CommandRun(phase: .running, isShellReported: false)
-        #expect(next(running, .tick, facts(.shell, selected: true), at: start)?.mark == nil)
+        #expect(next(running, .tick, facts(.shell), at: start)?.mark == .finished)
 
         let reported = CommandRun(phase: .running, isShellReported: true)
         #expect(next(
             reported,
             .shellFinished(exitCode: 0, duration: 30),
-            facts(.shell, selected: true),
+            facts(.shell),
             at: start
-        )?.mark == nil)
+        )?.mark == .finished)
 
         let finished = CommandRun(phase: .finished, isShellReported: false)
-        #expect(next(finished, .tick, facts(.shell, selected: true), at: start)?.mark == nil)
         #expect(next(finished, .tick, facts(.shell), at: start)?.mark == .finished)
     }
 
     /// A spinner is still worth drawing on the tab the reader is looking at:
     /// only the badge is suppressed there, because only the badge is a thing
     /// to come back to.
-    @Test func aSelectedTabStillSpins() {
-        let started = next(nil, .shellStarted, facts(selected: true), at: start)
+    /// The tab in front is the tab a command is run in, so both halves have
+    /// to show there: the spinner while it runs and the dot when it ends.
+    @Test func theTabInFrontShowsBothHalves() {
+        let started = next(nil, .shellStarted, facts(), at: start)
+        let running = next(started, .tick, facts(.command), at: start + shellWait)
+        #expect(running?.mark == .running)
+
         #expect(next(
-            started, .tick, facts(.command, selected: true), at: start + shellWait
-        )?.mark == .running)
+            running,
+            .shellFinished(exitCode: 0, duration: 8),
+            facts(.shell),
+            at: start + shellWait
+        )?.mark == .finished)
     }
 
     /// A second command supersedes the first one's result rather than running

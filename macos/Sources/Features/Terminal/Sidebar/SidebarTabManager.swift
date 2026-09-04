@@ -473,8 +473,7 @@ final class SidebarTabManager: ObservableObject {
                 isAlternateScreen: surface(for: model)?.surfaceModel?.isAlternateScreen ?? false,
                 hasAgentState: model.agentState != nil,
                 hasLiveAgent: model.liveAgent != nil,
-                hasDevServerPort: model.devServerPort != nil,
-                isSelected: model.isSelected
+                hasDevServerPort: model.devServerPort != nil
             ),
             now: Date()
         ))
@@ -482,6 +481,18 @@ final class SidebarTabManager: ObservableObject {
         if case .shellStarted = signal, case .pending = model.commandRun?.phase {
             scheduleCommandTick(model)
         }
+    }
+
+    /// Takes a finished command's mark off a row, because the reader has now
+    /// looked at it.
+    ///
+    /// The rule does not do this on its own: a dot waits rather than expiring,
+    /// so something has to say the reader has seen it. That something is a tap
+    /// — the same gesture that clears an agent's `done` through
+    /// `TabStateCenter.clearDone`, called from the same place.
+    func clearCommandMark(_ model: SidebarTabModel) {
+        guard let run = model.commandRun, run.mark != nil else { return }
+        model.setCommandRun(run.cleared)
     }
 
     /// Brings the wait after a reported start to an end.
