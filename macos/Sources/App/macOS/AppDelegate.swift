@@ -1326,10 +1326,19 @@ class AppDelegate: NSObject,
     /// window: with the code editor in front, ⌘Z belongs to the editor's own
     /// stack, and a byte sent to the terminal behind it would be an undo the
     /// reader never asked for, in a place they were not looking.
+    ///
+    /// Focus is the surface's own `focused` flag and **not** the window's
+    /// first responder. They are not the same question here: the surface is
+    /// embedded in a SwiftUI hierarchy, so the responder that comes back is
+    /// whatever host view SwiftUI put around it, and comparing it to the
+    /// surface answered false while a terminal was plainly focused — which
+    /// left the Edit menu's Undo disabled, swallowing ⌘Z and doing nothing.
+    /// `focused` is the flag `SurfaceView.performKeyEquivalent` gates every
+    /// binding on, so this asks exactly what the key path already asks.
     private var focusedTerminalSurface: Ghostty.SurfaceView? {
         guard let controller = NSApp.keyWindow?.windowController as? BaseTerminalController,
               let surface = controller.focusedSurface,
-              surface.window?.firstResponder === surface
+              surface.focused
         else { return nil }
         return surface
     }
