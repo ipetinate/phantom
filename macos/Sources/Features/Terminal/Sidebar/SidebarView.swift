@@ -2320,9 +2320,15 @@ private struct SidebarTabRow: View {
 
         Menu {
             ForEach(store.groups) { group in
-                Button(group.name) {
+                Button {
                     guard let surfaceId = tab.surfaceId else { return }
                     store.assign(surfaceId: surfaceId, to: group.id)
+                } label: {
+                    if let icon = SidebarGroupMenuIcon.image(for: group) {
+                        Label { Text(group.name) } icon: { Image(nsImage: icon) }
+                    } else {
+                        Text(group.name)
+                    }
                 }
             }
 
