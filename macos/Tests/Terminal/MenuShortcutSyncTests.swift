@@ -50,7 +50,6 @@ struct MenuShortcutSyncTests {
         #expect(config.keyboardShortcut(for: "undo") != nil)
     }
 
-
     /// And one bound once resolves, which is what makes the line above a
     /// statement about ambiguity rather than about the lookup being broken.
     @Test func anActionBoundOnceResolves() throws {
