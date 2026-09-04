@@ -51,6 +51,99 @@ struct AgentBrandMark: View {
     }
 }
 
+extension AgentBrandMark {
+    /// The asset behind the mark, for the places that need an image *name*
+    /// rather than a view.
+    ///
+    /// A menu is the case this exists for. AppKit flattens a menu item to a
+    /// title and one image, so a `Label` there can carry an asset name but not
+    /// a view — which is why a group's six agent items all shared one SF
+    /// Symbol, and why none of them said which agent it stood for.
+    ///
+    /// Written out rather than derived from the agent's display name or from
+    /// its defaults key. `OpenCode` is one word in the catalogue and two in
+    /// its name, and `AgentButtonDefaults` states plainly that its own
+    /// spelling is a key and nothing else. Six lines that are each a fact
+    /// beats one line that is a coincidence holding for five of them.
+    ///
+    /// The template variant, always: a menu tints its own images, and the
+    /// coloured Antigravity artwork would come out inverted on a highlighted
+    /// row while its neighbours followed the highlight.
+    static func asset(for agent: CodingAgent) -> String {
+        switch agent {
+        case .claude: return "ClaudeIcon"
+        case .codex: return "CodexIcon"
+        case .opencode: return "OpenCodeIcon"
+        case .antigravity: return "AntigravityIcon"
+        case .kimi: return "KimiIcon"
+        case .pi: return "PiIcon"
+        }
+    }
+}
+
+extension AgentBrandMark {
+    /// The mark as an image a menu row can hold.
+    ///
+    /// A name is not enough, and that is the whole reason this exists beside
+    /// `asset(for:)`. An SF Symbol scales itself to the menu's font; an asset
+    /// has a size of its own and AppKit draws it at that size — so naming the
+    /// artwork put a 1024-point Claude starburst in the menu, over the rows
+    /// beneath it and most of the window. The size has to be said out loud.
+    ///
+    /// `isTemplate` is set here as well as in the catalogue, because a copy
+    /// does not have to inherit it and a coloured mark on a highlighted row is
+    /// the other half of the same problem.
+    static func menuIcon(for agent: CodingAgent) -> NSImage? {
+        guard let source = NSImage(named: asset(for: agent)) else { return nil }
+        let icon = source.copy() as? NSImage ?? source
+        icon.size = menuIconSize(for: source.size)
+        icon.isTemplate = !keepsOriginalColours(for: agent)
+        return icon
+    }
+
+    /// Whether the mark has to keep its own colours, because tinting it
+    /// destroys it.
+    ///
+    /// A template image is read through its alpha channel alone: every pixel
+    /// that is not transparent becomes the tint. That works for a silhouette
+    /// and only for a silhouette.
+    ///
+    /// OpenCode is not one. Its file paints a near-white path over the whole
+    /// canvas and knocks the mark out of it with a second, darker fill — so
+    /// the alpha channel *is* the canvas, and the tint filled it in. What the
+    /// reader got was a solid white block where a logo should be. The
+    /// catalogue declares every one of these template, which is why this is a
+    /// fact about the artwork kept here rather than a setting read from there.
+    static func keepsOriginalColours(for agent: CodingAgent) -> Bool {
+        agent == .opencode
+    }
+
+    /// What AppKit expects of a menu item's image, and what the SF Symbols in
+    /// the same menus come out at.
+    static let menuIconSide: CGFloat = 16
+
+    /// The size a mark takes in a menu row: the longer side becomes
+    /// `menuIconSide`, the shorter keeps its share of it.
+    ///
+    /// Squaring it stretched the one mark that is not square. OpenCode's
+    /// artwork is 240 by 300, and forced into a 16-point square it came out a
+    /// quarter too wide — the shape of the logo changed, which is the one
+    /// thing a logo cannot afford.
+    ///
+    /// A source that reports no size at all falls back to the square rather
+    /// than dividing by zero, and a mark drawn slightly wrong is better than
+    /// a menu that cannot be built.
+    static func menuIconSize(for source: NSSize) -> NSSize {
+        let longest = max(source.width, source.height)
+        guard longest > 0 else {
+            return NSSize(width: menuIconSide, height: menuIconSide)
+        }
+
+        let scale = menuIconSide / longest
+        return NSSize(width: source.width * scale, height: source.height * scale)
+    }
+}
+
 /// The agents' marks as bitmaps the gutter can draw, rendered once each.
 ///
 /// ## Why they are rendered at all

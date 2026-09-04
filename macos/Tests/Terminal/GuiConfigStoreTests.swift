@@ -120,4 +120,70 @@ struct GuiConfigStoreTests {
         store.setTheme(theme)
         #expect(store.string("theme") == "Dracula")
     }
+
+    // MARK: - One config directory per build
+
+    /// The release build keeps the directory it has always had. Anything else
+    /// here would be a migration on the app the reader actually uses, for a
+    /// fault that is not theirs.
+    @Test func theReleaseBuildHasNoSuffix() {
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "com.ipetinate.phantom") == nil)
+    }
+
+    /// The fault this exists for: a debug build wrote `gui-settings` and
+    /// `config` into the release build's directory, which the running release
+    /// app watches — so trying something out in one app changed the other one
+    /// under the reader.
+    @Test func aDebugBuildIsToldApartByItsBundleID() {
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "com.ipetinate.phantom.debug") == "debug")
+    }
+
+    /// The same rule `MCPServerCommand` uses for the socket and the agent
+    /// entry, so a third build gets a third directory rather than sharing one
+    /// with whichever it resembles.
+    @Test func anyOtherVariantGetsItsOwnDirectory() {
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "com.ipetinate.phantom.nightly") == "nightly")
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "com.ipetinate.Phantom") == nil)
+        #expect(GuiConfigStore.buildSuffix(forBundleID: "") == nil)
+    }
+
+    // MARK: What a second build may read, and where it writes
+
+    /// The release build has one directory and reads it. Nothing to fall back
+    /// to, and no duplicate of itself in the list.
+    @Test func theReleaseBuildReadsOneThemeDirectory() {
+        let store = GuiConfigStore(configDir: GuiConfigStore.sharedConfigDir())
+        #expect(store.themeSearchDirs == [store.themesDirURL])
+    }
+
+    /// A second build reads its own first and the reader's after. This is the
+    /// defect it was written for: only the config files are copied when a
+    /// build makes its own directory, so its `themes` starts empty and the
+    /// reader's own theme vanished from Appearance along with its section.
+    @Test func asecondBuildFallsBackToTheReadersThemes() {
+        let own = GuiConfigStore.sharedConfigDir()
+            .deletingLastPathComponent()
+            .appendingPathComponent("phantom-debug", isDirectory: true)
+        let store = GuiConfigStore(configDir: own)
+
+        let dirs = store.themeSearchDirs
+        #expect(dirs.count == 2)
+        #expect(dirs.first == store.themesDirURL)
+        #expect(dirs.last == GuiConfigStore.sharedConfigDir()
+            .appendingPathComponent("themes", isDirectory: true))
+    }
+
+    /// And it still writes into its own. Reading the reader's configuration is
+    /// what makes a second build usable; writing to it is the thing the
+    /// separate directory exists to prevent.
+    @Test func asecondBuildStillWritesIntoItsOwn() {
+        let own = GuiConfigStore.sharedConfigDir()
+            .deletingLastPathComponent()
+            .appendingPathComponent("phantom-debug", isDirectory: true)
+        let store = GuiConfigStore(configDir: own)
+
+        #expect(store.themesDirURL.path.hasPrefix(own.path))
+        #expect(store.themesDirURL != GuiConfigStore.sharedConfigDir()
+            .appendingPathComponent("themes", isDirectory: true))
+    }
 }

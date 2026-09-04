@@ -23,8 +23,9 @@ struct AgentButtonDefaultsTests {
     /// what a terminal row with no session actually draws on a first launch.
     @Test func aFreshTabRowDrawsClaudeAlone() {
         #expect(
-            TabRowAgentActions.agents(shown: AgentButtonDefaults.shown, liveAgent: nil)
-                == [.claude]
+            TabRowAgentActions.agents(
+                shown: AgentButtonDefaults.shown, liveAgent: nil, isIdle: true
+            ) == [.claude]
         )
     }
 
@@ -35,7 +36,7 @@ struct AgentButtonDefaultsTests {
 
         #expect(AgentButtonDefaults.shown.isSubset(of: all))
         #expect(
-            TabRowAgentActions.agents(shown: all, liveAgent: nil)
+            TabRowAgentActions.agents(shown: all, liveAgent: nil, isIdle: true)
                 == CodingAgent.allCases
         )
     }

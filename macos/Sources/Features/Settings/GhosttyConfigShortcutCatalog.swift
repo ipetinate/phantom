@@ -109,6 +109,20 @@ enum GhosttyConfigShortcutCatalog {
             GhosttyConfigShortcut(action: "select_all", title: "Select All"),
             GhosttyConfigShortcut(action: "undo", title: "Undo"),
             GhosttyConfigShortcut(action: "redo", title: "Redo"),
+
+            /// A row for a binding whose action is a byte sequence rather than
+            /// a name, which is the only kind in this table.
+            ///
+            /// It is here because a reader looking for the shortcut every other
+            /// macOS text field has will look here, and because the pane is
+            /// also where they would go to rebind it. The action string is what
+            /// `Binding.Action.parse` makes of `esc:\x7f` and what the reverse
+            /// map is keyed on — payloads are hashed and compared by bytes
+            /// (`hashIncremental` uses `.DeepRecursive`), so the lookup does
+            /// resolve. Pinned by `ghostty_config_trigger: default keybind` in
+            /// `CApi.zig`, because a row whose action does not resolve draws
+            /// nothing and says nothing about why.
+            GhosttyConfigShortcut(action: "esc:\u{5C}x7f", title: "Delete Word Left"),
         ]),
 
         Group(title: "Find", entries: [

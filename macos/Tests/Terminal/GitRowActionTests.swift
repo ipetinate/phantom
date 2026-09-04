@@ -1,3 +1,4 @@
+import AppKit
 @testable import Ghostty
 import Testing
 
@@ -165,6 +166,16 @@ struct GitRowActionTests {
         for action in GitRowAction.allCases {
             #expect(!action.title.isEmpty)
             #expect(action.isDestructive == action.title.hasSuffix("…"))
+        }
+    }
+
+    /// An icon this build cannot draw is a menu item with a hole where its
+    /// glyph should be, so the names are asserted rather than trusted — the
+    /// `FileExplorerTests` rule, for the menu that sits under that one.
+    @Test func everyIconResolves() {
+        for action in GitRowAction.allCases {
+            let image = NSImage(systemSymbolName: action.icon, accessibilityDescription: nil)
+            #expect(image != nil, "\(action.icon) is not a symbol this build has")
         }
     }
 }

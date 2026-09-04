@@ -143,6 +143,13 @@ struct SidebarView: View {
         expanded
             .padding(.top, layout.titlebarInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            /// A guard, not a layout: a pane taller than the sidebar is a bug
+            /// in that pane, and the Git panel was one — but the way it
+            /// presented was content drawn over the pane switcher and under
+            /// the window's traffic lights, which reads as the whole app being
+            /// broken rather than as one list being too long. Clipped, the
+            /// next pane to overflow merely loses its ends.
+            .clipped()
     }
 
     /// The panels the user has switched on. Read through `@AppStorage` so
@@ -202,11 +209,23 @@ struct SidebarView: View {
                 WorktreePanelView(
                     tabManager: tabManager,
                     editorCenter: editorCenter,
-                    onNewTerminal: layout.onNewWorktreeTab,
-                    onNewAgentTab: layout.onNewWorktreeAgentTab
+                    /// The panel follows one terminal, so that terminal's
+                    /// group is where a worktree opened from here belongs.
+                    onNewTerminal: { path in
+                        layout.onNewWorktreeTab(path, selectedGroupId)
+                    },
+                    onNewAgentTab: { path, agent in
+                        layout.onNewWorktreeAgentTab(path, agent, selectedGroupId)
+                    }
                 )
             }
         }
+    }
+
+    /// The group of the terminal the panels are following, if it is in one.
+    private var selectedGroupId: UUID? {
+        guard let tab = tabManager.models.first(where: { $0.isSelected }) else { return nil }
+        return store.resolveGroup(surfaceId: tab.surfaceId, pwd: tab.pwd)?.id
     }
 
     /// Built here rather than inline in `terminalList`.
@@ -328,12 +347,12 @@ struct SidebarTitlebarChrome: View {
     @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
     @AppStorage("SidebarShowGitPane") private var showGitPane = true
     @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
-    @AppStorage("SidebarShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
-    @AppStorage("SidebarShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
-    @AppStorage("SidebarShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
-    @AppStorage("SidebarShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
-    @AppStorage("SidebarShowKimi") private var showKimi = AgentButtonDefaults.isShown(.kimi)
-    @AppStorage("SidebarShowPi") private var showPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .antigravity)) private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .kimi)) private var showKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .pi)) private var showPi = AgentButtonDefaults.isShown(.pi)
 
     /// Whether the pane actions (new terminal, new Claude session, new
     /// group, refresh) stay visible without a hover — off by default,
@@ -347,6 +366,13 @@ struct SidebarTitlebarChrome: View {
     /// repository the chrome's actions are about.
     private var selectedTab: SidebarTabModel? {
         tabManager.models.first { $0.isSelected }
+    }
+
+    /// That terminal's group, if it is in one. A worktree opened from up here
+    /// is opened about the terminal below, so it lands where that terminal is.
+    private var selectedGroupId: UUID? {
+        guard let tab = selectedTab else { return nil }
+        return store.resolveGroup(surfaceId: tab.surfaceId, pwd: tab.pwd)?.id
     }
 
     private var visiblePane: SidebarPane {
@@ -381,6 +407,23 @@ struct SidebarTitlebarChrome: View {
         }
         .animation(.easeOut(duration: 0.15), value: collapse.isCollapsed)
         .onHover { isHovered = $0 }
+        /// Asked for here rather than from the button, which draws nothing
+        /// at all while the answer is "no repositories" — a view that is not
+        /// on screen cannot ask the question that would put it there.
+        /// `GitCenter` caches per folder and refuses folders too broad to
+        /// walk, so this is one scan per workspace per launch.
+        .task(id: workspaceScanRoot) {
+            guard let root = workspaceScanRoot else { return }
+            GitCenter.shared.requestWorkspaceRepos(root: root)
+        }
+    }
+
+    /// The selected terminal's folder, when the terminal is not inside a
+    /// repository. Nil is the answer that skips the scan entirely.
+    private var workspaceScanRoot: String? {
+        guard (selectedTab?.repoRoot ?? "").isEmpty else { return nil }
+        guard let pwd = selectedTab?.pwd, !pwd.isEmpty else { return nil }
+        return pwd
     }
 
     /// The buttons here belong to whichever panel is showing — creating a
@@ -445,13 +488,21 @@ struct SidebarTitlebarChrome: View {
                     entry: .chrome,
                     isEnabled: showWorktree,
                     repoRoot: selectedTab?.repoRoot,
+                    /// The folder the terminal is in, for when it is not a
+                    /// checkout itself: a workspace of repositories side by
+                    /// side is somewhere to open a worktree from, which is
+                    /// what the Worktrees panel has always said about the
+                    /// same terminal.
+                    scanRoot: selectedTab?.pwd,
                     currentPath: selectedTab?.pwd,
                     isIdle: true,
                     hasLiveAgent: false,
                     editorCenter: editorCenter,
                     terminalPwds: tabManager.models.compactMap(\.pwd),
                     onMigrate: { _, _ in },
-                    onNewTerminal: layout.onNewWorktreeTab,
+                    onNewTerminal: { path in
+                        layout.onNewWorktreeTab(path, selectedGroupId)
+                    },
                     onCreateGroup: { worktree in groupingWorktree = worktree },
                     onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
                     isRevealed: true)
@@ -658,7 +709,7 @@ private struct SidebarGroupSection: View {
     /// view knows about either: a group header draws no documents and opens
     /// no terminals of its own beyond the one button below.
     @ObservedObject var editorCenter: EditorCenter
-    let onNewWorktreeTab: (String) -> Void
+    let onNewWorktreeTab: (String, UUID?) -> Void
 
     /// The header's own button, which must put the terminal *in this group*.
     /// Pressing a button on a group and watching the terminal appear at the
@@ -669,12 +720,12 @@ private struct SidebarGroupSection: View {
     @ObservedObject private var palette: ThemePalette = .shared
 
     @AppStorage("SidebarGroupShowPullRequests") private var showPullRequests = true
-    @AppStorage("SidebarGroupShowClaude") private var showClaude = AgentButtonDefaults.isShown(.claude)
-    @AppStorage("SidebarGroupShowCodex") private var showCodex = AgentButtonDefaults.isShown(.codex)
-    @AppStorage("SidebarGroupShowOpenCode") private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
-    @AppStorage("SidebarGroupShowAntigravity") private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
-    @AppStorage("SidebarGroupShowKimi") private var showKimi = AgentButtonDefaults.isShown(.kimi)
-    @AppStorage("SidebarGroupShowPi") private var showPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .antigravity)) private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .kimi)) private var showKimi = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .pi)) private var showPi = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var showWorktree = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
@@ -686,6 +737,10 @@ private struct SidebarGroupSection: View {
     @State private var isDropTarget = false
     @State private var isEditing = false
     @State private var isHeaderHovered = false
+
+    /// How wide the header's whole trailing cluster is — buttons and count —
+    /// measured by the layout that draws it.
+    @State private var clusterWidth: CGFloat = 0
     @State private var isShowingPRs = false
 
     /// The terminals "Delete Group and Close Terminals" is asking about, or
@@ -855,167 +910,205 @@ private struct SidebarGroupSection: View {
         return "\(base) \(running)"
     }
 
-    private var header: some View {
+    /// The header's buttons, which come and go with the hover.
+    ///
+    /// Kept apart from the header so the layout can place them either in the
+    /// row or over it — see `header`, and `SidebarTabRow.body` for why a row
+    /// must not reserve width for buttons it is not drawing. A group's
+    /// description was the visible cost here: two lines of it where one line
+    /// fits, to leave room for eight icons that were not on screen.
+    private var headerActions: some View {
         HStack(spacing: 6) {
-            SidebarIconButton(
-                help: collapsed ? "Expand Group" : "Collapse Group"
-            ) {
-                store.toggleCollapsed(group.id)
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(collapsed ? 0 : 90))
-            }
+                    if showPullRequests {
+                        SidebarIconButton(help: "Pull Requests in Group") {
+                            isShowingPRs = true
+                        } label: {
+                            GitIcon(size: 11)
+                                .foregroundStyle(.secondary)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                        .popover(isPresented: $isShowingPRs) {
+                            GroupPRListView(
+                                group: group,
+                                openTabRoots: Array(Set(tabs.compactMap(\.repoRoot)))
+                            )
+                        }
+                    }
+                    if showClaude {
+                        SidebarIconButton(help: "New Claude Session in Group") {
+                            onNewClaudeTab(group)
+                        } label: {
+                            ClaudeIcon(size: 12)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
+                    if showCodex {
+                        SidebarIconButton(help: "New Codex Session in Group") {
+                            onNewCodexTab(group)
+                        } label: {
+                            CodexIcon(size: 12)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
+                    if showOpenCode {
+                        SidebarIconButton(help: "New OpenCode Session in Group") {
+                            onNewOpenCodeTab(group)
+                        } label: {
+                            OpenCodeIcon(size: 12)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
+                    if showAntigravity {
+                        SidebarIconButton(help: "New Antigravity Session in Group") {
+                            onNewAntigravityTab(group)
+                        } label: {
+                            AntigravityIcon(size: 12)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
+                    if showKimi {
+                        SidebarIconButton(help: "New Kimi Code Session in Group") {
+                            onNewKimiTab(group)
+                        } label: {
+                            KimiIcon(size: 12)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
+                    if showPi {
+                        SidebarIconButton(help: "New Pi Session in Group") {
+                            onNewPiTab(group)
+                        } label: {
+                            PiIcon(size: 12)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
+                    /// Always a new terminal from here, never a migration: a header
+                    /// stands for several terminals, so there is no single tab a
+                    /// switch could be about. See `WorktreeEntryRule`.
+                    WorktreeEntryButton(
+                        entry: .groupHeader,
+                        isEnabled: showWorktree,
+                        /// A project group's own root wins over the repository a tab
+                        /// in it happens to sit in, and that is why this is nil when
+                        /// the group declares one. The group stands for the whole
+                        /// folder — `~/Projects/Aurora` and its six repositories —
+                        /// so offering only the one repository the first tab is in
+                        /// would answer a question nobody asked from a group header.
+                        repoRoot: group.projectRoot == nil ? representativeTab?.repoRoot : nil,
+                        scanRoot: group.projectRoot ?? representativeTab?.pwd,
+                        currentPath: representativeTab?.pwd ?? group.projectRoot,
+                        isIdle: true,
+                        hasLiveAgent: false,
+                        editorCenter: editorCenter,
+                        terminalPwds: tabManager.models.compactMap(\.pwd),
+                        onMigrate: { _, _ in },
+                        onNewTerminal: { path in onNewWorktreeTabInGroup(group, path) },
+                        /// No grouping item from inside a group's own header — the
+                        /// group is already here.
+                        onCreateGroup: nil,
+                        onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
+                        isRevealed: alwaysShowActions || isHeaderHovered)
+                    if showNewTerminal {
+                        SidebarIconButton(help: "New Terminal in Group") {
+                            onNewTab(group)
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
+        }
+    }
 
-            SidebarGroupIcon(icon: group.icon)
-                .foregroundStyle(accent ?? Color.secondary)
-
-            /// The name outranks everything to its right.
-            ///
-            /// Without this the group's name is what a narrow sidebar drops
-            /// first: `Spacer` and the hover-only buttons are happy at their
-            /// ideal size, so SwiftUI takes the space out of the only view
-            /// willing to give it, and the row ends up as an icon with no
-            /// label at all. Truncating a long name is the correct way to
-            /// run out of room; a row you cannot identify is not.
-            VStack(alignment: .leading, spacing: 1) {
-                Text(group.name)
-                    .font(palette.font(size: 11, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                if let details = group.details, !details.isEmpty {
-                    Text(details)
-                        .font(palette.font(size: 9))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-            .layoutPriority(1)
-
-            if collapsed {
-                GroupStatusRollup(tabs: tabs, accent: accent)
-            }
-
-            Spacer(minLength: 0)
-
-            if showPullRequests {
-                SidebarIconButton(help: "Pull Requests in Group") {
-                    isShowingPRs = true
-                } label: {
-                    GitIcon(size: 11)
-                        .foregroundStyle(.secondary)
-                }
-                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
-                .popover(isPresented: $isShowingPRs) {
-                    GroupPRListView(
-                        group: group,
-                        openTabRoots: Array(Set(tabs.compactMap(\.repoRoot)))
-                    )
-                }
-            }
-
-            if showClaude {
-                SidebarIconButton(help: "New Claude Session in Group") {
-                    onNewClaudeTab(group)
-                } label: {
-                    ClaudeIcon(size: 12)
-                }
-                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
-            }
-
-            if showCodex {
-                SidebarIconButton(help: "New Codex Session in Group") {
-                    onNewCodexTab(group)
-                } label: {
-                    CodexIcon(size: 12)
-                }
-                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
-            }
-
-            if showOpenCode {
-                SidebarIconButton(help: "New OpenCode Session in Group") {
-                    onNewOpenCodeTab(group)
-                } label: {
-                    OpenCodeIcon(size: 12)
-                }
-                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
-            }
-
-            if showAntigravity {
-                SidebarIconButton(help: "New Antigravity Session in Group") {
-                    onNewAntigravityTab(group)
-                } label: {
-                    AntigravityIcon(size: 12)
-                }
-                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
-            }
-
-            if showKimi {
-                SidebarIconButton(help: "New Kimi Code Session in Group") {
-                    onNewKimiTab(group)
-                } label: {
-                    KimiIcon(size: 12)
-                }
-                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
-            }
-
-            if showPi {
-                SidebarIconButton(help: "New Pi Session in Group") {
-                    onNewPiTab(group)
-                } label: {
-                    PiIcon(size: 12)
-                }
-                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
-            }
-
-            /// Always a new terminal from here, never a migration: a header
-            /// stands for several terminals, so there is no single tab a
-            /// switch could be about. See `WorktreeEntryRule`.
-            WorktreeEntryButton(
-                entry: .groupHeader,
-                isEnabled: showWorktree,
-                repoRoot: representativeTab?.repoRoot ?? group.projectRoot,
-                currentPath: representativeTab?.pwd ?? group.projectRoot,
-                isIdle: true,
-                hasLiveAgent: false,
-                editorCenter: editorCenter,
-                terminalPwds: tabManager.models.compactMap(\.pwd),
-                onMigrate: { _, _ in },
-                onNewTerminal: { path in onNewWorktreeTabInGroup(group, path) },
-                /// No grouping item from inside a group's own header — the
-                /// group is already here.
-                onCreateGroup: nil,
-                onViewFile: { path in editorCenter.open(URL(fileURLWithPath: path)) },
-                isRevealed: alwaysShowActions || isHeaderHovered)
-
-            if showNewTerminal {
-                SidebarIconButton(help: "New Terminal in Group") {
-                    onNewTab(group)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
-                .allowsHitTesting(alwaysShowActions || isHeaderHovered)
-            }
-
+    /// The count, which is always there when the reader has it switched on.
+    private var countSlot: some View {
+        Group {
             if showCount {
                 SidebarCountBadge(count: tabs.count)
             }
         }
+    }
+
+    /// What the header paints itself with, named once so the fade under the
+    /// floating buttons can repeat it exactly.
+    private var headerSurface: AnyShapeStyle {
+        AnyShapeStyle((accent ?? .clear).opacity(0.18))
+    }
+
+    private var header: some View {
+        ZStack(alignment: .trailing) {
+            HStack(spacing: 6) {
+                SidebarIconButton(
+                    help: collapsed ? "Expand Group" : "Collapse Group"
+                ) {
+                    store.toggleCollapsed(group.id)
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(collapsed ? 0 : 90))
+                }
+
+                SidebarGroupIcon(icon: group.icon)
+                    .foregroundStyle(accent ?? Color.secondary)
+
+                /// The name outranks everything to its right.
+                ///
+                /// Without this the group's name is what a narrow sidebar drops
+                /// first: `Spacer` and the hover-only buttons are happy at their
+                /// ideal size, so SwiftUI takes the space out of the only view
+                /// willing to give it, and the row ends up as an icon with no
+                /// label at all. Truncating a long name is the correct way to
+                /// run out of room; a row you cannot identify is not.
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(group.name)
+                        .font(palette.font(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    if let details = group.details, !details.isEmpty {
+                        Text(details)
+                            .font(palette.font(size: 9))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .layoutPriority(1)
+
+                if collapsed {
+                    GroupStatusRollup(tabs: tabs, accent: accent)
+                }
+
+                Spacer(minLength: 0)
+
+                if alwaysShowActions { headerActions }
+
+                countSlot.hidden()
+            }
+            .fadingUnderFloatingActions(
+                width: alwaysShowActions ? 0 : clusterWidth,
+                isRevealed: !alwaysShowActions && isHeaderHovered)
+
+            HStack(spacing: 6) {
+                if !alwaysShowActions { headerActions }
+
+                countSlot
+            }
+            .measuringFloatingActions()
+        }
+        .onPreferenceChange(FloatingActionsWidthKey.self) { clusterWidth = $0 }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background((accent ?? .clear).opacity(0.18))
+        .background(headerSurface)
         .contentShape(Rectangle())
         .onTapGesture {
             store.toggleCollapsed(group.id)
@@ -1025,23 +1118,115 @@ private struct SidebarGroupSection: View {
             NSItemProvider(object: "group:\(group.id.uuidString)" as NSString)
         }
         .contextMenu { groupMenu }
+        /// Which repositories the group's root holds, asked for once per
+        /// launch and cached by `GitCenter`. It is asked from here rather
+        /// than from the worktree button because the button draws nothing
+        /// while the answer is "none", and a view that is not on screen
+        /// cannot ask the question that would put it there.
+        .task(id: group.projectRoot) {
+            guard let root = group.projectRoot, !root.isEmpty else { return }
+            GitCenter.shared.requestWorkspaceRepos(root: root)
+        }
     }
 
+    /// One agent's item in a menu: its own mark, at a size a menu row can
+    /// hold, and the shared symbol if the artwork cannot be found.
+    ///
+    /// The fallback is not decoration. An asset that goes missing from a build
+    /// returns nil, and an item with no image is an item whose neighbours are
+    /// all indented past it — worse to read than six of one glyph.
+    @ViewBuilder
+    private func agentMenuLabel(_ title: String, _ agent: CodingAgent) -> some View {
+        if let icon = AgentBrandMark.menuIcon(for: agent) {
+            Label { Text(title) } icon: { Image(nsImage: icon) }
+        } else {
+            Label(title, systemImage: "sparkles")
+        }
+    }
+
+    /// The header's menu.
+    ///
+    /// Glyphs in the same vocabulary the tab row's menu uses — `plus` is the
+    /// header's own New Terminal button, and an edit is a pencil wherever one
+    /// is offered.
+    ///
+    /// The six agent items carry their own marks, the ones on the header's
+    /// buttons directly above them. They shared one SF Symbol first, on the
+    /// reasoning that a mark is a view and a menu takes a symbol — but a menu
+    /// takes an *asset* too, and the mark is one. Six rows of the same glyph
+    /// named six different agents and pointed at none of them.
     @ViewBuilder
     private var groupMenu: some View {
-        Button("New Terminal in Group") { onNewTab(group) }
-        Button("New Claude Session in Group") { onNewClaudeTab(group) }
-        Button("New Codex Session in Group") { onNewCodexTab(group) }
-        Button("New OpenCode Session in Group") { onNewOpenCodeTab(group) }
-        Button("New Antigravity Session in Group") { onNewAntigravityTab(group) }
-        Button("New Kimi Code Session in Group") { onNewKimiTab(group) }
-        Button("New Pi Session in Group") { onNewPiTab(group) }
+        Button { onNewTab(group) } label: {
+            Label("New Terminal in Group", systemImage: "plus")
+        }
+        Button { onNewClaudeTab(group) } label: {
+            agentMenuLabel("New Claude Session in Group", .claude)
+        }
+        Button { onNewCodexTab(group) } label: {
+            agentMenuLabel("New Codex Session in Group", .codex)
+        }
+        Button { onNewOpenCodeTab(group) } label: {
+            agentMenuLabel("New OpenCode Session in Group", .opencode)
+        }
+        Button { onNewAntigravityTab(group) } label: {
+            agentMenuLabel("New Antigravity Session in Group", .antigravity)
+        }
+        Button { onNewKimiTab(group) } label: {
+            agentMenuLabel("New Kimi Code Session in Group", .kimi)
+        }
+        Button { onNewPiTab(group) } label: {
+            agentMenuLabel("New Pi Session in Group", .pi)
+        }
 
         Divider()
 
-        Button("Edit Group…") { isEditing = true }
+        Button { isEditing = true } label: {
+            Label("Edit Group…", systemImage: "pencil")
+        }
 
-        Menu("Color") {
+        colorMenu
+
+        Divider()
+
+        Button {
+            store.toggleCollapsed(group.id)
+        } label: {
+            Label(
+                collapsed ? "Expand" : "Collapse",
+                systemImage: collapsed ? "chevron.down" : "chevron.up"
+            )
+        }
+
+        Divider()
+
+        Button(role: .destructive) {
+            store.deleteGroup(group.id)
+        } label: {
+            Label("Delete Group", systemImage: "trash")
+        }
+
+        /// Hidden rather than disabled on an empty group: with no terminals
+        /// the two items would say the same thing, and the one a reader has
+        /// to think about should only be there when it means something.
+        if !tabs.isEmpty {
+            Button(role: .destructive) {
+                pendingClose = PendingGroupClose(
+                    tabs: tabs,
+                    runningProcesses: runningProcessCount
+                )
+            } label: {
+                Label("\(deleteWithTerminalsTitle)\u{2026}", systemImage: "xmark.bin")
+            }
+        }
+    }
+
+    /// The colour picker, its own property because the two grids of swatches
+    /// push the menu past what the SwiftUI type checker will solve in one
+    /// body.
+    @ViewBuilder
+    private var colorMenu: some View {
+        Menu {
             Section("General") {
                 ForEach(TerminalTabColor.allCases, id: \.self) { color in
                     Button {
@@ -1079,30 +1264,8 @@ private struct SidebarGroupSection: View {
                     }
                 }
             }
-        }
-
-        Divider()
-
-        Button(collapsed ? "Expand" : "Collapse") {
-            store.toggleCollapsed(group.id)
-        }
-
-        Divider()
-
-        Button("Delete Group", role: .destructive) {
-            store.deleteGroup(group.id)
-        }
-
-        /// Hidden rather than disabled on an empty group: with no terminals
-        /// the two items would say the same thing, and the one a reader has
-        /// to think about should only be there when it means something.
-        if !tabs.isEmpty {
-            Button("\(deleteWithTerminalsTitle)\u{2026}", role: .destructive) {
-                pendingClose = PendingGroupClose(
-                    tabs: tabs,
-                    runningProcesses: runningProcessCount
-                )
-            }
+        } label: {
+            Label("Color", systemImage: "paintpalette")
         }
     }
 
@@ -1187,6 +1350,32 @@ private struct SidebarGroupSection: View {
 /// at the group level: it subscribes to every tab's publisher itself
 /// rather than trusting `tabs` to change identity when only their
 /// contents do.
+/// The mark for a tab that is compacting: the glyph for the operation, kept
+/// breathing so it cannot be read as a tab that has stopped.
+///
+/// A view of its own rather than a branch in `statusIndicator`, because the
+/// animation is the reason it exists and a repeating animation declared inside
+/// a `switch` would be built for every row that reaches that `switch`. Here it
+/// starts when a compacting row appears and stops with it.
+private struct CompactingMark: View {
+    let color: Color
+
+    @State private var isDim = false
+
+    var body: some View {
+        Image(systemName: "rectangle.compress.vertical")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(color)
+            .opacity(isDim ? 0.35 : 1)
+            .help("Compacting the conversation")
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever()) {
+                    isDim = true
+                }
+            }
+    }
+}
+
 private struct GroupStatusRollup: View {
     let tabs: [SidebarTabModel]
     let accent: Color?
@@ -1221,6 +1410,9 @@ private struct GroupStatusRollup: View {
                 .fill(accent ?? .accentColor)
                 .frame(width: 6, height: 6)
                 .help("A terminal in this group needs attention")
+        } else if tabs.contains(where: { $0.agentState == .compacting }) {
+            CompactingMark(color: themePalette.yellow ?? .orange)
+                .help("A terminal in this group is compacting its conversation")
         } else if tabs.contains(where: { $0.agentState == .working }) {
             ProgressView()
                 .controlSize(.mini)
@@ -1250,198 +1442,6 @@ private enum SidebarDragPayload {
             self = .tab(id)
         } else {
             return nil
-        }
-    }
-}
-
-/// Lists every open pull request of the repositories present in a
-/// group, fetched on demand — one click opens the PR in the browser.
-private struct GroupPRListView: View {
-    let group: SidebarGroup
-    let openTabRoots: [String]
-
-    @State private var roots: [String] = []
-    @ObservedObject private var gitCenter: GitStatusCenter = .shared
-    @ObservedObject private var palette: ThemePalette = .shared
-
-    /// Repos a tab happens to be open in, plus — for a project (workspace)
-    /// group — every repo discovered under its root, so one that nobody
-    /// has a tab open in still shows up.
-    private func resolveRoots() -> [String] {
-        var found = Set(openTabRoots)
-        if case .project(let root) = group.kind {
-            found.formUnion(SidebarGroup.discoverRepoRoots(under: root))
-        }
-        // By project name rather than full path: workspaces group repos
-        // that share a path prefix, but that's not guaranteed in general,
-        // and the name is what the section header actually shows.
-        return found.sorted {
-            ($0 as NSString).lastPathComponent.localizedCaseInsensitiveCompare(
-                ($1 as NSString).lastPathComponent
-            ) == .orderedAscending
-        }
-    }
-
-    /// Content taller than this scrolls instead of growing. A workspace
-    /// with a few busy repos produces a list longer than the screen, and a
-    /// popover that tall is both ugly and unusable — it covers the window
-    /// it belongs to and runs off the bottom.
-    ///
-    /// The 60% budget is for the *popover*, so the title, the padding and
-    /// the popover's own arrow come out of it instead of being added on
-    /// top — capping only the list left the whole thing a little over.
-    private var maxListHeight: CGFloat {
-        let screen = NSScreen.main?.visibleFrame.height ?? 800
-        return max(200, screen * 0.6 - 72)
-    }
-
-    /// Measured so the popover is only as tall as it needs to be. A bare
-    /// `maxHeight` won't do: a `ScrollView` takes everything it is offered
-    /// along its scroll axis, so two pull requests would get the same
-    /// full-height popover as fifty.
-    @State private var contentHeight: CGFloat?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Pull Requests")
-                .font(palette.headlineFont)
-
-            if roots.isEmpty {
-                Text("No repositories in this group.")
-                    .font(palette.captionFont)
-                    .foregroundStyle(.secondary)
-            }
-
-            ScrollView {
-                repoSections
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: PRListHeightKey.self,
-                                value: proxy.size.height
-                            )
-                        }
-                    )
-            }
-            .scrollIndicators(.automatic)
-            .onPreferenceChange(PRListHeightKey.self) { height in
-                contentHeight = height
-            }
-            .frame(height: contentHeight.map { min($0, maxListHeight) })
-        }
-        .padding(14)
-        .frame(width: 340)
-        .onAppear {
-            roots = resolveRoots()
-            roots.forEach { gitCenter.requestPRList(root: $0) }
-        }
-    }
-
-    private var repoSections: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(roots, id: \.self) { root in
-                VStack(alignment: .leading, spacing: 4) {
-                    if roots.count > 1 {
-                        Text((root as NSString).lastPathComponent)
-                            .font(palette.font(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                    }
-
-                    if let prs = gitCenter.repoPRLists[root] {
-                        if prs.isEmpty {
-                            Text("No open pull requests.")
-                                .font(palette.captionFont)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(prs) { pr in
-                                    PRRow(pr: pr, palette: palette) {
-                                        if let url = URL(string: pr.url) {
-                                            NSWorkspace.shared.open(url)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Loading…")
-                                .font(palette.captionFont)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct PRListHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-/// One PR in the group's list: hovering marks it clickable (pointer cursor,
-/// a tinted background) and a small person badge calls out a PR that's the
-/// signed-in user's own, so it doesn't take reading every row to spot.
-private struct PRRow: View {
-    let pr: GitStatusCenter.PullRequest
-    @ObservedObject var palette: ThemePalette
-    let action: () -> Void
-
-    @State private var isHovered = false
-
-    private var isMine: Bool {
-        guard let author = pr.author, let me = GitStatusCenter.currentUserLogin else { return false }
-        return author == me
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Text(verbatim: "#\(pr.number)")
-                    .font(palette.font(size: 11, weight: .medium))
-                    .foregroundStyle(palette.accent ?? .accentColor)
-
-                if isMine {
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 8))
-                        .foregroundStyle(palette.accent ?? .accentColor)
-                        .help("Your pull request")
-                }
-
-                Text(pr.title)
-                    .font(palette.font(size: 11))
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "arrow.up.forward")
-                    .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(isHovered ? (palette.accent ?? .accentColor).opacity(0.12) : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            isHovered = hovering
-            if hovering {
-                NSCursor.pointingHand.set()
-            } else {
-                NSCursor.arrow.set()
-            }
         }
     }
 }
@@ -1512,7 +1512,7 @@ private struct SidebarTabRow: View {
     /// Opens a terminal in a directory — the worktree panel's own callback,
     /// reused so a new terminal started from a row lands the same way one
     /// started from the panel does.
-    let onNewWorktreeTab: (String) -> Void
+    let onNewWorktreeTab: (String, UUID?) -> Void
     @ObservedObject private var themePalette: ThemePalette = .shared
     @ObservedObject private var planCenter: ClaudePlanCenter = .shared
 
@@ -1521,9 +1521,17 @@ private struct SidebarTabRow: View {
     @ObservedObject private var icons: FileIconProvider = .shared
 
     @State private var isHovered = false
+
+    /// How wide this row's whole trailing cluster is — buttons, status mark
+    /// and close button — measured by the layout that draws it.
+    @State private var clusterWidth: CGFloat = 0
     @State private var isCreatingGroup = false
     @State private var isCustomizing = false
     @State private var groupingWorktree: GitWorktree?
+
+    /// The plan whose file the reader has asked to delete, held while the
+    /// confirmation is up so the sheet can name it.
+    @State private var pendingPlanDelete: ClaudePlanIndex.Plan?
 
     @AppStorage("SidebarShowDirectory") private var showDirectory = true
     @AppStorage("SidebarShowGitBranch") private var showGitBranch = true
@@ -1535,12 +1543,12 @@ private struct SidebarTabRow: View {
 
     /// Which agents this row offers to start, mirroring the keys the sidebar
     /// header and the group header already use for their own buttons.
-    @AppStorage("SidebarTabShowClaude") private var showClaudeAction = AgentButtonDefaults.isShown(.claude)
-    @AppStorage("SidebarTabShowCodex") private var showCodexAction = AgentButtonDefaults.isShown(.codex)
-    @AppStorage("SidebarTabShowOpenCode") private var showOpenCodeAction = AgentButtonDefaults.isShown(.opencode)
-    @AppStorage("SidebarTabShowAntigravity") private var showAntigravityAction = AgentButtonDefaults.isShown(.antigravity)
-    @AppStorage("SidebarTabShowKimi") private var showKimiAction = AgentButtonDefaults.isShown(.kimi)
-    @AppStorage("SidebarTabShowPi") private var showPiAction = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .claude)) private var showClaudeAction = AgentButtonDefaults.isShown(.claude)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .codex)) private var showCodexAction = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .opencode)) private var showOpenCodeAction = AgentButtonDefaults.isShown(.opencode)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .antigravity)) private var showAntigravityAction = AgentButtonDefaults.isShown(.antigravity)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .kimi)) private var showKimiAction = AgentButtonDefaults.isShown(.kimi)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .pi)) private var showPiAction = AgentButtonDefaults.isShown(.pi)
     @AppStorage("SidebarTabShowWorktree") private var showWorktreeAction = true
     @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
@@ -1565,6 +1573,16 @@ private struct SidebarTabRow: View {
         return dragState.target?.after
     }
 
+    /// Whether the terminal is sitting at its own shell prompt.
+    ///
+    /// Asked once for the row and read by everything on it that types into
+    /// that shell — the agent buttons and the worktree button, whose rules
+    /// both take it. Three separate calls would each run `proc_name`, and two
+    /// of them could come to disagree after a later edit.
+    private var isIdle: Bool {
+        TerminalIdleCheck.isIdle(foregroundPID: tab.foregroundPID)
+    }
+
     /// The agent buttons this row draws, decided by `TabRowAgentActions` — a
     /// tab already running one gets none, because these type into its shell.
     private var agentActions: [CodingAgent] {
@@ -1576,7 +1594,10 @@ private struct SidebarTabRow: View {
         if showKimiAction { shown.insert(.kimi) }
         if showPiAction { shown.insert(.pi) }
 
-        return TabRowAgentActions.agents(shown: shown, liveAgent: tab.liveAgent)
+        return TabRowAgentActions.agents(
+            shown: shown,
+            liveAgent: tab.liveAgent,
+            isIdle: isIdle)
     }
 
     /// Each agent's own mark, at the size the group header uses. Separate
@@ -1598,8 +1619,7 @@ private struct SidebarTabRow: View {
     }
 
     private var displayTitle: String {
-        if let custom = override?.name, !custom.isEmpty { return custom }
-        return tab.title.isEmpty ? "Terminal" : tab.title
+        TerminalDisplayName.resolve(custom: override?.name, terminalTitle: tab.title)
     }
 
     /// The program holding a file open, for the tabs that were opened for
@@ -1616,132 +1636,18 @@ private struct SidebarTabRow: View {
         return name
     }
 
-    var body: some View {
+    /// The buttons that come and go with the hover: everything on this row
+    /// that types into the tab's shell, and the worktree entry beside them.
+    ///
+    /// Held here rather than written into the row so the layout below can
+    /// place the same cluster in two different places — in the row when the
+    /// reader has pinned it, over the row when they have not.
+    ///
+    /// An `HStack` of its own rather than a bare group, so that the spacing
+    /// between these buttons is stated here and does not depend on how the
+    /// caller's builder flattens them.
+    private var rowActions: some View {
         HStack(spacing: 6) {
-            /// The tab's own colour, opening the row rather than sitting
-            /// between the icon and the title.
-            ///
-            /// It was a 6pt dot there, which is the same shape and the same
-            /// size as the unread dot `statusIndicator` draws for
-            /// `needsAttention` — one row carrying two round marks that mean
-            /// unrelated things, and the colour one landed where a badge
-            /// belongs. A bar at the leading edge cannot be read as
-            /// notification: nothing else on the row is a bar. It stays a row
-            /// element and not a border on `rowBackground`, so the icon and
-            /// the title move over for it.
-            ///
-            /// Left inside the same `if let` the dot used, because that is
-            /// what keeps an uncoloured tab laying out exactly as before: a
-            /// view that is absent adds no `HStack` spacing, while a
-            /// zero-width placeholder would still push the icon over by 6.
-            if let accent = override?.accentColor {
-                /// As tall as the row, less a short inset at each end, rather
-                /// than as tall as the icon. At the icon's height it read as
-                /// a mark beside the icon; running most of the row it reads
-                /// as the row's own label, which is what it is. The inset is
-                /// what keeps it from touching the row's rounded background.
-                ///
-                /// `maxHeight` rather than a number: the row grows with the
-                /// density setting and with the metadata under the title, and
-                /// a fixed height would come loose from it. The stack's height
-                /// is set by its other children, so this takes it without
-                /// being able to stretch the row.
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(accent)
-                    .frame(width: 3)
-                    .frame(maxHeight: .infinity)
-                    .padding(.vertical, 3)
-            }
-
-            // A tab opened for a file wears that file's icon, from whichever
-            // icon theme is active — the same artwork the explorer and the
-            // Git panel show it with, so the three read as one thing. A hand
-            // -picked icon still wins: it was chosen on purpose.
-            if let icon = override?.icon, !icon.isEmpty {
-                SidebarGroupIcon(icon: icon, size: 13)
-                    .foregroundStyle(.secondary)
-            } else if let file = override?.fileName, !file.isEmpty {
-                FileIconView(icon: icons.icon(forFile: file), size: iconBoxHeight)
-            }
-
-            VStack(alignment: .leading, spacing: isCompact ? 2 : 4) {
-                Text(displayTitle)
-                    .font(themePalette.font(
-                        size: isCompact ? 11 : 12,
-                        weight: tab.isSelected ? .semibold : .regular
-                    ))
-                    .lineLimit(1)
-
-                WrapLayout(horizontalSpacing: 4, verticalSpacing: 3) {
-                    if let editor = editorName {
-                        metaChip(icon: "square.and.pencil", text: editor)
-                    }
-
-                    /// The project for a worktree tab, the folder for every
-                    /// other: a worktree's folder is `<repo>-<branch>` and
-                    /// would say the branch twice.
-                    if showDirectory, let dir = tab.worktreeRepo ?? tab.directoryName {
-                        metaChip(text: dir)
-                    }
-
-                    if showGitBranch, let branch = tab.gitBranch {
-                        /// The glyph carries the signal, not the colour:
-                        /// colour alone is ambiguous — the accent wash is
-                        /// used elsewhere on this row — while a branch
-                        /// network says "worktree" and nothing else.
-                        metaChip(
-                            gitIcon: !tab.isInManagedWorktree,
-                            worktreeIcon: tab.isInManagedWorktree,
-                            text: branch,
-                            dirty: showGitStatus && tab.isDirty == true
-                        )
-                    }
-
-                    /// Before the pull request and the dev server, because it
-                    /// is the only one of the three that is asking for
-                    /// something. A repository mid-merge cannot be committed
-                    /// to, pushed from or branched off until it is finished,
-                    /// and a reader who has forgotten a half-done merge in
-                    /// another terminal finds out from git at the moment it
-                    /// refuses them.
-                    ///
-                    /// Not behind a setting either, unlike every chip around
-                    /// it. Those say something about a repository that is
-                    /// working; this says it is stuck, and a reader who
-                    /// switched it off would be switching off the one chip
-                    /// they cannot infer from anywhere else on the row.
-                    if let conflicts = tab.conflicts, conflicts > 0 {
-                        conflictChip(count: conflicts)
-                    }
-
-                    if showPullRequest, let prNumber = tab.prNumber {
-                        prChip(number: prNumber)
-                    }
-
-                    if showDevServer, let port = tab.devServerPort {
-                        devServerChip(port: port)
-                    }
-
-                    if showPlan,
-                       ClaudePlanIndex.tagIsVisible(liveAgent: tab.liveAgent),
-                       let plan = planCenter.plan(forTerminalAt: tab.pwd) {
-                        planChip(plan: plan)
-                    }
-
-                    // Reserve the metadata line even while pwd/branch
-                    // haven't arrived yet so row heights never shift.
-                    if showDirectory || showGitBranch {
-                        Text(" ").font(.system(size: 9))
-                    }
-                }
-                /// A floor, not a ceiling: long branch and folder names wrap
-                /// onto further lines instead of ellipsizing away the exact
-                /// part that tells two refactor branches apart.
-                .frame(minHeight: isCompact ? 14 : 18)
-            }
-
-            Spacer(minLength: 0)
-
             /// Before the agent buttons, and gone under the same conditions
             /// they are: all of these type into the tab's shell.
             WorktreeEntryButton(
@@ -1749,8 +1655,8 @@ private struct SidebarTabRow: View {
                 isEnabled: showWorktreeAction,
                 repoRoot: tab.repoRoot,
                 currentPath: tab.pwd,
-                isIdle: TerminalIdleCheck.isIdle(foregroundPID: tab.foregroundPID),
-                hasLiveAgent: tab.liveAgent != nil,
+                isIdle: isIdle,
+                hasLiveAgent: TabRowAgentActions.hasLiveAgent(tab.liveAgent, isIdle: isIdle),
                 editorCenter: tabEditorCenter,
                 terminalPwds: tabManager.models.compactMap(\.pwd),
                 onMigrate: { worktree, plan in
@@ -1758,11 +1664,12 @@ private struct SidebarTabRow: View {
                     WorktreeMigrate.perform(
                         to: worktree, plan: plan, tab: tab, editorCenter: tabEditorCenter)
                 },
-                onNewTerminal: onNewWorktreeTab,
+                /// This row's own group, so a worktree opened from a
+                /// terminal inside a group lands inside it.
+                onNewTerminal: { path in onNewWorktreeTab(path, groupId) },
                 onCreateGroup: { worktree in groupingWorktree = worktree },
                 onViewFile: { path in tabEditorCenter.open(URL(fileURLWithPath: path)) },
                 isRevealed: alwaysShowActions || isHovered)
-
             ForEach(agentActions, id: \.self) { agent in
                 SidebarIconButton(help: "Start \(agent.displayName) in This Tab") {
                     tabManager.select(tab)
@@ -1773,25 +1680,195 @@ private struct SidebarTabRow: View {
                 .opacity(alwaysShowActions || isHovered ? 1 : 0)
                 .allowsHitTesting(alwaysShowActions || isHovered)
             }
-
-            ZStack {
-                statusIndicator
-                    .opacity(isHovered ? 0 : 1)
-
-                SidebarIconButton(help: "Close Terminal") {
-                    WindowBreadcrumbs.note(
-                        "sidebar close button: window=\(tab.window?.windowNumber ?? -1)")
-                    tab.window?.performClose(nil)
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .opacity(isHovered ? 1 : 0)
-                .allowsHitTesting(isHovered)
-            }
-            .frame(width: 24, height: 22)
         }
+    }
+
+    /// The one control at the trailing end that is always there: what the tab
+    /// is doing, and — on hover — the close button in its place.
+    private var statusSlot: some View {
+        ZStack {
+            statusIndicator
+                .opacity(isHovered ? 0 : 1)
+
+            SidebarIconButton(help: "Close Terminal") {
+                WindowBreadcrumbs.note(
+                    "sidebar close button: window=\(tab.window?.windowNumber ?? -1)")
+                tab.window?.performClose(nil)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .opacity(isHovered ? 1 : 0)
+            .allowsHitTesting(isHovered)
+        }
+        .frame(width: 24, height: 22)
+    }
+
+    /// The row: its content across the full width, and its buttons over the
+    /// top of that content unless the reader asked for them to be pinned.
+    ///
+    /// The buttons used to sit in this `HStack` in both cases, drawn at
+    /// `opacity(0)` when the hover was elsewhere — invisible, and still
+    /// holding their place. A row therefore reserved room for a worktree
+    /// button and up to six agent marks it was not drawing, the title and the
+    /// chips were laid out in what was left, and a folder chip that fits the
+    /// row wrapped onto a second line to make space for nothing. Pinned, the
+    /// buttons are content and sharing the width is right; unpinned they are
+    /// an overlay, and take nothing.
+    ///
+    /// `statusSlot` is in both stacks on purpose: the visible one rides with
+    /// the buttons so it is never covered by them, and a hidden copy holds
+    /// its width in the row. That is what keeps the floating cluster clear of
+    /// it without anybody writing its width down as a number.
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            HStack(spacing: 6) {
+                /// The tab's own colour, opening the row rather than sitting
+                /// between the icon and the title.
+                ///
+                /// It was a 6pt dot there, which is the same shape and the same
+                /// size as the unread dot `statusIndicator` draws for
+                /// `needsAttention` — one row carrying two round marks that mean
+                /// unrelated things, and the colour one landed where a badge
+                /// belongs. A bar at the leading edge cannot be read as
+                /// notification: nothing else on the row is a bar. It stays a row
+                /// element and not a border on `rowBackground`, so the icon and
+                /// the title move over for it.
+                ///
+                /// Left inside the same `if let` the dot used, because that is
+                /// what keeps an uncoloured tab laying out exactly as before: a
+                /// view that is absent adds no `HStack` spacing, while a
+                /// zero-width placeholder would still push the icon over by 6.
+                if let accent = override?.accentColor {
+                    /// As tall as the row, less a short inset at each end, rather
+                    /// than as tall as the icon. At the icon's height it read as
+                    /// a mark beside the icon; running most of the row it reads
+                    /// as the row's own label, which is what it is. The inset is
+                    /// what keeps it from touching the row's rounded background.
+                    ///
+                    /// `maxHeight` rather than a number: the row grows with the
+                    /// density setting and with the metadata under the title, and
+                    /// a fixed height would come loose from it. The stack's height
+                    /// is set by its other children, so this takes it without
+                    /// being able to stretch the row.
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(accent)
+                        .frame(width: 3)
+                        .frame(maxHeight: .infinity)
+                        .padding(.vertical, 3)
+                }
+
+                // A tab opened for a file wears that file's icon, from whichever
+                // icon theme is active — the same artwork the explorer and the
+                // Git panel show it with, so the three read as one thing. A hand
+                // -picked icon still wins: it was chosen on purpose.
+                if let icon = override?.icon, !icon.isEmpty {
+                    SidebarGroupIcon(icon: icon, size: 13)
+                        .foregroundStyle(.secondary)
+                } else if let file = override?.fileName, !file.isEmpty {
+                    FileIconView(icon: icons.icon(forFile: file), size: iconBoxHeight)
+                }
+
+                VStack(alignment: .leading, spacing: isCompact ? 2 : 4) {
+                    Text(displayTitle)
+                        .font(themePalette.font(
+                            size: isCompact ? 11 : 12,
+                            weight: tab.isSelected ? .semibold : .regular
+                        ))
+                        .lineLimit(1)
+
+                    WrapLayout(horizontalSpacing: 4, verticalSpacing: 3) {
+                        if let editor = editorName {
+                            metaChip(icon: "square.and.pencil", text: editor)
+                        }
+
+                        /// The project for a worktree tab, the folder for every
+                        /// other: a worktree's folder is `<repo>-<branch>` and
+                        /// would say the branch twice.
+                        if showDirectory, let dir = tab.worktreeRepo ?? tab.directoryName {
+                            metaChip(text: dir)
+                        }
+
+                        if showGitBranch, let branch = tab.gitBranch {
+                            /// The glyph carries the signal, not the colour:
+                            /// colour alone is ambiguous — the accent wash is
+                            /// used elsewhere on this row — while a branch
+                            /// network says "worktree" and nothing else.
+                            metaChip(
+                                gitIcon: !tab.isInManagedWorktree,
+                                worktreeIcon: tab.isInManagedWorktree,
+                                text: branch,
+                                dirty: showGitStatus && tab.isDirty == true
+                            )
+                        }
+
+                        /// Before the pull request and the dev server, because it
+                        /// is the only one of the three that is asking for
+                        /// something. A repository mid-merge cannot be committed
+                        /// to, pushed from or branched off until it is finished,
+                        /// and a reader who has forgotten a half-done merge in
+                        /// another terminal finds out from git at the moment it
+                        /// refuses them.
+                        ///
+                        /// Not behind a setting either, unlike every chip around
+                        /// it. Those say something about a repository that is
+                        /// working; this says it is stuck, and a reader who
+                        /// switched it off would be switching off the one chip
+                        /// they cannot infer from anywhere else on the row.
+                        if let conflicts = tab.conflicts, conflicts > 0 {
+                            conflictChip(count: conflicts)
+                        }
+
+                        if showPullRequest, let prNumber = tab.prNumber {
+                            prChip(number: prNumber)
+                        }
+
+                        if showDevServer, let port = tab.devServerPort {
+                            devServerChip(port: port)
+                        }
+
+                        if let plan = visiblePlan {
+                            planChip(plan: plan)
+                        }
+
+                        // Reserve the metadata line even while pwd/branch
+                        // haven't arrived yet so row heights never shift.
+                        if showDirectory || showGitBranch {
+                            Text(" ").font(.system(size: 9))
+                        }
+                    }
+                    /// A floor, not a ceiling: long branch and folder names wrap
+                    /// onto further lines instead of ellipsizing away the exact
+                    /// part that tells two refactor branches apart.
+                    .frame(minHeight: isCompact ? 14 : 18)
+                }
+
+                Spacer(minLength: 0)
+
+                if alwaysShowActions { rowActions }
+
+                statusSlot.hidden()
+            }
+            /// The content stops where the buttons start, and only while they
+            /// are on screen. Plus the stack's own spacing, which is the gap
+            /// between the cluster and the status slot the content must also
+            /// stay out of.
+            .fadingUnderFloatingActions(
+                width: alwaysShowActions ? 0 : clusterWidth,
+                isRevealed: !alwaysShowActions && isHovered)
+
+            HStack(spacing: 6) {
+                if !alwaysShowActions { rowActions }
+
+                statusSlot
+            }
+            /// The whole cluster, status slot included, because that is the
+            /// span the content has to be out from under. Measuring the
+            /// buttons alone left the fade running beneath the first of them.
+            .measuringFloatingActions()
+        }
+        .onPreferenceChange(FloatingActionsWidthKey.self) { clusterWidth = $0 }
         .padding(.horizontal, 8)
         .padding(.vertical, isCompact ? 5 : 8)
         .background(
@@ -1801,6 +1878,7 @@ private struct SidebarTabRow: View {
         .contentShape(Rectangle())
         .onTapGesture {
             tabManager.select(tab)
+            tabManager.clearCommandMark(tab)
             if let surfaceId = tab.surfaceId {
                 TabStateCenter.shared.clearDone(surfaceId: surfaceId)
             }
@@ -1867,6 +1945,18 @@ private struct SidebarTabRow: View {
                 )
             }
         }
+        .confirmationDialog(
+            "Delete this plan?",
+            isPresented: Binding(
+                get: { pendingPlanDelete != nil },
+                set: { if !$0 { pendingPlanDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            planDeleteButtons
+        } message: {
+            Text(planDeleteMessage)
+        }
     }
 
     /// Trailing status: spinner while the agent works, a raised hand
@@ -1890,6 +1980,8 @@ private struct SidebarTabRow: View {
             Circle()
                 .fill(themePalette.accent ?? .accentColor)
                 .frame(width: 8, height: 8)
+        case .compacting:
+            CompactingMark(color: themePalette.yellow ?? .orange)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))
@@ -1901,7 +1993,14 @@ private struct SidebarTabRow: View {
                 .foregroundStyle(.orange)
                 .help("An action was denied")
         case .ended, nil:
-            if tab.needsAttention {
+            /// No agent state, so the row is free to say what the shell is
+            /// doing instead — see `CommandRunRule`, which infers a plain
+            /// command from the foreground process because a command has no
+            /// hook to report itself. Before the attention dot, because a
+            /// command running now outranks a mark left over from earlier.
+            if let mark = tab.commandMark {
+                CommandRunIndicator(mark: mark)
+            } else if tab.needsAttention {
                 Circle()
                     .fill(themePalette.accent ?? .accentColor)
                     .frame(width: 6, height: 6)
@@ -1957,6 +2056,70 @@ private struct SidebarTabRow: View {
             if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
         .help(plan.title)
+        .contextMenu { planMenu(plan: plan) }
+    }
+
+    /// The plan this row is wearing, if it is wearing one.
+    ///
+    /// One question asked in one place, because the tag and the menu that
+    /// clears it must not disagree: a menu offering to hide a tag that is not
+    /// on screen would write a record the reader cannot see the effect of.
+    private var visiblePlan: ClaudePlanIndex.Plan? {
+        guard showPlan, ClaudePlanIndex.tagIsVisible(liveAgent: tab.liveAgent) else { return nil }
+        return planCenter.plan(forTerminalAt: tab.pwd)
+    }
+
+    /// What a reader can do about a plan besides open it.
+    ///
+    /// Offered from the tag and from the row's own menu. The tag is where a
+    /// leftover is noticed, and it is eleven points tall — a reader who wants
+    /// the row's menu should not have to aim around it. The row's menu is
+    /// also the way in that always works: the row fades its content out
+    /// under the hover buttons with a mask, and a mask takes the clicks with
+    /// the pixels, so a tag that ends up beneath the cluster cannot be
+    /// right-clicked itself.
+    ///
+    /// Hiding is per plan and not per row, so both items say "Plan" and
+    /// neither says "this tab": the same plan wears the same tag on every
+    /// terminal in its project, and both of these clear all of them.
+    @ViewBuilder
+    private func planMenu(plan: ClaudePlanIndex.Plan) -> some View {
+        Button {
+            planCenter.hide(plan)
+        } label: {
+            Label("Hide Plan", systemImage: "eye.slash")
+        }
+
+        Button(role: .destructive) {
+            pendingPlanDelete = plan
+        } label: {
+            Label("Delete Plan…", systemImage: "trash")
+        }
+    }
+
+    /// Names the plan, where it lives and that it does not come back.
+    ///
+    /// The file is in the reader's home directory and nothing in this app
+    /// puts it back — the shape `GitRepoView` uses to warn about a commit,
+    /// with the thing being acted on quoted so the sentence is about one
+    /// plan rather than about plans.
+    private var planDeleteMessage: String {
+        guard let plan = pendingPlanDelete else { return "" }
+        return "“\(plan.title)” will be removed from ~/.claude/plans. "
+            + "This cannot be undone."
+    }
+
+    /// Cancel takes the cancel role and the default action, for the reason
+    /// the group header's close sheet gives: Return must not be the key that
+    /// deletes a file.
+    @ViewBuilder
+    private var planDeleteButtons: some View {
+        Button("Delete Plan", role: .destructive) {
+            if let plan = pendingPlanDelete { planCenter.delete(plan) }
+            pendingPlanDelete = nil
+        }
+        Button("Cancel", role: .cancel) { pendingPlanDelete = nil }
+            .keyboardShortcut(.defaultAction)
     }
 
     /// Opens a plan through the same opener a file in the panels uses, so the
@@ -2123,25 +2286,50 @@ private struct SidebarTabRow: View {
         return AnyShapeStyle(accent.opacity(opacity))
     }
 
+    /// The row's own menu.
+    ///
+    /// Every item carries a glyph, in the vocabulary
+    /// `FileExplorerRowCommand.icon` set: the two menus sit inches apart and
+    /// share commands, so a command that appears in both looks the same in
+    /// both. The group names are the exception, as the branch names in the
+    /// Git panel's branch picker are — they are data, and a group's own icon
+    /// may be an emoji or an agent's mark rather than a symbol AppKit can
+    /// draw beside a title.
     @ViewBuilder
     private var tabMenu: some View {
-        Button("Customize Tab…") { isCustomizing = true }
-            .disabled(tab.surfaceId == nil)
+        Button { isCustomizing = true } label: {
+            Label("Customize Tab…", systemImage: "pencil")
+        }
+        .disabled(tab.surfaceId == nil)
 
         if let prNumber = tab.prNumber,
            let prURL = tab.prURL.flatMap(URL.init(string:)) {
-            Button("Open Pull Request #\(prNumber)…") {
+            Button {
                 NSWorkspace.shared.open(prURL)
+            } label: {
+                Label("Open Pull Request #\(prNumber)…", systemImage: "arrow.triangle.pull")
             }
+        }
+
+        if let plan = visiblePlan {
+            Divider()
+
+            planMenu(plan: plan)
         }
 
         Divider()
 
-        Menu("Move to Group") {
+        Menu {
             ForEach(store.groups) { group in
-                Button(group.name) {
+                Button {
                     guard let surfaceId = tab.surfaceId else { return }
                     store.assign(surfaceId: surfaceId, to: group.id)
+                } label: {
+                    if let icon = SidebarGroupMenuIcon.image(for: group) {
+                        Label { Text(group.name) } icon: { Image(nsImage: icon) }
+                    } else {
+                        Text(group.name)
+                    }
                 }
             }
 
@@ -2149,22 +2337,30 @@ private struct SidebarTabRow: View {
                 Divider()
             }
 
-            Button("New Group…") {
+            Button {
                 isCreatingGroup = true
+            } label: {
+                Label("New Group…", systemImage: "plus.rectangle.on.rectangle")
             }
 
             Divider()
 
-            Button("No Group") {
+            Button {
                 guard let surfaceId = tab.surfaceId else { return }
                 store.assign(surfaceId: surfaceId, to: nil)
+            } label: {
+                Label("No Group", systemImage: "rectangle.on.rectangle.slash")
             }
+        } label: {
+            Label("Move to Group", systemImage: "rectangle.3.group")
         }
 
-        Button("Close Tab", role: .destructive) {
+        Button(role: .destructive) {
             WindowBreadcrumbs.note(
                 "sidebar context menu close: window=\(tab.window?.windowNumber ?? -1)")
             tab.window?.performClose(nil)
+        } label: {
+            Label("Close Tab", systemImage: "xmark")
         }
     }
 }

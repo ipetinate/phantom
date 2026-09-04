@@ -127,3 +127,141 @@ struct ClaudePlanTitleTests {
         #expect(plan.title == "Real Title")
     }
 }
+
+/// Getting rid of a plan: the tag a reader has hidden, and the record hiding
+/// leaves behind.
+///
+/// Nothing here reads or writes `~/.claude`. This suite is hosted in the app
+/// and runs as the developer, so a test that deleted a plan would delete one
+/// of theirs. The cases that need a directory build their own under
+/// `NSTemporaryDirectory` and take it away again.
+struct ClaudePlanHideTests {
+    private func withStore(_ body: (ClaudePlanHideStore) throws -> Void) throws {
+        let name = "ClaudePlanHideTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        try body(ClaudePlanHideStore(defaults: defaults))
+    }
+
+    private func plan(_ path: String) -> ClaudePlanIndex.Plan {
+        ClaudePlanIndex.Plan(path: path, modified: Date(timeIntervalSince1970: 10_000))
+    }
+
+    /// The report this came from: a plan nobody is working on any more, on a
+    /// row that never stops showing it.
+    @Test func aHiddenPlanIsNotOffered() {
+        let project = ClaudePlanIndex.encode("/Users/x/Projects/phantom")
+        let leftover = plan("/Users/x/.claude/plans/mossy-parrot.md")
+
+        #expect(
+            ClaudePlanIndex.plan(
+                forTerminalAt: "/Users/x/Projects/phantom",
+                in: [project: leftover],
+                hidden: []
+            ) == leftover
+        )
+        #expect(
+            ClaudePlanIndex.plan(
+                forTerminalAt: "/Users/x/Projects/phantom",
+                in: [project: leftover],
+                hidden: [leftover.path]
+            ) == nil
+        )
+    }
+
+    /// Hiding one project's plan says nothing about another's, so a tag the
+    /// parent repository still has does not come down with it.
+    @Test func hidingADeeperPlanLeavesTheParentsAlone() {
+        let parent = ClaudePlanIndex.encode("/Users/x/Projects/phantom")
+        let deeper = ClaudePlanIndex.encode("/Users/x/Projects/phantom/macos")
+        let kept = plan("/Users/x/.claude/plans/kept.md")
+        let hidden = plan("/Users/x/.claude/plans/hidden.md")
+
+        #expect(
+            ClaudePlanIndex.plan(
+                forTerminalAt: "/Users/x/Projects/phantom/macos/Sources",
+                in: [parent: kept, deeper: hidden],
+                hidden: [hidden.path]
+            ) == kept
+        )
+    }
+
+    @Test func hidingTheSamePlanTwiceKeepsOneRecord() throws {
+        try withStore { store in
+            store.hide("/plans/a.md")
+            store.hide("/plans/a.md")
+
+            #expect(store.hidden == ["/plans/a.md"])
+        }
+    }
+
+    /// The records are the one part of this that could grow forever, so one
+    /// whose file has left the directory goes the next time it is read.
+    @Test func aRecordForAPlanThatLeftTheDirectoryIsPruned() throws {
+        let directory = NSTemporaryDirectory() + "phantom-plans-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(
+            atPath: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+
+        let kept = (directory as NSString).appendingPathComponent("kept.md")
+        let gone = (directory as NSString).appendingPathComponent("gone.md")
+        try "# Kept".write(toFile: kept, atomically: true, encoding: .utf8)
+        try "# Gone".write(toFile: gone, atomically: true, encoding: .utf8)
+        try FileManager.default.removeItem(atPath: gone)
+
+        let onDisk = Set(
+            try FileManager.default.contentsOfDirectory(atPath: directory)
+                .map { (directory as NSString).appendingPathComponent($0) }
+        )
+
+        try withStore { store in
+            store.hide(kept)
+            store.hide(gone)
+            store.prune(existing: onDisk)
+
+            #expect(store.hidden == [kept])
+        }
+    }
+
+    /// A read that came back with nothing is either an empty directory or one
+    /// that could not be read, and the two are indistinguishable — so it
+    /// prunes nothing rather than clearing every record the reader has.
+    @Test func aReadThatFoundNoPlansPrunesNothing() throws {
+        try withStore { store in
+            store.hide("/plans/a.md")
+            store.prune(existing: [])
+
+            #expect(store.hidden == ["/plans/a.md"])
+        }
+    }
+
+    /// Deleting the file drops the record with it. A plan's name is a slug out
+    /// of a pool, so the path can come back — and a record left behind would
+    /// hide a plan the reader has never seen.
+    @Test func deletingAPlanDropsItsHideRecord() throws {
+        try withStore { store in
+            store.hide("/plans/a.md")
+            store.hide("/plans/b.md")
+            store.forget("/plans/a.md")
+
+            #expect(store.hidden == ["/plans/b.md"])
+        }
+    }
+
+    /// The key is named once and read from there, so a second spelling cannot
+    /// appear in a view and quietly write somewhere else.
+    @Test func theKeyIsNamedOnce() throws {
+        #expect(ClaudePlanHideStore.defaultsKey == "SidebarHiddenClaudePlans")
+
+        let name = "ClaudePlanHideTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        ClaudePlanHideStore(defaults: defaults).hide("/plans/a.md")
+
+        #expect(
+            defaults.stringArray(forKey: ClaudePlanHideStore.defaultsKey) == ["/plans/a.md"]
+        )
+    }
+}

@@ -22,10 +22,17 @@ final class ClaudePlanCenter: ObservableObject {
     /// tag. The one being worked on is the one just written.
     @Published private(set) var latestByProject: [String: ClaudePlanIndex.Plan] = [:]
 
+    /// The plans the reader has hidden, kept here so a hide reaches every row
+    /// at once — the tag is on as many rows as the project has terminals.
+    @Published private(set) var hiddenPlans: Set<String> = []
+
+    private let hideStore = ClaudePlanHideStore()
+
     private var watcher: DirectoryWatcher?
     private var isScanning = false
 
     private init() {
+        hiddenPlans = Set(hideStore.hidden)
         start()
     }
 
@@ -42,14 +49,32 @@ final class ClaudePlanCenter: ObservableObject {
 
     /// The plan to offer a terminal sitting at `workingDirectory`.
     func plan(forTerminalAt workingDirectory: String?) -> ClaudePlanIndex.Plan? {
-        guard let workingDirectory, !workingDirectory.isEmpty else { return nil }
+        ClaudePlanIndex.plan(
+            forTerminalAt: workingDirectory,
+            in: latestByProject,
+            hidden: hiddenPlans
+        )
+    }
 
-        return latestByProject
-            .filter { ClaudePlanIndex.project($0.key, contains: workingDirectory) }
-            // The deepest matching project wins: a plan written for a
-            // subdirectory is more specific than one for its parent.
-            .max { $0.key.count < $1.key.count }?
-            .value
+    /// Stops offering `plan` anywhere, leaving its file alone.
+    func hide(_ plan: ClaudePlanIndex.Plan) {
+        hideStore.hide(plan.path)
+        hiddenPlans = Set(hideStore.hidden)
+    }
+
+    /// Removes the plan's file, and with it any record of it being hidden.
+    ///
+    /// The tag is dropped here as well as by the rescan the directory watcher
+    /// is about to order, because that rescan re-reads session transcripts
+    /// and takes as long as that takes. A reader who answered a confirmation
+    /// about a file in their home directory should not then watch the tag sit
+    /// there.
+    func delete(_ plan: ClaudePlanIndex.Plan) {
+        try? FileManager.default.removeItem(atPath: plan.path)
+        hideStore.forget(plan.path)
+        hiddenPlans = Set(hideStore.hidden)
+        latestByProject = latestByProject.filter { $0.value.path != plan.path }
+        rescan()
     }
 
     /// Reads the directory and resolves each plan's project.
@@ -62,21 +87,47 @@ final class ClaudePlanCenter: ObservableObject {
         isScanning = true
 
         Task { [weak self] in
-            let resolved = await Task.detached(priority: .utility) {
+            let scan = await Task.detached(priority: .utility) {
+                let plans = ClaudePlanIndex.plans()
+
                 var byProject: [String: ClaudePlanIndex.Plan] = [:]
-                for plan in ClaudePlanIndex.plans() {
+                for plan in plans {
                     guard let project = ClaudePlanIndex.encodedProject(for: plan) else { continue }
                     // Newest first from `plans()`, so the first one wins.
                     if byProject[project] == nil { byProject[project] = plan }
                 }
-                return byProject
+                return Scan(paths: Set(plans.map(\.path)), byProject: byProject)
             }.value
 
             await MainActor.run {
                 guard let self else { return }
                 self.isScanning = false
-                if self.latestByProject != resolved { self.latestByProject = resolved }
+                if self.latestByProject != scan.byProject {
+                    self.latestByProject = scan.byProject
+                }
+                self.pruneHidden(existing: scan.paths)
             }
         }
+    }
+
+    /// One scan's news: every plan file on disk, and the newest per project.
+    ///
+    /// Both, because the hide records are pruned against the whole directory
+    /// and not against the projects — a plan that is not its project's newest
+    /// is still a file that exists.
+    private struct Scan {
+        let paths: Set<String>
+        let byProject: [String: ClaudePlanIndex.Plan]
+    }
+
+    /// Drops the hide records whose plan has left the directory.
+    ///
+    /// Here rather than on a timer, because this is the moment the directory
+    /// has just been read — whether the plan went through Delete Plan, the
+    /// Finder, or a `rm` in one of the terminals this sidebar lists.
+    private func pruneHidden(existing: Set<String>) {
+        hideStore.prune(existing: existing)
+        let stored = Set(hideStore.hidden)
+        if hiddenPlans != stored { hiddenPlans = stored }
     }
 }

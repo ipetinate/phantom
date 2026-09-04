@@ -194,7 +194,7 @@ struct MCPServerRegistrationTests {
         let entry = try #require(ClaudeMCPInstaller.entry)
 
         #expect(entry["command"] is String)
-        #expect(entry["args"] as? [String] == [MCPServerCommand.action])
+        #expect(entry["args"] as? [String] == MCPServerCommand.arguments)
         #expect(entry["type"] as? String == "stdio")
     }
 
@@ -255,8 +255,8 @@ struct MCPServerRegistrationTests {
         #expect(entry["enabled"] as? Bool == true)
 
         let command = try #require(entry["command"] as? [String])
-        #expect(command.count == 2)
-        #expect(command.last == MCPServerCommand.action)
+        #expect(command.count == MCPServerCommand.arguments.count + 1)
+        #expect(Array(command.dropFirst()) == MCPServerCommand.arguments)
     }
 
     @Test func openCodeMergesBesideTheReadersOtherSettings() throws {
@@ -306,7 +306,7 @@ struct MCPServerRegistrationTests {
 
         #expect(AntigravityMCPInstaller.key == "mcpServers")
         #expect(entry["command"] is String)
-        #expect(entry["args"] as? [String] == [MCPServerCommand.action])
+        #expect(entry["args"] as? [String] == MCPServerCommand.arguments)
         #expect(entry["type"] == nil)
         #expect(entry["serverUrl"] == nil)
     }
@@ -370,7 +370,7 @@ struct MCPServerRegistrationTests {
     @Test func theServerIsCalledTheSameThingEverywhere() {
         #expect(MCPServerCommand.name.hasPrefix(MCPService.serverName))
         #expect(MCPServerCommand.action == "+mcp-server")
-        #expect(MCPServerCommand.arguments == ["+mcp-server"])
+        #expect(MCPServerCommand.arguments.first == "+mcp-server")
     }
 
     /// The command is this bundle's own binary, resolved at run time. A path
@@ -437,14 +437,28 @@ struct CodexMCPInstallerTests {
         #expect(CodexMCPInstaller.table.hasPrefix("mcp_servers."))
     }
 
+    /// The arguments come from `MCPServerCommand` rather than being written
+    /// out here, and that is the point rather than convenience: they carry the
+    /// socket path, which carries the build. Spelled as a literal, this test
+    /// pinned one build's entry and failed in the other — and it failed only
+    /// in a full run, because the drift is invisible to the class on its own.
     @Test func theBlockIsACommandAndAnArgumentList() {
         let block = CodexMCPInstaller.block(executable: "/x/Phantom.app/Contents/MacOS/ghostty")
+        let args = MCPServerCommand.arguments
+            .map { "\"\($0)\"" }
+            .joined(separator: ", ")
 
         #expect(block == """
         [mcp_servers.\(MCPServerCommand.name)]
         command = "/x/Phantom.app/Contents/MacOS/ghostty"
-        args = ["+mcp-server"]
+        args = [\(args)]
         """)
+
+        /// The two facts the spelling above would otherwise hide: the action
+        /// comes first, and the socket is named rather than left to whatever
+        /// the environment happens to say.
+        #expect(MCPServerCommand.arguments.first == "+mcp-server")
+        #expect(MCPServerCommand.arguments.contains { $0.hasPrefix("--socket=") })
     }
 
     /// A basic TOML string takes exactly two characters badly, and a reader's
@@ -663,6 +677,42 @@ struct CodexMCPInstallerTests {
         #expect(MCPServerCommand.name(forBundleID: "") == "phantom")
     }
 
+    // MARK: One socket per build, named in the entry
+
+    /// The other half of the same bug, and the half the name alone could not
+    /// fix. The client resolves the socket from `PHANTOM_MCP_SOCKET`, which
+    /// every Phantom exports into the terminals it opens — so an agent started
+    /// from a release terminal reached the release app even when the entry it
+    /// was running named the debug build's own executable. Measured: a debug
+    /// build under test was opening files in the reader's working app.
+    @Test func theEntryNamesTheSocketRatherThanTrustingTheEnvironment() {
+        let arguments = MCPServerCommand.arguments
+
+        #expect(arguments.first == MCPServerCommand.action)
+        #expect(arguments.contains("--socket=\(MCPSocketPath.current.path)"))
+    }
+
+    /// One argument, not two. Every agent takes the program and its arguments
+    /// apart, so a `--socket path` pair would arrive as a flag with no value
+    /// wherever the array is passed through verbatim.
+    @Test func theSocketTravelsAsOneArgument() {
+        let socket = MCPServerCommand.arguments.filter { $0.hasPrefix("--socket") }
+
+        #expect(socket.count == 1)
+        #expect(socket.first?.contains("=") == true)
+    }
+
+    /// The two builds name two different sockets, which is what makes the
+    /// entry's name true rather than decorative.
+    @Test func theTwoBuildsNameDifferentSockets() {
+        let home = URL(fileURLWithPath: "/Users/reader")
+        let release = MCPSocketPath.url(bundleID: "com.ipetinate.phantom", home: home)
+        let debug = MCPSocketPath.url(bundleID: "com.ipetinate.phantom.debug", home: home)
+
+        #expect(release != debug)
+        #expect(debug.lastPathComponent == "com.ipetinate.phantom.debug.sock")
+    }
+
     // MARK: Kimi and Pi
 
     /// Kimi's file is the same shape as Claude Code's and holds nothing else,
@@ -672,7 +722,7 @@ struct CodexMCPInstallerTests {
         let entry = try #require(KimiMCPInstaller.entry)
 
         #expect(entry["command"] as? String == MCPServerCommand.executablePath)
-        #expect(entry["args"] as? [String] == ["+mcp-server"])
+        #expect(entry["args"] as? [String] == MCPServerCommand.arguments)
         #expect(KimiMCPInstaller.configURL.path.hasSuffix("/mcp.json"))
         #expect(KimiMCPInstaller.key == "mcpServers")
     }

@@ -5,7 +5,7 @@ import Foundation
 /// file consumed by TabStateCenter.
 @MainActor
 enum OpenCodeHooksInstaller {
-    static let pluginName = "phantom-integration.js"
+    static let pluginName = PhantomBuild.fileName("phantom-integration.js")
 
     static var configDir: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -158,6 +158,20 @@ enum OpenCodeHooksInstaller {
     });
     """#
 
+    /// Human-readable detail of the last failure, for the settings UI.
+    ///
+    /// The five other hooks installers have had one from the start; this one
+    /// answered `false` and said nothing, so a plugin that could not be written
+    /// — a read-only `~/.config`, a directory that is a file — looked exactly
+    /// like a button that does nothing. Named after the stage, as
+    /// `ClaudeHooksInstaller.fail` names its own.
+    static private(set) var lastError: String?
+
+    private static func fail(_ stage: String, _ error: Error? = nil) -> Bool {
+        lastError = error.map { "\(stage): \($0.localizedDescription)" } ?? stage
+        return false
+    }
+
     /// True when the installed plugin is not the one this build ships. See
     /// `ClaudeHooksInstaller.isStale` for why `isInstalled` cannot answer it.
     static var isStale: Bool {
@@ -186,9 +200,10 @@ enum OpenCodeHooksInstaller {
                 withIntermediateDirectories: true
             )
             try pluginBody.write(to: pluginURL, atomically: true, encoding: .utf8)
+            lastError = nil
             return true
         } catch {
-            return false
+            return fail("writing the plugin", error)
         }
     }
 
@@ -196,11 +211,13 @@ enum OpenCodeHooksInstaller {
     static func uninstall() -> Bool {
         do {
             try FileManager.default.removeItem(at: pluginURL)
+            lastError = nil
             return true
         } catch CocoaError.fileNoSuchFile {
+            lastError = nil
             return true
         } catch {
-            return false
+            return fail("removing the plugin", error)
         }
     }
 }

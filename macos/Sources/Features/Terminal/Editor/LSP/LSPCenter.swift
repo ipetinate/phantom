@@ -2005,6 +2005,10 @@ final class LSPCenter: ObservableObject {
         switch definition.initializationOptionsKind {
         case .none:
             return .success(LSPLaunchSettings())
+
+        case .provideFormatter:
+            return .success(LSPLaunchSettings(
+                initializationOptions: LSPInitializationOptions.provideFormatterValue))
         case .vueTypeScriptSDK:
             switch vueTSDK {
             case .success(let tsdk):

@@ -233,6 +233,14 @@ final class SidebarGroupStore: ObservableObject {
     /// Resolves the group for a tab: manual assignment wins (including an
     /// explicit "ungrouped" assignment), then the first project group whose
     /// root contains the pwd, else nil (the default ungrouped section).
+    /// One group by id, for a caller holding an id and nothing else — the
+    /// worktree buttons, which name the group the request came from rather
+    /// than carrying the group itself through four views.
+    func group(_ id: UUID?) -> SidebarGroup? {
+        guard let id else { return nil }
+        return groups.first { $0.id == id }
+    }
+
     func resolveGroup(surfaceId: UUID?, pwd: String?) -> SidebarGroup? {
         if let surfaceId, let assignment = assignments[surfaceId] {
             guard let groupId = assignment.groupId else { return nil }

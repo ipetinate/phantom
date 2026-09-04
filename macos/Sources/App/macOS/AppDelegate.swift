@@ -273,12 +273,7 @@ class AppDelegate: NSObject,
         /// Scoped to the writes rather than returning early: everything after
         /// them is this app's own state, and a test host wants it.
         if !MCPServer.isTesting {
-            ClaudeHooksInstaller.repairIfStale()
-            CodexHooksInstaller.repairIfStale()
-            OpenCodeHooksInstaller.repairIfStale()
-            AntigravityHooksInstaller.repairIfStale()
-            KimiHooksInstaller.repairIfStale()
-            PiHooksInstaller.repairIfStale()
+            AgentHooksRegistration.repairAll()
         }
 
         // The one object that puts the permission question on screen, and it
@@ -451,6 +446,19 @@ class AppDelegate: NSObject,
 
     @objc private func applicationDidFinishRestoringWindows(_ notification: Notification) {
         PhantomSessionStore.shared.scheduleSave()
+
+        /// The first of two places the welcome window can open from, and the
+        /// better one: this is where the fork already treats restore as
+        /// settled. `showOnFirstLaunchIfNeeded` is idempotent, so whichever of
+        /// the two fires first wins and the other does nothing.
+        ///
+        /// Hopped to the main actor rather than assumed onto it: this is a
+        /// notification callback, and `MainActor.assumeIsolated` is a
+        /// precondition — off the main thread it would take the process down
+        /// rather than answer.
+        Task { @MainActor in
+            WelcomeWindowController.shared.showOnFirstLaunchIfNeeded()
+        }
     }
 
     func applicationDidHide(_ notification: Notification) {
@@ -471,6 +479,15 @@ class AppDelegate: NSObject,
             //   - if we're opening a URL since `application(_:openFile:)` is called before this.
             //   - if we're restoring from persisted state
             openInitialWindowIfNothingIsOnScreen()
+
+            /// The second place, for the launch that restores nothing and so
+            /// never posts `didFinishRestoringWindows`. A turn later than the
+            /// terminal window, so the welcome panel ends up in front of it
+            /// rather than behind — restore presents from async blocks and
+            /// makes one key after this returns.
+            Task { @MainActor in
+                WelcomeWindowController.shared.showOnFirstLaunchIfNeeded()
+            }
         }
     }
 
@@ -1219,6 +1236,11 @@ class AppDelegate: NSObject,
     @IBAction func closeAllWindows(_ sender: Any?) {
         TerminalController.closeAllWindows()
         AboutController.shared.hide()
+        WelcomeWindowController.shared.close()
+    }
+
+    @IBAction func showWelcome(_ sender: Any?) {
+        WelcomeWindowController.shared.show()
     }
 
     @IBAction func showAbout(_ sender: Any?) {
@@ -1291,16 +1313,49 @@ class AppDelegate: NSObject,
         NSApp.keyWindow?.firstResponder?.undoManager
     }
 
+    /// The terminal a forwarded undo would reach, or nil when what is focused
+    /// is not one.
+    ///
+    /// Asked of the window's controller rather than of the responder chain,
+    /// because the chain answers `undoManager` for a terminal and the app's
+    /// own manager is what comes back — the very ambiguity `UndoRouting`
+    /// documents. This question is a different one: not "whose stack", but
+    /// "is there a program here that has an undo of its own".
+    ///
+    /// It must also be the *focused* surface and not merely a surface in the
+    /// window: with the code editor in front, ⌘Z belongs to the editor's own
+    /// stack, and a byte sent to the terminal behind it would be an undo the
+    /// reader never asked for, in a place they were not looking.
+    ///
+    /// Focus is the surface's own `focused` flag and **not** the window's
+    /// first responder. They are not the same question here: the surface is
+    /// embedded in a SwiftUI hierarchy, so the responder that comes back is
+    /// whatever host view SwiftUI put around it, and comparing it to the
+    /// surface answered false while a terminal was plainly focused — which
+    /// left the Edit menu's Undo disabled, swallowing ⌘Z and doing nothing.
+    /// `focused` is the flag `SurfaceView.performKeyEquivalent` gates every
+    /// binding on, so this asks exactly what the key path already asks.
+    private var focusedTerminalSurface: Ghostty.SurfaceView? {
+        guard let controller = NSApp.keyWindow?.windowController as? BaseTerminalController,
+              let surface = controller.focusedSurface,
+              surface.focused
+        else { return nil }
+        return surface
+    }
+
     @IBAction func undo(_ sender: Any?) {
         let focused = focusedUndoManager
         switch UndoRouting.target(
             responderCanAct: focused?.canUndo ?? false,
-            appCanAct: undoManager.canUndo
+            appCanAct: undoManager.canUndo,
+            terminalCanReceive: focusedTerminalSurface != nil
         ) {
         case .firstResponder:
             focused?.undo()
         case .application:
             undoManager.undo()
+        case .terminal:
+            focusedTerminalSurface?.surfaceModel?.sendText(UndoRouting.terminalUndo)
         case .neither:
             break
         }
@@ -1316,7 +1371,12 @@ class AppDelegate: NSObject,
             focused?.redo()
         case .application:
             undoManager.redo()
-        case .neither:
+        case .terminal, .neither:
+            /// Redo is not forwarded. A terminal's is `ctrl+shift+-`, a key
+            /// event rather than a byte, so there is nothing to send — and
+            /// `target` is passed `terminalCanReceive: false` here anyway,
+            /// which is what makes `.terminal` unreachable rather than
+            /// silently ignored.
             break
         }
     }
@@ -1593,7 +1653,8 @@ extension AppDelegate: NSMenuItemValidation {
             let focused = focusedUndoManager
             switch UndoRouting.target(
                 responderCanAct: focused?.canUndo ?? false,
-                appCanAct: undoManager.canUndo
+                appCanAct: undoManager.canUndo,
+                terminalCanReceive: focusedTerminalSurface != nil
             ) {
             case .firstResponder:
                 item.title = UndoRouting.menuTitle(
@@ -1604,6 +1665,15 @@ extension AppDelegate: NSMenuItemValidation {
                 item.title = UndoRouting.menuTitle(
                     verb: "Undo",
                     actionName: undoManager.undoActionName)
+                return true
+            case .terminal:
+                /// Enabled, and named plainly. The item has to be enabled or
+                /// the key equivalent never reaches the action — a disabled
+                /// menu item consumes ⌘Z and does nothing, which is exactly
+                /// what a terminal reader saw. The title stays the bare verb
+                /// because this app does not know what the program in the
+                /// terminal is about to undo.
+                item.title = "Undo"
                 return true
             case .neither:
                 item.title = "Undo"
@@ -1626,7 +1696,7 @@ extension AppDelegate: NSMenuItemValidation {
                     verb: "Redo",
                     actionName: undoManager.redoActionName)
                 return true
-            case .neither:
+            case .terminal, .neither:
                 item.title = "Redo"
                 return false
             }
@@ -1741,6 +1811,16 @@ enum UndoRouting {
         /// The app-level stack: window operations, and the fallback whenever
         /// the responder has nothing of its own to give back.
         case application
+        /// Nothing here can undo it, but a terminal is focused and the
+        /// program in it has an undo of its own.
+        ///
+        /// `^_` is that undo, in readline, in zsh's ZLE and in Claude Code —
+        /// which binds `ctrl+_` and `ctrl+-` to its own `chat:undo`. So the
+        /// key reaches the thing the reader was typing into, which is what
+        /// they meant by it. Before this the answer was nothing at all, and
+        /// before *that* it was the letter `z` appearing at the prompt.
+        case terminal
+
         /// Neither has anything to undo, so the menu item is disabled.
         ///
         /// Named for what it means rather than `none`, which in a switch over
@@ -1760,11 +1840,25 @@ enum UndoRouting {
     /// Used for redo as well — hence `canAct` rather than `canUndo`. The rule
     /// is about which stack is in front, and that does not change with the
     /// direction of travel.
-    static func target(responderCanAct: Bool, appCanAct: Bool) -> Target {
+    /// - Parameter terminalCanReceive: whether a focused terminal could be
+    ///   handed the operation instead. Last, and only for undo: it is a
+    ///   fallback for the case where this app has nothing of its own to give
+    ///   back, never a way to jump ahead of a stack that does. Redo passes
+    ///   false, because a terminal's redo is `ctrl+shift+-` and that is a key
+    ///   *event* — there is no byte to send for it the way there is for undo.
+    static func target(
+        responderCanAct: Bool,
+        appCanAct: Bool,
+        terminalCanReceive: Bool = false
+    ) -> Target {
         if responderCanAct { return .firstResponder }
         if appCanAct { return .application }
+        if terminalCanReceive { return .terminal }
         return .neither
     }
+
+    /// The undo a terminal program understands: `ctrl+_`, one byte.
+    static let terminalUndo = "\u{1f}"
 
     /// The menu item's title for the manager that is going to act.
     ///

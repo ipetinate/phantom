@@ -67,6 +67,10 @@ struct CodeTextView: NSViewRepresentable {
     /// `CodeNSTextView.tagDialect`.
     var tagDialect: CodeTagDialect = .none
 
+    /// Whether closing an opening tag opens the element for typing. See
+    /// ``CodeNSTextView/expandsTags``.
+    var expandsTags = true
+
     /// Whether a server that completes class attributes is attached to this
     /// file. See `CodeClassAttribute`.
     ///
@@ -483,6 +487,7 @@ struct CodeTextView: NSViewRepresentable {
         textView.onFormat = onFormat
         textView.commandShortcuts = commandShortcuts
         textView.assistance = assistance
+        textView.expandsTags = expandsTags
         textView.completionTriggers = completionTriggers
         textView.completesInsideClassAttribute = completesInsideClassAttribute
         textView.onJumpToDefinition = onJumpToDefinition
@@ -545,6 +550,7 @@ struct CodeTextView: NSViewRepresentable {
             code.onFormat = onFormat
             code.commandShortcuts = commandShortcuts
             code.assistance = assistance
+            code.expandsTags = expandsTags
             code.completionTriggers = completionTriggers
             code.completesInsideClassAttribute = completesInsideClassAttribute
             code.onJumpToDefinition = onJumpToDefinition
@@ -2450,6 +2456,18 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     var closesQuotes = true
     var closesTags = true
 
+    /// Whether closing an opening tag also opens the element for typing: the
+    /// closing tag on its own line, the caret indented between the two.
+    ///
+    /// A fourth switch rather than a mode of ``closesTags``, because the two
+    /// are disliked separately for the same reason the three above are.
+    /// `<div></div>` on one line is what somebody writing inline markup
+    /// wants; the three-line shape is what somebody writing a document
+    /// wants, and neither should have to give up closing tags to escape the
+    /// other. Mirrored here like the rest: the keystroke arrives at this
+    /// object, so the answer has to be one property load.
+    var expandsTags = true
+
     /// Which of the things the editor does unasked the reader still wants.
     ///
     /// Mirrored onto the view for the reason the switches below it are: the
@@ -2473,6 +2491,15 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
     /// formatted with spaces and then typed into with tabs.
     var insertsSpacesForTab = true
     var tabWidth = 4
+
+    /// One level of indentation, in whichever character the reader chose.
+    ///
+    /// One property because two keystrokes need it — Return, and the `>`
+    /// that opens an element — and two spellings of the same expression is
+    /// how the two end up indenting by different amounts.
+    private var indentUnit: String {
+        insertsSpacesForTab ? String(repeating: " ", count: max(tabWidth, 1)) : "\t"
+    }
 
     /// Which markup this file is, which the language cannot answer.
     ///
@@ -4233,7 +4260,7 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         let insertion = CodeNewlineIndent.insertion(
             forLine: line.trimmingTrailingNewline,
             caretInLine: caret - lineRange.location,
-            indentUnit: insertsSpacesForTab ? String(repeating: " ", count: max(tabWidth, 1)) : "\t",
+            indentUnit: indentUnit,
             continuesLists: hoverLanguage == .markdown
         )
 
@@ -4397,17 +4424,19 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         let caret = selectedRange().location
         let content = string as NSString
 
-        let insertion: String?
+        let edit: (text: String, caretOffset: Int)?
         switch typed {
         case ">":
-            insertion = CodeTagClose.closingTag(in: content, caret: caret, dialect: tagDialect)
+            edit = CodeTagClose.closingTag(in: content, caret: caret, dialect: tagDialect)
+                .map { openedElement($0, caret: caret, in: content) }
         case "/":
-            insertion = CodeTagClose.closingTagCompletion(in: content, caret: caret, dialect: tagDialect)
+            edit = CodeTagClose.closingTagCompletion(in: content, caret: caret, dialect: tagDialect)
+                .map { (text: $0, caretOffset: ($0 as NSString).length) }
         default:
             return
         }
 
-        guard let insertion else { return }
+        guard let edit else { return }
 
         /// Through the delegate rather than by writing to the storage
         /// directly: this is what registers a single undo step and what tells
@@ -4415,18 +4444,50 @@ final class CodeNSTextView: NSTextView, CodeUndoTarget {
         /// language server describing a file that no longer exists — the same
         /// desynchronisation the formatter had.
         let range = NSRange(location: caret, length: 0)
-        guard shouldChangeText(in: range, replacementString: insertion) else { return }
-        textStorage?.replaceCharacters(in: range, with: insertion)
+        guard shouldChangeText(in: range, replacementString: edit.text) else { return }
+        textStorage?.replaceCharacters(in: range, with: edit.text)
         didChangeText()
 
-        /// Typing `>` leaves the caret **between** the two tags, which is
-        /// where the content goes. Completing a `</` puts it after the tag it
-        /// just finished, because that element is now closed and there is
-        /// nothing left to write inside it.
-        setSelectedRange(NSRange(
-            location: typed == ">" ? caret : caret + (insertion as NSString).length,
-            length: 0
-        ))
+        /// Typing `>` leaves the caret **inside** the element, which is where
+        /// the content goes — beside the closing tag when the insertion is
+        /// flat, on the indented line above it when it was expanded.
+        /// Completing a `</` puts it after the tag it just finished, because
+        /// that element is now closed and there is nothing left to write
+        /// inside it.
+        setSelectedRange(NSRange(location: caret + edit.caretOffset, length: 0))
+    }
+
+    /// The closing tag as one edit: flat, or expanded onto three lines with
+    /// the caret on an indented blank line between the two tags.
+    ///
+    /// Expanded only where the markup *is* the document, which is the
+    /// question `CodeTagClose.isInMarkup` already answers with the caret in
+    /// hand — so `.html` and `.xml` expand, an SFC's template expands and its
+    /// `<script>` block does not, and `.tsx` never does. In JSX an element is
+    /// usually one term of an expression, and pushing two newlines into the
+    /// middle of a `return` line moves code the reader did not ask to move.
+    ///
+    /// Both answers are one insertion at one offset, which is what keeps the
+    /// whole thing on the single undo step the caller registers.
+    private func openedElement(
+        _ closingTag: String,
+        caret: Int,
+        in content: NSString
+    ) -> (text: String, caretOffset: Int) {
+        let flat = (text: closingTag, caretOffset: 0)
+        guard expandsTags, CodeTagClose.isInMarkup(content, caret: caret, dialect: tagDialect) else {
+            return flat
+        }
+
+        let lineRange = content.lineRange(for: NSRange(location: caret, length: 0))
+        guard let expanded = CodeNewlineIndent.tagInsertion(
+            forLine: content.substring(with: lineRange).trimmingTrailingNewline,
+            caretInLine: caret - lineRange.location,
+            indentUnit: indentUnit,
+            closingTag: closingTag
+        ) else { return flat }
+
+        return (expanded.text, expanded.caretOffset)
     }
 
     /// Closes a bracket or quote as it is typed, and steps over one that is

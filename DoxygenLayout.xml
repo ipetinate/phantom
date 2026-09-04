@@ -20,7 +20,6 @@
     </tab>
     <tab type="examples" visible="yes" title="" intro=""/>
   </navindex>
-
   <!-- Layout definition for a class page -->
   <class>
     <briefdescription visible="yes"/>
@@ -79,7 +78,6 @@
     <usedfiles visible="$SHOW_USED_FILES"/>
     <authorsection visible="yes"/>
   </class>
-
   <!-- Layout definition for a namespace page -->
   <namespace>
     <briefdescription visible="yes"/>
@@ -113,7 +111,6 @@
     </memberdef>
     <authorsection visible="yes"/>
   </namespace>
-
   <!-- Layout definition for a concept page -->
   <concept>
     <briefdescription visible="yes"/>
@@ -122,7 +119,6 @@
     <detaileddescription visible="yes" title=""/>
     <authorsection visible="yes"/>
   </concept>
-
   <!-- Layout definition for a file page -->
   <file>
     <briefdescription visible="yes"/>
@@ -162,7 +158,6 @@
     </memberdef>
     <authorsection/>
   </file>
-
   <!-- Layout definition for a group page -->
   <group>
     <briefdescription visible="yes"/>
@@ -214,7 +209,6 @@
     <groupgraph visible="yes"/>
     <authorsection visible="yes"/>
   </group>
-
   <!-- Layout definition for a C++20 module page -->
   <module>
     <briefdescription visible="yes"/>
@@ -233,7 +227,6 @@
       <files visible="yes"/>
     </memberdecl>
   </module>
-
   <!-- Layout definition for a directory page -->
   <directory>
     <briefdescription visible="yes"/>

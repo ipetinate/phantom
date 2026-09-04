@@ -40,4 +40,24 @@ struct GitDiffRangeTests {
             )
         }
     }
+
+    /// The defect this case was added for. `^!` is a revision, and the branch
+    /// case appends `...HEAD` to whatever it is handed — so a commit smuggled
+    /// through there became `<sha>^!...HEAD`, which git refuses:
+    /// `fatal: bad revision`. Every file in a commit's review came back with
+    /// no diff, and nothing on screen said why.
+    @Test func aCommitIsARevisionAndNotARange() {
+        let arguments = GitDiffLoader.rangeArguments(for: .commit(sha: "9145bd702"))
+        #expect(arguments == ["9145bd702^!"])
+        #expect(!(arguments.first ?? "").contains("..."))
+        #expect(!(arguments.first ?? "").contains("HEAD"))
+    }
+
+    /// The parent for the old side, the commit itself for the new. A root
+    /// commit has no `^`, and that column is meant to come back empty.
+    @Test func aCommitComparesItselfAgainstItsParent() {
+        let revisions = GitDiffLoader.revisions(for: .commit(sha: "abc123"), in: "/tmp")
+        #expect(revisions?.old == "abc123^")
+        #expect(revisions?.new == "abc123")
+    }
 }

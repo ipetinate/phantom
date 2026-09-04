@@ -16,7 +16,7 @@ struct PrettierNoticeTests {
     /// outcome the keystroke was pressed to reach, and it used to put a dialog
     /// in front of it.
     @Test func nothingToChangeIsSilentOnTheExplicitCommand() {
-        let notice = PrettierAttempt.answered(nil).notice(for: .command)
+        let notice = FormatAttempt.answered(nil).notice(for: .command)
 
         #expect(notice == nil, "\(String(describing: notice))")
     }
@@ -24,7 +24,7 @@ struct PrettierNoticeTests {
     /// The same outcome on the path that never spoke anyway, pinned so the two
     /// cannot drift into disagreeing about it.
     @Test func nothingToChangeIsSilentOnSave() {
-        let notice = PrettierAttempt.answered(nil).notice(for: .save)
+        let notice = FormatAttempt.answered(nil).notice(for: .save)
 
         #expect(notice == nil, "\(String(describing: notice))")
     }
@@ -32,7 +32,7 @@ struct PrettierNoticeTests {
     /// Prettier does not own this file, so nothing has been decided yet: the
     /// language server still gets its turn below, and reports for itself.
     @Test func aFileTheProjectDoesNotCoverIsSilent() {
-        let notice = PrettierAttempt.notOurs.notice(for: .command)
+        let notice = FormatAttempt.notOurs.notice(for: .command)
 
         #expect(notice == nil, "\(String(describing: notice))")
     }
@@ -45,7 +45,7 @@ struct PrettierNoticeTests {
         let edit = PrettierEdit(range: NSRange(location: 0, length: 1), newText: "  ")
 
         for trigger in [EditorFormatTrigger.command, .save] {
-            let notice = PrettierAttempt.answered(edit).notice(for: trigger)
+            let notice = FormatAttempt.answered(edit).notice(for: trigger)
 
             #expect(notice == nil, "\(trigger): \(String(describing: notice))")
         }
@@ -60,7 +60,7 @@ struct PrettierNoticeTests {
         let reason = PrettierFailure
             .failed(status: 2, message: "[error] main.ts: Unexpected token (3:7)")
             .reason
-        let notice = PrettierAttempt.failed(reason).notice(for: .command)
+        let notice = FormatAttempt.failed(reason).notice(for: .command)
 
         #expect(notice?.contains(reason) == true, "\(String(describing: notice))")
     }
@@ -70,7 +70,7 @@ struct PrettierNoticeTests {
     /// every single write, which is how alerts stop being read — and the write
     /// goes through either way.
     @Test func aFailureOnSaveIsSilent() {
-        let notice = PrettierAttempt.failed(PrettierFailure.notFound.reason).notice(for: .save)
+        let notice = FormatAttempt.failed(PrettierFailure.notFound.reason).notice(for: .save)
 
         #expect(notice == nil, "\(String(describing: notice))")
     }

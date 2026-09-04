@@ -21,6 +21,30 @@ struct SidebarGroupClaimTests {
         return SidebarGroupStore(fileURL: url)
     }
 
+    // MARK: Naming a group by id
+
+    /// What the worktree buttons hand back: the group the request came from,
+    /// as an id rather than as the group itself, because it travels through
+    /// four views to reach the controller that opens the terminal.
+    @Test func aGroupCanBeFoundByTheIdAButtonCarried() {
+        let store = makeStore()
+        let group = store.createGroup(name: "Aurora", kind: .manual)
+
+        #expect(store.group(group.id)?.id == group.id)
+    }
+
+    /// Nil is the answer for a request that came from outside every group,
+    /// and it has to stay an answer rather than becoming a guess: a terminal
+    /// that silently joins a group nobody was in is the same bug as one that
+    /// refuses to join the group it was opened from.
+    @Test func noIdMeansNoGroupRatherThanTheFirstOne() {
+        let store = makeStore()
+        _ = store.createGroup(name: "Aurora", kind: .manual)
+
+        #expect(store.group(nil) == nil)
+        #expect(store.group(UUID()) == nil)
+    }
+
     /// The claim itself still works: this is the behavior the explicit
     /// assignment has to override, so a test that it happens at all is what
     /// makes the next one meaningful.

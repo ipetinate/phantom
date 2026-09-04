@@ -42,6 +42,62 @@ enum WorktreeEntryAction: Equatable {
     case newTab
 }
 
+/// What a place can reach, and whether the answer is in yet.
+///
+/// A folder is one of three things and the button used to know only two of
+/// them. `~/Projects/Aurora` is not a checkout, so the group header standing
+/// for it counted as "not in a repository" — and it was handed the folder as
+/// a repository root anyway, which is how pressing the button produced
+/// "Couldn't read this repository's worktrees" over six perfectly readable
+/// repositories.
+///
+/// The fourth case is the one worth stating separately: a scan that has not
+/// come back has said nothing, and hiding the button on the strength of
+/// nothing is a button that is missing exactly when the folder is cold.
+enum WorktreeEntryReach: Equatable {
+    /// The folder is a checkout. One family.
+    case repository
+
+    /// The folder is not a checkout, but repositories were found under it.
+    /// One section each — even when there is only one, because which shape
+    /// the chooser takes is `WorktreeScope`'s decision, not this one's.
+    case workspace
+
+    /// The scan under the folder has not answered yet.
+    case searching
+
+    /// No checkout here, and none underneath.
+    case nothing
+
+    /// - Parameters:
+    ///   - repoRoot: the enclosing repository, already computed without a
+    ///     subprocess by `SidebarTabManager.gitInfo`. Asked first, and that
+    ///     order matters: a terminal inside a checkout is looking at that
+    ///     checkout, while a scan of its working directory could answer with
+    ///     a vendored repository two folders down.
+    ///   - scanRoot: a folder to look inside when there is no enclosing
+    ///     repository — a workspace such as `~/Projects/Aurora`, or a
+    ///     project group's declared root.
+    ///   - discovered: `GitCenter.workspaceRepos[scanRoot]`. Nil and `[]`
+    ///     mean different things, and this is the type that keeps them
+    ///     apart: the first is "still looking".
+    ///
+    /// Deliberately free of filesystem work. It is asked from `body`, for
+    /// every row, on every sidebar update — resolving each repository to its
+    /// family reads files, and that is deferred to the moment something is
+    /// opened.
+    static func resolve(
+        repoRoot: String?,
+        scanRoot: String?,
+        discovered: [String]?
+    ) -> WorktreeEntryReach {
+        if let repoRoot, !repoRoot.isEmpty { return .repository }
+        guard let scanRoot, !scanRoot.isEmpty else { return .nothing }
+        guard let discovered else { return .searching }
+        return discovered.isEmpty ? .nothing : .workspace
+    }
+}
+
 /// Whether a place offers the button, and what pressing it means.
 ///
 /// Pure, and separate from every view that asks it, because the interesting
@@ -54,25 +110,33 @@ enum WorktreeEntryRule {
     ///   - isEnabled: the Settings toggle for this place. The row, the group
     ///     header and the chrome already carry a lot of actions, so each is
     ///     switchable on its own.
-    ///   - isInRepository: whether the terminal is inside a git repository
-    ///     at all. Nothing to switch between otherwise, and an icon that
-    ///     opens an empty list is worse than no icon.
+    ///   - reach: what this place's folder can reach. Nothing to switch
+    ///     between when it reaches nothing, and an icon that opens an empty
+    ///     list is worse than no icon.
     ///   - isIdle: `TerminalIdleCheck.isIdle` — the foreground process is a
     ///     shell.
-    ///   - hasLiveAgent: `SidebarTabModel.liveAgent` is set.
+    ///   - hasLiveAgent: `TabRowAgentActions.hasLiveAgent` — the tab's record
+    ///     names a session *and* the foreground process does not contradict
+    ///     it. Not `SidebarTabModel.liveAgent` on its own, which stays set
+    ///     forever when an agent dies without writing its last word.
     ///
     /// Returns nil when the place shows nothing at all.
     static func action(
         at entry: WorktreeEntry,
         isEnabled: Bool,
-        isInRepository: Bool,
+        reach: WorktreeEntryReach,
         isIdle: Bool,
         hasLiveAgent: Bool
     ) -> WorktreeEntryAction? {
-        guard isEnabled, isInRepository else { return nil }
+        guard isEnabled, reach != .nothing else { return nil }
 
         switch entry {
         case .tabRow:
+            /// A workspace folder is not a worktree to leave, and migrating
+            /// needs somewhere to leave. The group header one row up stands
+            /// for the whole folder and does offer its repositories.
+            guard reach == .repository else { return nil }
+
             /// Migrating means typing `cd` at a prompt. A terminal running a
             /// build takes that as input to the build, and a terminal
             /// running an agent takes it as a message to the agent — which

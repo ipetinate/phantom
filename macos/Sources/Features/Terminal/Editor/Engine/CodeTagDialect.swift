@@ -15,6 +15,16 @@ enum CodeTagDialect: Equatable, Sendable, CaseIterable {
     /// Markup all the way down, with HTML's case-insensitive element names.
     case html
 
+    /// Markup all the way down, with no element set behind it.
+    ///
+    /// Split from `.html` for one fact, and it is the fact that decides
+    /// whether a keystroke writes something the parser rejects: **XML has no
+    /// void elements.** `<link>` in an Atom feed opens an element and wants
+    /// `</link>`, where the same name in HTML is void and closing it is an
+    /// error. Every other rule the two share, which is why this is a case
+    /// beside `.html` rather than a dialect of its own with its own scanner.
+    case xml
+
     /// Markup embedded in an expression language, where a `<` has to be told
     /// from a generic and a capital letter means "component".
     case jsx
@@ -32,8 +42,14 @@ enum CodeTagDialect: Equatable, Sendable, CaseIterable {
     /// this dialect needs actually errs less here than it does in `.tsx`. If
     /// that turns out to cost more than it earns, the fix is to move three
     /// entries to `.none`, not to add a condition somewhere else.
+    ///
+    /// `.svg` sits with `.xml` rather than with `.html` because that is what
+    /// it is — an SVG document is XML, its names are case sensitive, and
+    /// none of HTML's void elements exists in it. The one it shares a name
+    /// with, `<image>`, is not on that list anyway.
     private static let byExtension: [String: CodeTagDialect] = [
-        "html": .html, "htm": .html, "xml": .html, "svg": .html,
+        "html": .html, "htm": .html,
+        "xml": .xml, "svg": .xml,
         "tsx": .jsx, "jsx": .jsx,
         "js": .jsx, "mjs": .jsx, "cjs": .jsx,
         "ts": .none, "mts": .none, "cts": .none,
@@ -78,5 +94,15 @@ enum CodeTagDialect: Equatable, Sendable, CaseIterable {
     /// and nobody else's — `<BR>` is legal there and meaningful elsewhere.
     var matchesNamesCaseInsensitively: Bool {
         self == .html
+    }
+
+    /// Whether HTML's void element list applies.
+    ///
+    /// Everywhere except XML, which has no such list: a name is void because
+    /// the HTML parser says so, and nothing says so about `<link>` in a feed
+    /// or `<source>` in a build manifest. Both want a closing tag, and both
+    /// are on the list this turns off.
+    var parsesVoidElements: Bool {
+        self != .xml
     }
 }

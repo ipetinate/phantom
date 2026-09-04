@@ -467,3 +467,120 @@ struct DevelopmentBuildTests {
         #expect(!DevelopmentBuild.isBuildOutputPath("/Applications/zig-outer/Phantom.app"))
     }
 }
+
+/// The block tags themselves.
+///
+/// They drew as plain white text while everything inside them was coloured:
+/// `SFCRegions` keeps the tags out of the block on purpose, and the container
+/// they belong to had no rules at all. Four kinds per tag now — the name, its
+/// attributes, their values, and the punctuation holding them together.
+struct SFCBlockTagTests {
+    private struct Named: Equatable {
+        let text: String
+        let kind: TokenKind
+    }
+
+    private func tokens(_ text: String) -> [Named] {
+        let ns = text as NSString
+        return SyntaxHighlighter(language: .vue)
+            .tokens(in: text, range: NSRange(location: 0, length: ns.length))
+            .sorted { $0.range.location < $1.range.location }
+            .map { Named(text: ns.substring(with: $0.range), kind: $0.kind) }
+    }
+
+    @Test func theScriptTagIsTakenApart() {
+        let found = tokens("<script setup lang=\"ts\">\nconst a = 1;\n</script>")
+
+        #expect(Array(found.prefix(7)) == [
+            Named(text: "<", kind: .punctuation),
+            Named(text: "script", kind: .keyword),
+            Named(text: "setup", kind: .attribute),
+            Named(text: "lang", kind: .attribute),
+            Named(text: "=", kind: .punctuation),
+            Named(text: "\"ts\"", kind: .string),
+            Named(text: ">", kind: .punctuation),
+        ])
+    }
+
+    /// The closing tag as well, and its slash travels with the `<` rather
+    /// than becoming a token of its own.
+    @Test func theClosingTagIsTakenApartToo() {
+        let found = tokens("<script>\nconst a = 1;\n</script>")
+
+        #expect(Array(found.suffix(3)) == [
+            Named(text: "</", kind: .punctuation),
+            Named(text: "script", kind: .keyword),
+            Named(text: ">", kind: .punctuation),
+        ])
+    }
+
+    @Test func theTemplateTagIsTakenApart() {
+        let found = tokens("<template lang=\"pug\">\np hello\n</template>")
+
+        #expect(Array(found.prefix(6)) == [
+            Named(text: "<", kind: .punctuation),
+            Named(text: "template", kind: .keyword),
+            Named(text: "lang", kind: .attribute),
+            Named(text: "=", kind: .punctuation),
+            Named(text: "\"pug\"", kind: .string),
+            Named(text: ">", kind: .punctuation),
+        ])
+    }
+
+    /// `scoped` has no value and `lang` has one, which is the pair that says
+    /// a value is optional rather than assumed.
+    @Test func theStyleTagIsTakenApart() {
+        let found = tokens("<style scoped lang=\"scss\">\n.a { color: red; }\n</style>")
+
+        #expect(Array(found.prefix(7)) == [
+            Named(text: "<", kind: .punctuation),
+            Named(text: "style", kind: .keyword),
+            Named(text: "scoped", kind: .attribute),
+            Named(text: "lang", kind: .attribute),
+            Named(text: "=", kind: .punctuation),
+            Named(text: "\"scss\"", kind: .string),
+            Named(text: ">", kind: .punctuation),
+        ])
+    }
+
+    /// A custom block is a block tag like any other. `SFCRegions` does not
+    /// claim its body — it has no language to claim it as — and the tag is
+    /// still a tag.
+    @Test func aCustomBlockTagIsATagAsWell() {
+        let found = tokens("<i18n lang=\"json\">\n{}\n</i18n>")
+        #expect(found.first == Named(text: "<", kind: .punctuation))
+        #expect(found.dropFirst().first == Named(text: "i18n", kind: .keyword))
+    }
+
+    /// The blocks inside still lex as themselves, which is the arrangement
+    /// this must not disturb.
+    @Test func theBlocksInsideStillLexAsThemselves() {
+        let found = tokens("<script setup>\nconst a = 1;\n</script>")
+        #expect(found.contains(Named(text: "const", kind: .keyword)))
+        #expect(found.contains(Named(text: "1", kind: .number)))
+    }
+
+    /// **The failure a rule set would have brought with it.** An unclosed
+    /// block is not a region, so the whole of it arrives as frame — and
+    /// markup's rules read every `name =` in it as an attribute. Only the
+    /// tag is coloured.
+    @Test func anUnclosedBlockKeepsItsAssignmentsPlain() {
+        let found = tokens("<script>\nconst url = \"x\"\n")
+        #expect(found.map(\.kind) == [.punctuation, .keyword, .punctuation])
+    }
+
+    /// An indented tag is not a block tag, which is `SFCRegions`' own
+    /// column-zero convention applied to the frame.
+    @Test func anIndentedTagIsNotABlockTag() {
+        #expect(tokens("  <script>\n").isEmpty)
+    }
+
+    /// Nothing outside a tag is claimed. This is the line a markup rule set
+    /// would have painted and a tag pass does not.
+    @Test func textBetweenBlocksIsStillLeftAlone() {
+        let text = "<script>\nlet a = 1;\n</script>\n\nname = \"free text\"\n"
+        let found = tokens(text)
+        #expect(!found.contains { $0.text == "name" })
+        #expect(!found.contains { $0.text == "\"free text\"" })
+    }
+}

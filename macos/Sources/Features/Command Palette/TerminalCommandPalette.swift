@@ -147,15 +147,18 @@ struct TerminalCommandPaletteView: View {
             let displayColor = color != TerminalTabColor.none ? color : nil
 
             return controller.surfaceTree.map { surface in
-                let terminalTitle = surface.title.isEmpty ? window.title : surface.title
-                let displayTitle: String
-                if let override = controller.titleOverride, !override.isEmpty {
-                    displayTitle = override
-                } else if !terminalTitle.isEmpty {
-                    displayTitle = terminalTitle
-                } else {
-                    displayTitle = "Untitled"
-                }
+                /// Two renames can stand over one surface: the name given to
+                /// its row in the sidebar, and the window-level title set
+                /// through the tab's own editor. The sidebar's wins, because
+                /// that is the name the reader is looking at while they search
+                /// — and because it is the one ``TerminalDisplayName`` puts on
+                /// the row and on the editor's tab bar.
+                let displayTitle = TerminalDisplayName.resolve(
+                    custom: SidebarGroupStore.shared.tabOverrides[surface.id]?.name
+                        ?? controller.titleOverride,
+                    terminalTitle: surface.title.isEmpty ? window.title : surface.title,
+                    fallback: "Untitled"
+                )
                 let pwd = surface.pwd?.abbreviatedPath
                 let subtitle: String? = if let pwd, !displayTitle.contains(pwd) {
                     pwd

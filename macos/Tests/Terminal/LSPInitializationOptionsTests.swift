@@ -52,4 +52,40 @@ struct LSPInitializationOptionsTests {
         let value = LSPInitializationOptions.vueValue(tsdk: "/path/to/lib")
         #expect(value["typescript"]?["tsdk"]?.stringValue == "/path/to/lib")
     }
+
+    // MARK: The formatter the vscode servers keep switched off
+
+    /// The flag's name and shape, spelled the way the three servers read it.
+    /// Measured: with it, each of the three answers `initialize` with
+    /// `documentFormattingProvider: true`; without it, all three say false.
+    @Test func theFormatterFlagIsSentAtTheTopLevel() {
+        #expect(LSPInitializationOptions.provideFormatterValue["provideFormatter"]?.boolValue == true)
+    }
+
+    /// Every server from `vscode-langservers-extracted` carries the flag, and
+    /// missing one means that language silently has no formatter — which is
+    /// how JSON, HTML and CSS came to have none.
+    @Test func everyVSCodeServerAsksForItsFormatter() {
+        let extracted = LSPServerRegistry.all.filter {
+            $0.installHint.contains("vscode-langservers-extracted")
+        }
+
+        #expect(extracted.count == 5)
+        for definition in extracted {
+            #expect(
+                definition.initializationOptionsKind == .provideFormatter,
+                "\(definition.languageID)")
+        }
+    }
+
+    /// And nothing else does. The flag means one thing to three servers and
+    /// nothing to the rest, so sending it more widely would be sending noise
+    /// no server asked for.
+    @Test func noOtherServerSendsTheFormatterFlag() {
+        let others = LSPServerRegistry.all.filter {
+            !$0.installHint.contains("vscode-langservers-extracted")
+        }
+
+        #expect(others.allSatisfy { $0.initializationOptionsKind != .provideFormatter })
+    }
 }

@@ -120,6 +120,13 @@ final class MCPPermissionPrompt {
             stakes = "This changes a setting in every project and every window, "
                 + "not only here, and it outlives quitting the app. "
                 + "You can see and undo it in Settings, under Languages."
+        case .worktree:
+            /// The one that touches the disk. Said in the strongest terms the
+            /// prompt has, because a removal is not undoable from the app and
+            /// a forced one takes work that was never committed anywhere.
+            stakes = "Worktrees are folders on disk. Removing one deletes it, "
+                + "and a forced removal deletes uncommitted work inside it. "
+                + "Nothing in this app can bring that back."
         }
 
         return "\(stakes) Choose how far this reaches; it starts at the narrowest. "

@@ -13,7 +13,9 @@ import Testing
 ///
 /// Built against a real `Ghostty.Config` rather than a stub, because the fault
 /// was in what the core answers: `keyboardShortcut(for:)` returns nothing for
-/// an action bound more than once, and `undo` is bound twice by default.
+/// an action bound more than once, and `undo` is bound twice by default —
+/// ⌘Z and the browser's ⇧⌘T. What made it answer for `undo` again is a
+/// separate change, recorded below.
 @MainActor
 struct MenuShortcutSyncTests {
     private func manager() -> Ghostty.MenuShortcutManager {
@@ -30,11 +32,22 @@ struct MenuShortcutSyncTests {
 
     // MARK: - The cause
 
-    /// An action with two bindings resolves to neither. `undo` ships with
-    /// `super+z` *and* `super+shift+t`, so it is one of them.
-    @Test func anActionBoundTwiceResolvesToNoShortcut() throws {
+    /// `undo` answers again, and the reason is worth writing down because it
+    /// was not this file's doing.
+    ///
+    /// Two things kept it silent. It is bound twice, which the lookup refuses
+    /// — and both of those bindings were *performable*, a flag that keeps a
+    /// binding out of the core's reverse map entirely. Dropping the flag, so
+    /// that ⌘Z stops typing a `z` into whatever is reading input, is what let
+    /// the lookup speak at all. What it says is ⌘Z, pinned on the Zig side in
+    /// `ghostty_config_trigger: default keybind`.
+    ///
+    /// The fallback further down is not dead. It covers every action the
+    /// config still cannot answer for, which is any action bound twice that
+    /// is not one of these.
+    @Test func undoAnswersNowThatItsBindingsAreNotPerformable() throws {
         let config = try TemporaryConfig("")
-        #expect(config.keyboardShortcut(for: "undo") == nil)
+        #expect(config.keyboardShortcut(for: "undo") != nil)
     }
 
     /// And one bound once resolves, which is what makes the line above a
@@ -46,9 +59,12 @@ struct MenuShortcutSyncTests {
 
     // MARK: - The regression
 
-    /// The whole bug in one assertion: after a sync against a config that
-    /// cannot answer, Undo still has ⌘Z.
-    @Test func undoKeepsCommandZWhenTheConfigCannotAnswer() throws {
+    /// The whole bug in one assertion: after a sync, Undo has ⌘Z.
+    ///
+    /// It arrives from the config now rather than from the fallback, and the
+    /// assertion is deliberately the same either way — what the reader
+    /// presses is the contract, not which of the two supplied it.
+    @Test func undoKeepsCommandZ() throws {
         let config = try TemporaryConfig("")
         let undo = item()
 

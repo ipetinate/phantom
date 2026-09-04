@@ -40,14 +40,15 @@ enum GitReviewFileDiffLoader {
             )
 
         case .commit(let root, let sha, _):
-            /// One commit compared against its own parent. `sha^!` is git's
-            /// shorthand for exactly that and it works on a root commit, where
-            /// `sha^..sha` does not — a first commit has no parent to name.
+            /// One commit compared against its own parent. The reasoning for
+            /// `^!` now lives with `GitDiffSide.commit`, which is also what
+            /// stops it being appended to a range: passed as a branch base, it
+            /// became `<sha>^!...HEAD` and git refused every one of them.
             return Loaded(
                 outcome: GitDiffLoader.load(
                     path: path,
                     previousPath: previousPath,
-                    side: .branch(base: "\(sha)^!"),
+                    side: .commit(sha: sha),
                     in: root),
                 commit: commit(sha, in: root)
             )

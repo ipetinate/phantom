@@ -219,3 +219,111 @@ enum SFCRegions {
         }
     }
 }
+
+/// The tokens of a single-file component's own block tags.
+///
+/// `<script setup lang="ts">` drew as plain text, and so did
+/// `<template lang="pug">` and `<style scoped lang="scss">`. ``SFCRegions``
+/// leaves the tags outside the block on purpose — they are markup, not
+/// script — and the container they are markup *of* has no rules at all:
+/// `.vue` answers with an empty ``SyntaxRules``, so the frame lexed to
+/// nothing.
+///
+/// **Taken apart here rather than given a rule set, and the reason is the
+/// other container's documented failure.** Markup's rules read "a name
+/// before an equals sign" as an attribute, and an SFC's frame is not only
+/// its tags: a `<script>` block still being typed has no closing tag, so
+/// ``SFCRegions`` declines to claim it and the whole of it arrives here as
+/// frame. Markup's rules would paint every assignment in it. A block tag is
+/// one line with a fixed shape, so its pieces are found and named instead.
+///
+/// The `<`, `>` and `=` become ``TokenKind/punctuation``, which nothing else
+/// in this build produces and which every theme already carries a colour
+/// for.
+enum SFCBlockTag {
+    /// `<script setup lang="ts">`, `</script>`, and a custom block's
+    /// `<i18n>` alike — any tag written flush to the left margin.
+    ///
+    /// Column zero is ``SFCRegions``' own convention, and it is what keeps a
+    /// `<div>` in the template out of this: the template's markup is a
+    /// region lexed by HTML's rules, and only the frame between the regions
+    /// is offered here.
+    ///
+    /// A quoted value may hold a `>`, so the attribute run alternates quoted
+    /// runs with plain characters rather than taking everything up to the
+    /// first `>`. Neither crosses a line: an unterminated quote in a file
+    /// being typed would otherwise swallow the rest of it.
+    private static let tag = try? NSRegularExpression(
+        pattern: #"^<(/?)([A-Za-z][A-Za-z0-9-]*)((?:"[^"\n]*"|'[^'\n]*'|[^>"'\n])*)>"#,
+        options: [.anchorsMatchLines]
+    )
+
+    /// One attribute of a block tag: `setup` on its own, or `lang="ts"`.
+    private static let attribute = try? NSRegularExpression(
+        pattern: #"([A-Za-z_:@][-A-Za-z0-9_:.]*)(?:\s*(=)\s*("[^"\n]*"|'[^'\n]*'|[^\s"'>]+))?"#
+    )
+
+    static func tokens(in text: String, range: NSRange) -> [SyntaxHighlighter.Token] {
+        guard let tag else { return [] }
+
+        var tokens: [SyntaxHighlighter.Token] = []
+        /// `withoutAnchoringBounds` so `^` keeps meaning a line of the
+        /// document. Without it the anchor also matches wherever the range
+        /// begins, and the editor's ranges begin mid-line — they are the
+        /// edited line padded by a screenful either side.
+        tag.enumerateMatches(
+            in: text,
+            options: [.withoutAnchoringBounds],
+            range: range
+        ) { match, _, _ in
+            guard let match else { return }
+            let whole = match.range(at: 0)
+            let name = match.range(at: 2)
+            let attributes = match.range(at: 3)
+
+            tokens.append(
+                SyntaxHighlighter.Token(
+                    range: NSRange(
+                        location: whole.location,
+                        length: 1 + match.range(at: 1).length),
+                    kind: .punctuation)
+            )
+            if name.length > 0 {
+                tokens.append(SyntaxHighlighter.Token(range: name, kind: .keyword))
+            }
+            if attributes.length > 0 {
+                tokens += attributeTokens(in: text, range: attributes)
+            }
+            tokens.append(
+                SyntaxHighlighter.Token(
+                    range: NSRange(location: NSMaxRange(whole) - 1, length: 1),
+                    kind: .punctuation)
+            )
+        }
+        return tokens
+    }
+
+    private static func attributeTokens(
+        in text: String,
+        range: NSRange
+    ) -> [SyntaxHighlighter.Token] {
+        guard let attribute else { return [] }
+
+        let kinds: [(group: Int, kind: TokenKind)] = [
+            (1, .attribute),
+            (2, .punctuation),
+            (3, .string),
+        ]
+
+        var tokens: [SyntaxHighlighter.Token] = []
+        attribute.enumerateMatches(in: text, options: [], range: range) { match, _, _ in
+            guard let match else { return }
+            for (group, kind) in kinds {
+                let found = match.range(at: group)
+                guard found.location != NSNotFound, found.length > 0 else { continue }
+                tokens.append(SyntaxHighlighter.Token(range: found, kind: kind))
+            }
+        }
+        return tokens
+    }
+}

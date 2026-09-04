@@ -81,13 +81,52 @@ struct CodeNewlineIndent {
             return Insertion(text: "\n" + indent)
         }
 
-        let inner = indent + indentUnit
         guard let closer = after.first(where: { !$0.isWhitespace }), closer == match(for: opener) else {
-            return Insertion(text: "\n" + inner)
+            return Insertion(text: "\n" + indent + indentUnit)
         }
 
-        let text = "\n" + inner + "\n" + indent
-        return Insertion(text: text, caretOffset: ("\n" + inner).utf16.count)
+        return opened(indent: indent, indentUnit: indentUnit, closer: "")
+    }
+
+    /// What a closed opening tag expands into, or nil where the rest of the
+    /// line rules it out.
+    ///
+    /// The same three-line shape Return already produces between a `{` and its
+    /// `}`, asked for at a different moment: there the closer is in the
+    /// document and the newline is the keystroke, here the `>` is the keystroke
+    /// and the closing tag does not exist yet. `closingTag` is therefore
+    /// appended rather than assumed to be after the caret.
+    ///
+    /// **Nil when anything but whitespace follows the caret.** `<div>` typed in
+    /// front of text that is already there would put that text after the
+    /// closing tag — on the wrong line, in the wrong element. Declining leaves
+    /// the flat insertion, which moves nothing.
+    static func tagInsertion(
+        forLine line: String,
+        caretInLine: Int,
+        indentUnit: String,
+        closingTag: String
+    ) -> Insertion? {
+        let text = line as NSString
+        let caret = max(0, min(caretInLine, text.length))
+        guard text.substring(from: caret).allSatisfy(\.isWhitespace) else { return nil }
+
+        return opened(
+            indent: leadingWhitespace(of: text.substring(to: caret)),
+            indentUnit: indentUnit,
+            closer: closingTag
+        )
+    }
+
+    /// The block shape: an indented blank line with the caret on it, and the
+    /// closer back at the opening line's own indentation.
+    ///
+    /// One function for both callers because the shape is the thing readers
+    /// recognise, and two spellings of it is how the tag half ends up indenting
+    /// by a different amount than the brace half.
+    private static func opened(indent: String, indentUnit: String, closer: String) -> Insertion {
+        let inner = "\n" + indent + indentUnit
+        return Insertion(text: inner + "\n" + indent + closer, caretOffset: inner.utf16.count)
     }
 
     private static func isOpener(_ character: Character) -> Bool {

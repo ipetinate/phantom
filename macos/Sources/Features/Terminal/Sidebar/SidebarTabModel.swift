@@ -85,6 +85,16 @@ final class SidebarTabModel: ObservableObject, Identifiable {
     /// The port a dev server in this tab is listening on, if any.
     @Published private(set) var devServerPort: Int?
 
+    /// What a plain command in this tab is doing — one no agent hook reports,
+    /// so it comes from the shell's own OSC 133 report where there is one and
+    /// from a poll of the foreground process where there is not. See
+    /// `CommandRunRule`, which owns every transition of it.
+    @Published private(set) var commandRun: CommandRun?
+
+    /// The mark the row draws for that command. Several phases deliberately
+    /// have none: the wait after a start, and a full-screen program.
+    var commandMark: CommandRunMark? { commandRun?.mark }
+
     var surfaceCancellables: Set<AnyCancellable> = []
 
     var directoryName: String? {
@@ -158,5 +168,9 @@ final class SidebarTabModel: ObservableObject, Identifiable {
 
     func setDevServerPort(_ value: Int?) {
         if devServerPort != value { devServerPort = value }
+    }
+
+    func setCommandRun(_ value: CommandRun?) {
+        if commandRun != value { commandRun = value }
     }
 }

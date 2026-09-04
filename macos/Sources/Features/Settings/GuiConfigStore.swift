@@ -20,7 +20,26 @@ final class GuiConfigStore: ObservableObject {
 
     var guiFileURL: URL { configDir.appendingPathComponent(Self.fileName) }
     var mainConfigURL: URL { configDir.appendingPathComponent("config") }
+    /// Where a theme the reader imports or creates is *written*.
     var themesDirURL: URL { configDir.appendingPathComponent("themes", isDirectory: true) }
+
+    /// Every directory a theme may be *read* from, nearest first.
+    ///
+    /// A second build keeps its own configuration directory so it cannot write
+    /// over the reader's — see `defaultConfigDir` — and only two files are
+    /// copied across when it makes one. So its `themes` directory starts
+    /// empty, and a reader who opened Appearance in the debug build found
+    /// their own theme gone, along with the section it would have been in.
+    ///
+    /// Reading both is what makes a second build usable for looking at the
+    /// app. Writing stays where it was: a theme created here lands in this
+    /// build's directory, so nothing a debug build does can reach the
+    /// configuration the reader actually works in.
+    var themeSearchDirs: [URL] {
+        let shared = Self.sharedConfigDir().appendingPathComponent("themes", isDirectory: true)
+        guard shared != themesDirURL else { return [themesDirURL] }
+        return [themesDirURL, shared]
+    }
 
     /// Where user-installed file-icon themes live. Any SVG-based VS Code
     /// icon theme works: copy the extension's folder in, one directory per
@@ -198,10 +217,65 @@ final class GuiConfigStore: ObservableObject {
         return url.path
     }
 
+    /// Where **this build** reads and writes its configuration.
+    ///
+    /// The release build's answer is the one it has always given, and nothing
+    /// about it changes. Every other build — the debug one — gets a directory
+    /// of its own beside it, seeded once with a copy of the two files the
+    /// settings window writes, and diverges from there.
+    ///
+    /// Sharing was not a harmless duplicate. `gui-settings` and `config` are
+    /// watched by the running app: a debug build opened to try something out
+    /// wrote the release build's configuration underneath it, which the reader
+    /// then saw take effect in the app they were actually working in.
+    /// `PhantomStateFile` fixed the same fault for state a while ago, and left
+    /// this one — the state files are keyed by bundle id; this directory was
+    /// spelled `phantom` for everybody.
+    ///
+    /// Only the two files are copied. Themes, extensions and icon themes stay
+    /// where they are and are not duplicated: a theme is referenced from
+    /// `gui-settings` by absolute path, so the copy keeps pointing at the one
+    /// the reader installed, and a debug build with no icon themes of its own
+    /// falls back to the ones in the bundle. Copying a directory of somebody's
+    /// icon sets on launch to spare a debug build that fallback is the wrong
+    /// trade.
+    nonisolated private static func defaultConfigDir() -> URL {
+        let shared = sharedConfigDir()
+        guard let suffix = buildSuffix else { return shared }
+
+        let own = shared
+            .deletingLastPathComponent()
+            .appendingPathComponent("\(shared.lastPathComponent)-\(suffix)", isDirectory: true)
+
+        /// Copy once, never over anything, never a move — the reader's own
+        /// configuration has to survive whatever this build does next.
+        for name in [fileName, "config"] {
+            PhantomStateFile.migrate(
+                from: shared.appendingPathComponent(name),
+                to: own.appendingPathComponent(name))
+        }
+        return own
+    }
+
+    /// What marks this build's directory apart, or nil for the release build.
+    ///
+    /// `PhantomBuild` owns the rule — it is the same one that names the hook
+    /// scripts and, through `MCPServerCommand`, the socket and the agent entry.
+    /// Kept as a function here because the tests pin it at this name, and
+    /// because a caller reading a *directory* suffix should not have to know
+    /// which type spells the general case.
+    nonisolated static func buildSuffix(forBundleID id: String) -> String? {
+        PhantomBuild.variant(forBundleID: id)
+    }
+
+    nonisolated private static var buildSuffix: String? {
+        PhantomBuild.variant
+    }
+
     /// Phantom is a distinct app from Ghostty and keeps its own config
     /// directory so the two never collide on the same machine — even
     /// though Phantom reads XDG first on macOS same as Ghostty does.
-    nonisolated private static func defaultConfigDir() -> URL {
+    nonisolated static func sharedConfigDir() -> URL {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
 
@@ -252,8 +326,10 @@ final class GuiConfigStore: ObservableObject {
         guard let value = string("theme"), !value.isEmpty else { return nil }
         if value.hasPrefix("/") { return URL(fileURLWithPath: value) }
 
-        let user = themesDirURL.appendingPathComponent(value)
-        if FileManager.default.fileExists(atPath: user.path) { return user }
+        for dir in themeSearchDirs {
+            let user = dir.appendingPathComponent(value)
+            if FileManager.default.fileExists(atPath: user.path) { return user }
+        }
 
         return Bundle.main.resourceURL?
             .appendingPathComponent("ghostty", isDirectory: true)

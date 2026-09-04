@@ -126,6 +126,51 @@ struct HookScriptCaptureTests {
         AgentTabRecord(fileContents: try #require(fired.contents))
     }
 
+    // MARK: - A SessionStart in the middle of a compaction
+
+    /// The event that reports identity rather than activity is also the event
+    /// that fires halfway through a compaction, and blanking the mark there is
+    /// what left a three-minute operation looking like nothing was happening.
+    /// The script reads the `source` the payload carries and keeps the word.
+    @Test func aCompactionSessionStartHoldsTheCompactingMark() throws {
+        try withInstalledScripts { install in
+            let installed = try install(.claude)
+            let fired = try fire(
+                installed,
+                state: nil,
+                payload: """
+                    {"session_id":"\(real)","source":"compact",\
+                    "hook_event_name":"SessionStart","cwd":"/tmp"}
+                    """)
+            let parsed = try record(fired)
+            #expect(parsed.state == .compacting)
+            #expect(parsed.sessionID == real)
+            #expect(parsed.agent == .claude)
+            #expect(fired.standardError.isEmpty)
+        }
+    }
+
+    /// And every other source still reports identity without activity, which
+    /// is the whole reason `SessionStart` passes no word: a session that has
+    /// just begun must not spin an indicator.
+    @Test(arguments: ["startup", "resume", "clear"])
+    func anOrdinarySessionStartReportsNoActivity(_ source: String) throws {
+        try withInstalledScripts { install in
+            let installed = try install(.claude)
+            let fired = try fire(
+                installed,
+                state: nil,
+                payload: """
+                    {"session_id":"\(real)","source":"\(source)",\
+                    "hook_event_name":"SessionStart","cwd":"/tmp"}
+                    """)
+            let parsed = try record(fired)
+            #expect(parsed.state == nil)
+            #expect(parsed.sessionID == real)
+            #expect(fired.standardError.isEmpty)
+        }
+    }
+
     // MARK: - The id in the payload is not the only id in the payload
 
     /// A tool event carries the session's own id at the top level *and*

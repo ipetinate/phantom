@@ -35,12 +35,44 @@ final class GitStatusCenter: ObservableObject {
         let url: String
         let author: String?
 
+        /// Who the pull request was handed to, by login. Empty on a
+        /// repository nobody assigns anything in, which is most of them.
+        let assignees: [String]
+
         var id: Int { number }
+
+        /// Whether this pull request is the reader's: they opened it, or
+        /// somebody put their name on it.
+        ///
+        /// Assignment counts. A pull request assigned to you is one you are
+        /// expected to move, which is the same reason you look for the ones
+        /// you opened — and it is the half a "your pull request" badge on the
+        /// author alone never showed.
+        ///
+        /// Compared without case. GitHub logins are case-insensitive, and
+        /// `gh` prints the canonical spelling in one place and whatever was
+        /// typed in another.
+        func belongs(to login: String) -> Bool {
+            let wanted = login.lowercased()
+            if author?.lowercased() == wanted { return true }
+            return assignees.contains { $0.lowercased() == wanted }
+        }
     }
 
+    /// The signed-in `gh` user's login, once it is known.
+    ///
+    /// Published rather than read straight from the static below, because
+    /// reading that runs `gh api user` on whichever thread touches it first
+    /// — and a row body touching it froze the popover while it opened. Nil
+    /// until the answer lands, which the list treats as "no pull request is
+    /// mine yet" rather than guessing.
+    @Published private(set) var userLogin: String?
+
+    private var isLoadingUserLogin = false
+
     /// The signed-in `gh` user's login, fetched once and cached — compared
-    /// against each PR's author so the list can flag the viewer's own work
-    /// without a per-row lookup.
+    /// against each PR's author and assignees so the list can put the
+    /// viewer's own work first.
     nonisolated static let currentUserLogin: String? = {
         guard let gh = ghPath else { return nil }
         guard let output = run(gh, ["api", "user", "--jq", ".login"], timeout: 10)
@@ -103,6 +135,20 @@ final class GitStatusCenter: ObservableObject {
         }
     }
 
+    /// Asks `gh` who is signed in, off the main thread, once per launch.
+    func requestUserLogin() {
+        guard userLogin == nil, !isLoadingUserLogin else { return }
+        isLoadingUserLogin = true
+
+        Task.detached(priority: .utility) {
+            let login = Self.currentUserLogin
+            await MainActor.run { [weak self] in
+                self?.userLogin = login
+                self?.isLoadingUserLogin = false
+            }
+        }
+    }
+
     /// Fetches the repo's open PR list in the background; no-op while
     /// fresh or in flight. `repoPRLists` publishes when results land.
     func requestPRList(root: String) {
@@ -129,7 +175,7 @@ final class GitStatusCenter: ObservableObject {
         guard let gh = ghPath else { return nil }
         guard let output = run(
             gh,
-            ["pr", "list", "--json", "number,title,url,author", "--limit", "25"],
+            ["pr", "list", "--json", "number,title,url,author,assignees", "--limit", "25"],
             cwd: root,
             timeout: 15
         ) else { return nil }
@@ -144,7 +190,17 @@ final class GitStatusCenter: ObservableObject {
                   let url = entry["url"] as? String
             else { return nil }
             let author = (entry["author"] as? [String: Any])?["login"] as? String
-            return PullRequest(number: number, title: title, url: url, author: author)
+            let assignees = (entry["assignees"] as? [[String: Any]] ?? [])
+                .compactMap { $0["login"] as? String }
+            /// Rendered here rather than at the view, which is what the
+            /// review card already does — so the two cannot come to disagree
+            /// about whether `:rocket:` is a rocket.
+            return PullRequest(
+                number: number,
+                title: GitHubEmoji.render(title),
+                url: url,
+                author: author,
+                assignees: assignees)
         }
     }
 

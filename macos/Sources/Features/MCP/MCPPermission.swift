@@ -59,11 +59,26 @@ enum MCPPermission {
         /// would mean a reader who allowed one command allowed that too.
         case configure
 
+        /// Create, move, repair, unlock, prune or **remove** a git worktree.
+        ///
+        /// Its own capability rather than part of `configure`, and the reason
+        /// is what a removal does: it deletes a working directory, and forced,
+        /// it deletes one with uncommitted work inside. Folding it in would
+        /// mean a reader who allowed a language server's startup setting had
+        /// allowed that too.
+        ///
+        /// Not part of `run` either, though `git worktree` is a command a
+        /// terminal could type. A grant to type into *this* tab's shell is
+        /// about one shell the reader is watching; this reaches the
+        /// repository, and the app's own worktree pane, from anywhere.
+        case worktree
+
         var title: String {
             switch self {
             case .read: return "read this terminal"
             case .run: return "run commands in this terminal"
             case .configure: return "change how a language server starts"
+            case .worktree: return "create and remove git worktrees"
             }
         }
     }

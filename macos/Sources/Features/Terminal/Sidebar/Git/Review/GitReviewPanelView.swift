@@ -36,6 +36,7 @@ struct GitReviewPanelView: View {
 
     /// The branch a rebase has been asked about and not yet confirmed.
     @State private var rebaseTarget: String?
+    @State private var isChoosingTarget = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -207,7 +208,7 @@ struct GitReviewPanelView: View {
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
 
-            if !scope.isCommit { targetPicker }
+            if !scope.isCommit { targetPicker(current: context.target.ref) }
             if !scope.isCommit { integrateMenu(context) }
 
             Spacer(minLength: 0)
@@ -223,20 +224,26 @@ struct GitReviewPanelView: View {
     /// picker that reached for it on open would stall the panel for a list
     /// most readers will not change.
     @ViewBuilder
-    private var targetPicker: some View {
-        Menu {
-            Button("Refresh branches (fetch)") {
-                center.loadBranches(root: scope.root, fetching: true)
-            }
-            Divider()
-            ForEach(center.branches[scope.root] ?? [], id: \.self) { branch in
-                Button(branch) { center.choose(target: branch, root: scope.root) }
-            }
+    private func targetPicker(current: String) -> some View {
+        Button {
+            isChoosingTarget = true
         } label: {
             chip(icon: "arrow.left.arrow.right", text: "Compare against\u{2026}")
         }
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
         .fixedSize()
+        /// A popover rather than the menu this was, because the list is as
+        /// long as the repository's branch list and a menu cannot hold the
+        /// field that makes a long list usable. See `BranchPicker`.
+        .popover(isPresented: $isChoosingTarget, arrowEdge: .bottom) {
+            BranchPicker(
+                branches: center.branches[scope.root] ?? [],
+                current: current,
+                onRefresh: { center.loadBranches(root: scope.root, fetching: true) },
+                onPick: { center.choose(target: $0, root: scope.root) },
+                isPresented: $isChoosingTarget
+            )
+        }
         .onAppear {
             if center.branches[scope.root] == nil {
                 center.loadBranches(root: scope.root, fetching: false)

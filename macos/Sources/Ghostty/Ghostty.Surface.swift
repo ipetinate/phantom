@@ -107,6 +107,14 @@ extension Ghostty {
             return Int(exactly: pid)
         }
 
+        /// Whether the alternate screen is the active one, which is how a
+        /// full-screen program (an editor, a pager, a system monitor) is told
+        /// apart from a command that prints and exits.
+        @MainActor
+        var isAlternateScreen: Bool {
+            ghostty_surface_alternate_screen(surface)
+        }
+
         /// The PTY device name for this surface.
         @MainActor
         var ttyName: String? {

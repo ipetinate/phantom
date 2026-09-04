@@ -107,9 +107,15 @@ struct KimiPiHooksInstallerTests {
 
     // MARK: Pi — the extension it ships
 
+    /// The directory is Pi's and the name is this build's, and only the first
+    /// half can be written out here. A second build gives the file a variant
+    /// of its own — `phantom-debug.ts` — so a literal would pin one build's
+    /// spelling and fail in the other, which is what it did.
     @Test func theExtensionGoesWherePiLooksForIt() {
         let path = PiHooksInstaller.extensionURL.path
-        #expect(path.hasSuffix("/.pi/agent/extensions/phantom.ts"))
+        #expect(path.hasSuffix("/.pi/agent/extensions/\(PiHooksInstaller.extensionName)"))
+        #expect(PiHooksInstaller.extensionName.hasSuffix(".ts"))
+        #expect(PiHooksInstaller.extensionName.hasPrefix("phantom"))
     }
 
     @Test func itSubscribesToEveryEventItClaims() {

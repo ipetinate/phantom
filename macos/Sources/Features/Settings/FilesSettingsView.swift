@@ -35,6 +35,7 @@ struct FilesSettingsView: View {
     @AppStorage(EditorSettings.closesBracketsKey) private var closesBrackets = true
     @AppStorage(EditorSettings.closesQuotesKey) private var closesQuotes = true
     @AppStorage(EditorSettings.closesTagsKey) private var closesTags = true
+    @AppStorage(EditorSettings.expandsTagsKey) private var expandsTags = true
     @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
     @AppStorage(EditorSettings.usesPrettierKey) private var usesPrettier = true
     @AppStorage(EditorSettings.markdownSnippetsKey) private var markdownSnippets = true
@@ -165,15 +166,28 @@ struct FilesSettingsView: View {
                     .toggleStyle(.switch)
                 Toggle("Close Tags", isOn: $closesTags)
                     .toggleStyle(.switch)
+                Toggle("Open the Element for Typing", isOn: $expandsTags)
+                    .toggleStyle(.switch)
+                    /// Nothing left to decide once tags do not close: there
+                    /// is no closing tag to put on a line of its own.
+                    .disabled(!closesTags)
                 Toggle("Markdown Snippets on “/”", isOn: $markdownSnippets)
                     .toggleStyle(.switch)
             } header: {
                 Text("Typing")
             } footer: {
                 Text("""
-                Tags close in HTML, Vue and JSX. They deliberately do not in \
-                .ts, where a `<` is always a generic and closing it would \
-                always be wrong.
+                Tags close in HTML, XML, Vue and JSX. They deliberately do \
+                not in .ts, where a `<` is always a generic and closing it \
+                would always be wrong.
+
+                Opening the element for typing puts the closing tag on its \
+                own line and leaves the cursor indented between the two. It \
+                applies where the markup is the document — HTML, XML, and a \
+                single-file component's template — and never inside an \
+                expression, where it would move code you did not ask to \
+                move. A tag you close yourself, `<input />`, and a void \
+                element, `<br>`, are left exactly as typed.
 
                 In Markdown, typing `/` opens the snippet list — a bare slash \
                 lists everything. It stays shut inside fenced code, and after \
@@ -209,6 +223,12 @@ struct FilesSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            /// Directly under Formatting, because it is the rest of the same
+            /// answer: that section says what happens to the files Prettier
+            /// and the language servers handle, and this one says what happens
+            /// to the languages neither of them formats.
+            ExternalFormatterSettingsSection()
 
             /// Above Completion, and next to Formatting, because that is the
             /// order of the question: what does this editor do on its own,

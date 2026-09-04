@@ -4,7 +4,7 @@ import SwiftUI
 /// How a repository presents itself inside the Git panel.
 enum GitRepoStyle {
     /// The only repository there is. The panel is about it, so it fills the
-    /// pane and scrolls its own change list.
+    /// pane and scrolls everything below the commit box.
     case standalone
 
     /// One of several under a workspace folder, behind a disclosure row.
@@ -66,6 +66,7 @@ struct GitRepoView: View {
     @State private var isAmending = false
     @State private var discarding: [GitFileChange] = []
     @State private var isCreatingBranch = false
+    @State private var isSwitchingBranch = false
     @State private var isUndoingCommit = false
 
     private var status: GitStatus? { center.status(forRoot: root) }
@@ -81,12 +82,45 @@ struct GitRepoView: View {
         VStack(spacing: 0) {
             switch style {
             case .standalone:
-                header
+                header.popover(isPresented: $isSwitchingBranch, arrowEdge: .bottom) {
+                    branchSwitcher
+                }
                 commitBox
-                changeList
+
+                /// One scroll view, around everything that can grow.
+                ///
+                /// It used to sit inside `workingTreeState`, around the
+                /// changed files alone — so the branch review above them was
+                /// a rigid sibling in this stack, and a review of 64 commits
+                /// and 449 files made the panel taller than the pane. Nothing
+                /// clipped it: the pane is centred in the sidebar, so the
+                /// overflow split between the two ends and the top of the
+                /// list was drawn over the pane switcher and under the
+                /// window's traffic lights.
+                ///
+                /// The `GeometryReader` is what keeps the clean-tree
+                /// placeholder centred in the pane. Inside a scroll view the
+                /// proposed height is unbounded, so `maxHeight: .infinity`
+                /// means nothing there; given the viewport's own height as a
+                /// floor, the content is exactly as tall as the pane when
+                /// there is little of it, and taller when there is more.
+                GeometryReader { viewport in
+                    ScrollView {
+                        changeList
+                            .frame(minHeight: viewport.size.height, alignment: .top)
+                            .background(alignment: .top) { OverlayScrollers() }
+                    }
+                    /// Automatic, matching the file tree: the bar appears
+                    /// while scrolling and fades, which is the only clue the
+                    /// reader gets that there is more list below.
+                    .scrollIndicators(.automatic)
+                }
 
             case .section(let name, let isExpanded, let onToggle):
                 sectionHeader(name: name, isExpanded: isExpanded, onToggle: onToggle)
+                    .popover(isPresented: $isSwitchingBranch, arrowEdge: .bottom) {
+                        branchSwitcher
+                    }
                 if isExpanded {
                     commitBox
                     changeList
@@ -279,51 +313,83 @@ struct GitRepoView: View {
         }
     }
 
+    /// The switcher, shared by the two header styles: one repository's
+    /// branches, filtered by what the reader types.
+    private var branchSwitcher: some View {
+        BranchPicker(
+            branches: center.branches[root] ?? [],
+            current: status?.branch,
+            onRefresh: { center.fetch(in: root) },
+            onPick: { center.checkout(branch: $0, in: root) },
+            isPresented: $isSwitchingBranch
+        )
+    }
+
+    /// The repository's menu.
+    ///
+    /// Push and Pull take the arrows their own count badges already wear, so
+    /// the item and the badge a reader clicked past say the same thing. The
+    /// rest is the sidebar's shared vocabulary: `arrow.uturn.backward` for
+    /// undoing and `pencil` for editing, and `trash` nowhere here because
+    /// nothing in this menu removes a file.
     @ViewBuilder
     private var menuContents: some View {
         if let status {
             if status.hasUpstream {
-                Button("Push") { center.push(in: root) }
-                Button("Pull") { center.pull(in: root) }
+                Button { center.push(in: root) } label: {
+                    Label("Push", systemImage: "arrow.up")
+                }
+                Button { center.pull(in: root) } label: {
+                    Label("Pull", systemImage: "arrow.down")
+                }
             } else if let branch = status.branch, !status.isDetached {
-                Button("Publish Branch") { center.publish(branch: branch, in: root) }
-            }
-            Button("Fetch") { center.fetch(in: root) }
-
-            Divider()
-
-            Menu("Switch Branch") {
-                ForEach(center.branches[root] ?? [], id: \.self) { branch in
-                    Button {
-                        center.checkout(branch: branch, in: root)
-                    } label: {
-                        if branch == status.branch {
-                            Label(branch, systemImage: "checkmark")
-                        } else {
-                            Text(branch)
-                        }
-                    }
+                Button { center.publish(branch: branch, in: root) } label: {
+                    Label("Publish Branch", systemImage: "arrow.up.circle")
                 }
             }
-            Button("Create Branch…") { isCreatingBranch = true }
+            Button { center.fetch(in: root) } label: {
+                Label("Fetch", systemImage: "arrow.down.circle")
+            }
 
             Divider()
 
-            Button("Undo Last Commit…") { isUndoingCommit = true }
+            /// A popover rather than the submenu this was: the list is the
+            /// repository's whole branch list, and a menu cannot hold the
+            /// field that makes a long one usable. See `BranchPicker`.
+            Button { isSwitchingBranch = true } label: {
+                Label("Switch Branch\u{2026}", systemImage: "arrow.triangle.branch")
+            }
+            Button { isCreatingBranch = true } label: {
+                Label("Create Branch…", systemImage: "plus")
+            }
 
             Divider()
 
-            Button("Stash Changes") { center.stashPush(message: nil, in: root) }
-                .disabled(status.isClean)
-            Button("Pop Stash") { center.stashPop(in: root) }
-                .disabled((center.stashes[root] ?? []).isEmpty)
+            Button { isUndoingCommit = true } label: {
+                Label("Undo Last Commit…", systemImage: "arrow.uturn.backward")
+            }
 
             Divider()
 
-            Toggle("Amend Last Commit", isOn: $isAmending)
+            Button { center.stashPush(message: nil, in: root) } label: {
+                Label("Stash Changes", systemImage: "tray.and.arrow.down")
+            }
+            .disabled(status.isClean)
+            Button { center.stashPop(in: root) } label: {
+                Label("Pop Stash", systemImage: "tray.and.arrow.up")
+            }
+            .disabled((center.stashes[root] ?? []).isEmpty)
+
+            Divider()
+
+            Toggle(isOn: $isAmending) {
+                Label("Amend Last Commit", systemImage: "pencil")
+            }
         }
 
-        Button("Refresh") { center.requestStatus(root: root, force: true) }
+        Button { center.requestStatus(root: root, force: true) } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
+        }
     }
 
     // MARK: Commit
@@ -468,12 +534,7 @@ struct GitRepoView: View {
             }
         case .changes:
             if let status {
-                if isSection {
-                    changeRows(status)
-                } else {
-                    ScrollView { changeRows(status) }
-                        .scrollIndicators(.hidden)
-                }
+                changeRows(status)
             }
         }
     }

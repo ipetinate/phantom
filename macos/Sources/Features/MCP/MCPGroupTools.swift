@@ -435,8 +435,11 @@ enum MCPGroupTools {
                     + "make this one."))
             }
 
-            let name = store.tabOverrides[surfaceID]?.name ?? tab.title
-            let label = name.isEmpty ? surfaceID.uuidString : name
+            let label = TerminalDisplayName.resolve(
+                custom: store.tabOverrides[surfaceID]?.name,
+                terminalTitle: tab.title,
+                fallback: surfaceID.uuidString
+            )
 
             /// Asked of the store rather than of the assignments, because a
             /// project group claims a terminal by its working directory and

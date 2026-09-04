@@ -667,6 +667,9 @@ extension Ghostty {
             case GHOSTTY_ACTION_COMMAND_FINISHED:
                 commandFinished(app, target: target, v: action.action.command_finished)
 
+            case GHOSTTY_ACTION_COMMAND_STARTED:
+                commandStarted(app, target: target)
+
             case GHOSTTY_ACTION_PRESENT_TERMINAL:
                 return presentTerminal(app, target: target)
 
@@ -1524,6 +1527,41 @@ extension Ghostty {
             }
         }
 
+        /// The paired half of `commandFinished`: OSC 133 said a command
+        /// started.
+        ///
+        /// Only relayed, never gated. There is no setting about a command
+        /// *starting* — the notification settings are about the finish — and
+        /// a reader who turned notifications off still wants the sidebar to
+        /// say that a tab is busy.
+        private static func commandStarted(
+            _ app: ghostty_app_t,
+            target: ghostty_target_s
+        ) {
+            switch target.tag {
+            case GHOSTTY_TARGET_APP:
+                Ghostty.logger.warning("command started does nothing with an app target")
+                return
+
+            case GHOSTTY_TARGET_SURFACE:
+                guard let surface = target.target.surface else { return }
+                guard let surfaceView = self.surfaceView(from: surface) else { return }
+                NotificationCenter.default.post(
+                    name: .ghosttyCommandDidStart,
+                    object: surfaceView
+                )
+
+            default:
+                assertionFailure()
+            }
+        }
+
+        /// Relays the finish, then answers the notification settings.
+        ///
+        /// The relay comes first on purpose. Those settings decide whether a
+        /// desktop *notification* is delivered, and a row that draws a running
+        /// command has to see every command that ends — so the two must not
+        /// share a gate.
         private static func commandFinished(
             _ app: ghostty_app_t,
             target: ghostty_target_s,
@@ -1537,6 +1575,18 @@ extension Ghostty {
             case GHOSTTY_TARGET_SURFACE:
                 guard let surface = target.target.surface else { return }
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
+
+                var info: [AnyHashable: Any] = [
+                    Foundation.Notification.Name.CommandDurationKey: v.duration,
+                ]
+                if v.exit_code >= 0 {
+                    info[Foundation.Notification.Name.CommandExitCodeKey] = Int(v.exit_code)
+                }
+                NotificationCenter.default.post(
+                    name: .ghosttyCommandDidFinish,
+                    object: surfaceView,
+                    userInfo: info
+                )
 
                 // Determine if we even care about command finish notifications
                 guard let config = (NSApplication.shared.delegate as? AppDelegate)?.ghostty.config else { return }

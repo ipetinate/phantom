@@ -111,7 +111,7 @@ struct GitDiffView<Accessory: View>: View {
             accessoryTrailingInset: ThinScroller.trackWidth
         ) {
             GitDiffPane(
-                rows: document.rows,
+                document: document,
                 side: .left,
                 theme: theme,
                 palette: palette,
@@ -122,7 +122,7 @@ struct GitDiffView<Accessory: View>: View {
             )
         } second: {
             GitDiffPane(
-                rows: document.rows,
+                document: document,
                 side: .right,
                 theme: theme,
                 palette: palette,

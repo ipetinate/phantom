@@ -10,8 +10,16 @@ import Foundation
 /// ghostty-named script) are migrated on install.
 @MainActor
 enum ClaudeHooksInstaller {
-    static let scriptName = "phantom-tab-state.sh"
-    static let legacyScriptName = "ghostty-tab-state.sh"
+    static let scriptName = PhantomBuild.fileName("phantom-tab-state.sh")
+    /// The name this app wrote before the fork was renamed, matched so an
+    /// upgrade's leftover registration can be recognised and removed.
+    ///
+    /// Empty for anything but the release build. Only the release build ever
+    /// wrote it, and a debug build that matched on it would be reaching into
+    /// the other build's history to clean up after it.
+    static var legacyScriptName: String {
+        PhantomBuild.isRelease ? "ghostty-tab-state.sh" : ""
+    }
 
     static var claudeDir: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -78,11 +86,21 @@ enum ClaudeHooksInstaller {
     /// where the agent is working and about to carry on. The alternative was to
     /// have `SessionStart` preserve whatever state word it found, and that is
     /// worse: a stale `working` carried across a `/clear` is wrong in a way
-    /// nothing later corrects, where a blink during a compaction heals on the
-    /// next tool event. Reporting `working` when compaction finishes removes
-    /// even the blink, without teaching the start event to lie.
+    /// nothing later corrects. Reporting `working` when compaction finishes
+    /// bounds the damage without teaching the start event to lie.
+    ///
+    /// `PreCompact` is the other half, and it is the half the reader sees. An
+    /// automatic compaction begins with the API refusing an oversized turn,
+    /// which Claude Code reports through `StopFailure` — so the tab turns red
+    /// and then compacts for minutes behind that red triangle. `PreCompact`
+    /// replaces it with `compacting` at the moment the work starts, and the
+    /// script keeps that word across the `SessionStart` in the middle by
+    /// reading the `source` the payload carries. Between them the mark says
+    /// "busy" for the whole operation, which no pair of events registered here
+    /// could say on its own.
     static let eventStates: [(event: String, state: String)] = [
         ("SessionStart", ""),
+        ("PreCompact", "compacting"),
         ("PostCompact", "working"),
         ("UserPromptSubmit", "working"),
         ("PreToolUse", "working"),
@@ -133,6 +151,23 @@ enum ClaudeHooksInstaller {
     PAYLOAD=""
     if [ ! -t 0 ]; then
       PAYLOAD=$(cat 2>/dev/null)
+    fi
+
+    # A SessionStart fired by a compaction is not a session starting: the agent
+    # is mid-turn and about to carry on. Blanking the mark there is what left a
+    # three-minute compaction looking like nothing at all — or, until the next
+    # event, like the API error that triggered it.
+    #
+    # Only consulted for the event that passes no word of its own, so no other
+    # payload's "source" can reach this. `startup`, `resume` and `clear` all
+    # fall through to the empty word they had.
+    if [ -z "$STATE" ]; then
+      case "$(printf '%s' "$PAYLOAD" | tr -d '\n' \
+        | grep -o '"source"[[:space:]]*:[[:space:]]*"[^"]*"' \
+        | head -n 1 \
+        | sed 's/.*"\([^"]*\)"$/\1/')" in
+        compact) STATE="compacting" ;;
+      esac
     fi
 
     # Refuse anything a shell would read as more than one word, and anything
@@ -377,7 +412,8 @@ enum ClaudeHooksInstaller {
 
             entries.removeAll { entry in
                 commandsIn(entry).contains {
-                    $0.contains(scriptName) || $0.contains(legacyScriptName)
+                    $0.contains(scriptName)
+                        || (!legacyScriptName.isEmpty && $0.contains(legacyScriptName))
                 }
             }
 
@@ -420,7 +456,8 @@ enum ClaudeHooksInstaller {
                 guard var entries = value as? [[String: Any]] else { continue }
                 entries.removeAll { entry in
                     commandsIn(entry).contains {
-                        $0.contains(scriptName) || $0.contains(legacyScriptName)
+                        $0.contains(scriptName)
+                        || (!legacyScriptName.isEmpty && $0.contains(legacyScriptName))
                     }
                 }
                 hooks[event] = entries

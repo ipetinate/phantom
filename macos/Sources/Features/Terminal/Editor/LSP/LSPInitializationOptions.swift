@@ -18,6 +18,16 @@ enum LSPInitializationOptionsKind: Hashable, Sendable {
     /// error.
     case vueTypeScriptSDK
 
+    /// The formatter the `vscode-langservers-extracted` servers keep switched
+    /// off until a client asks for it.
+    ///
+    /// JSON, HTML and CSS all ship a formatter and all answer `initialize`
+    /// with `documentFormattingProvider: false` without this — measured, by
+    /// starting each of the three and reading the capability back. VS Code
+    /// sends it because its own settings hold `json.format.enable`; a client
+    /// that sends nothing gets a server that can format and says it cannot.
+    case provideFormatter
+
     /// `typescript-language-server` serving the `<script>` half of a `.vue`.
     ///
     /// Two options, and neither is optional. `tsserver.path` is required or
@@ -32,6 +42,10 @@ enum LSPInitializationOptionsKind: Hashable, Sendable {
 }
 
 enum LSPInitializationOptions {
+    /// What turns the formatter on in the three `vscode-langservers-extracted`
+    /// servers. One flag, spelled once, because the three read the same name.
+    static let provideFormatterValue: LSPValue = ["provideFormatter": .bool(true)]
+
     /// The concrete alternative to the silence this whole feature exists to
     /// replace: shown when neither a project-local nor a global TypeScript
     /// can be found.

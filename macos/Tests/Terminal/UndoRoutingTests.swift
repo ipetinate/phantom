@@ -121,4 +121,61 @@ struct UndoRoutingTests {
             responderCanAct: textView.undoManager?.canUndo ?? false,
             appCanAct: true) == .application)
     }
+
+    // MARK: The terminal behind an empty stack
+
+    /// The case the reader reported twice: ⌘Z inside an agent. Nothing in this
+    /// app has anything to undo, and the program they are typing into does —
+    /// `ctrl+_` is undo in readline, in zsh's ZLE and in Claude Code.
+    @Test func anEmptyStackHandsUndoToTheTerminal() {
+        #expect(
+            UndoRouting.target(
+                responderCanAct: false,
+                appCanAct: false,
+                terminalCanReceive: true
+            ) == .terminal)
+    }
+
+    /// Last, never first. A closed tab is still reopened by ⌘Z, and an editor
+    /// with edits to take back still gets its own — forwarding is what happens
+    /// when neither of those is true, not a way to jump the queue.
+    @Test func aStackThatCanActKeepsTheKey() {
+        #expect(
+            UndoRouting.target(
+                responderCanAct: true,
+                appCanAct: false,
+                terminalCanReceive: true
+            ) == .firstResponder)
+        #expect(
+            UndoRouting.target(
+                responderCanAct: false,
+                appCanAct: true,
+                terminalCanReceive: true
+            ) == .application)
+    }
+
+    /// With no terminal focused — the code editor in front, or no window at
+    /// all — an empty stack is still an empty stack, and the menu item is
+    /// still disabled.
+    @Test func withNoTerminalThereIsStillNothingToUndo() {
+        #expect(
+            UndoRouting.target(
+                responderCanAct: false,
+                appCanAct: false,
+                terminalCanReceive: false
+            ) == .neither)
+    }
+
+    /// Redo never forwards, so it never passes the flag: a terminal's redo is
+    /// `ctrl+shift+-`, a key event rather than a byte.
+    @Test func theFlagDefaultsToNotForwarding() {
+        #expect(UndoRouting.target(responderCanAct: false, appCanAct: false) == .neither)
+    }
+
+    /// The byte itself, pinned. `ctrl+_` is 0x1F, and it is the contract with
+    /// every program on the other side of the pty.
+    @Test func theForwardedUndoIsTheUnitSeparator() {
+        #expect(UndoRouting.terminalUndo == "\u{1f}")
+        #expect(Array(UndoRouting.terminalUndo.utf8) == [0x1f])
+    }
 }

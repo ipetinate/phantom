@@ -22,7 +22,12 @@ struct GitReviewFileDiff: View {
     @ObservedObject var model: SplitPaneModel
 
     var body: some View {
-        SplitPaneContainer(
+        /// One palette for both panes, the way the editor's own diff already
+        /// does it: it is derived from the theme, and deriving it twice per
+        /// render was two of everything for two panes that must agree anyway.
+        let palette = GitDiffPalette.make(from: theme)
+
+        return SplitPaneContainer(
             model: model,
             /// No direction toggle inside a card: the card's own height is
             /// bounded, so the choice a reader would make there is about a
@@ -31,20 +36,20 @@ struct GitReviewFileDiff: View {
             accessoryTrailingInset: ThinScroller.trackWidth
         ) {
             GitDiffPane(
-                rows: document.rows,
+                document: document,
                 side: .left,
                 theme: theme,
-                palette: GitDiffPalette.make(from: theme),
+                palette: palette,
                 font: font,
                 scrollSync: model.scrollSync,
                 syncSide: .first
             )
         } second: {
             GitDiffPane(
-                rows: document.rows,
+                document: document,
                 side: .right,
                 theme: theme,
-                palette: GitDiffPalette.make(from: theme),
+                palette: palette,
                 font: font,
                 scrollSync: model.scrollSync,
                 syncSide: .second

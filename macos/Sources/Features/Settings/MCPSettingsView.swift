@@ -21,6 +21,7 @@ enum MCPGrantPhrase {
         /// this list is read months later: "Configure" alone would leave the
         /// reader guessing what they once allowed to be configured.
         case .configure: return "Change language server startup"
+        case .worktree: return "Create and remove git worktrees"
         }
     }
 
@@ -60,17 +61,21 @@ enum MCPGrantNaming {
     /// the same reason — a surface belongs to exactly one window and there is
     /// no app-wide index of them.
     static func tab(_ surface: UUID) -> String? {
-        if let named = SidebarGroupStore.shared.tabOverrides[surface]?.name,
-           !named.isEmpty {
-            return named
-        }
+        TerminalDisplayName.name(
+            custom: SidebarGroupStore.shared.tabOverrides[surface]?.name,
+            terminalTitle: title(of: surface)
+        )
+    }
 
+    /// The title the tab is showing, or nil when no open window holds the
+    /// surface any more — a grant outlives the terminal it was given for.
+    private static func title(of surface: UUID) -> String? {
         for window in NSApp.windows {
             guard let controller = window.windowController as? TerminalController,
                   let model = controller.sidebarTabManager?.models
                       .first(where: { $0.surfaceId == surface })
             else { continue }
-            return model.title.isEmpty ? nil : model.title
+            return model.title
         }
 
         return nil

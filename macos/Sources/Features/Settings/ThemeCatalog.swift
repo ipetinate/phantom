@@ -35,10 +35,13 @@ final class ThemeCatalog: ObservableObject {
     @Published private(set) var themes: [TerminalTheme] = []
     @Published private(set) var isLoading = false
 
-    private let userThemesDir: URL
+    private let userThemesDirs: [URL]
 
-    init(userThemesDir: URL) {
-        self.userThemesDir = userThemesDir
+    /// - Parameter userThemesDirs: nearest first. A second build reads its own
+    ///   directory and then the reader's, because its own starts empty — see
+    ///   `GuiConfigStore.themeSearchDirs`.
+    init(userThemesDirs: [URL]) {
+        self.userThemesDirs = userThemesDirs
     }
 
     private static var builtinThemesDir: URL? {
@@ -55,7 +58,7 @@ final class ThemeCatalog: ObservableObject {
     func reload() {
         isLoading = true
         let builtinDir = Self.builtinThemesDir
-        let userDir = userThemesDir
+        let userDirs = userThemesDirs
 
         Task.detached(priority: .userInitiated) {
             var result: [TerminalTheme] = []
@@ -63,7 +66,15 @@ final class ThemeCatalog: ObservableObject {
             if let builtinDir {
                 result += Self.scan(dir: builtinDir, source: .builtin)
             }
-            result += Self.scan(dir: userDir, source: .user)
+            /// Nearest first, and one name wins once: a build that has its
+            /// own copy of a theme shows that one, not both.
+            var seen = Set<String>()
+            for dir in userDirs {
+                for theme in Self.scan(dir: dir, source: .user)
+                where seen.insert(theme.name).inserted {
+                    result.append(theme)
+                }
+            }
 
             result.sort {
                 ($0.source == .user ? 0 : 1, $0.name.lowercased())

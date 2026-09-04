@@ -82,13 +82,13 @@ struct SyntaxHighlighter {
     /// language it actually holds, and the frame around them by the
     /// container's own rules.
     ///
-    /// Those own rules are the difference between the two containers, and it
-    /// falls out of the rule tables rather than being decided here. An SFC's
-    /// frame is `<template>`/`<script>`/`<style>` and nothing else, and `.vue`
-    /// has no rules of its own, so the frame comes back empty — which is
-    /// exactly what it did before there was a frame at all. An HTML
-    /// document's frame is the document, and `.html` has a full rule set, so
-    /// the markup keeps colouring as it always has.
+    /// What the frame *is* differs between the two containers, and that is
+    /// decided here rather than by the rule tables. An SFC's frame is
+    /// `<template>`/`<script>`/`<style>` and nothing else, so it is lexed as
+    /// those tags — see ``SFCBlockTag``, and why the markup rules are the
+    /// wrong tool for it. An HTML document's frame is the document, and
+    /// `.html` has a full rule set, so the markup keeps colouring as it
+    /// always has.
     private func tokens(
         in text: String,
         range: NSRange,
@@ -108,9 +108,10 @@ struct SyntaxHighlighter {
             guard clipped.length > 0, NSMaxRange(clipped) > start else { continue }
 
             if start > cursor {
-                tokens += ownTokens(
+                tokens += frameTokens(
                     in: text,
-                    range: NSRange(location: cursor, length: start - cursor)
+                    range: NSRange(location: cursor, length: start - cursor),
+                    of: container
                 )
             }
 
@@ -121,13 +122,26 @@ struct SyntaxHighlighter {
         }
 
         if cursor < NSMaxRange(range) {
-            tokens += ownTokens(
+            tokens += frameTokens(
                 in: text,
-                range: NSRange(location: cursor, length: NSMaxRange(range) - cursor)
+                range: NSRange(location: cursor, length: NSMaxRange(range) - cursor),
+                of: container
             )
         }
 
         return tokens
+    }
+
+    /// The text around a container's blocks.
+    private func frameTokens(
+        in text: String,
+        range: NSRange,
+        of container: SFCRegions.Container
+    ) -> [Token] {
+        switch container {
+        case .markup: return ownTokens(in: text, range: range)
+        case .singleFileComponent: return SFCBlockTag.tokens(in: text, range: range)
+        }
     }
 
     private func ownTokens(in text: String, range: NSRange) -> [Token] {

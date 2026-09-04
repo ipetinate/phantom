@@ -6987,6 +6987,31 @@ pub const Keybinds = struct {
 
         // Mac-specific keyboard bindings.
         if (comptime builtin.target.os.tag.isDarwin()) {
+            // Phantom ships this binding; upstream ships none.
+            //
+            // Option+Delete deletes the word to the left in every other macOS
+            // text field, and in a terminal it only does so if the shell is
+            // handed `ESC DEL` — which needs Option to be Alt. Whether it is
+            // depends on `macos-option-as-alt`, whose default depends in turn
+            // on the *keyboard layout*: true for U.S. Standard and U.S.
+            // International, false for every other layout. So on a Brazilian
+            // or German keyboard the shortcut every other app has silently
+            // does nothing, and the fix — turning Option into Alt — costs the
+            // reader every Option-composed character they type.
+            //
+            // A binding is the way out of that trade. It is matched on the key
+            // event, before any text is composed, so it works whatever
+            // `macos-option-as-alt` is set to and takes no accented character
+            // away from anybody.
+            //
+            // `esc:\x7f` and not `text:`, because ESC-prefixed is exactly what
+            // readline, zsh's ZLE and every other line editor read as
+            // `backward-kill-word`.
+            try self.set.put(
+                alloc,
+                .{ .key = .{ .physical = .backspace }, .mods = .{ .alt = true } },
+                .{ .esc = "\x7f" },
+            );
             try self.set.put(
                 alloc,
                 .{ .key = .{ .unicode = 'q' }, .mods = .{ .super = true } },
@@ -7005,23 +7030,33 @@ pub const Keybinds = struct {
             );
 
             // Undo/redo
-            try self.set.putFlags(
+            //
+            // Not performable, and that is a deliberate divergence: upstream
+            // marks all three so that a binding whose action cannot be
+            // performed "acts as if it doesn't exist" — which means the key is
+            // encoded and sent on. An undo stack is empty most of the time, so
+            // what that produced was a shortcut that typed a letter: cmd+z put
+            // `z` into whatever was reading input, cmd+shift+z put `Z`, and
+            // cmd+shift+t put `T`. Usually that reader was an agent's prompt.
+            //
+            // The flag is right for a shortcut a terminal program might want
+            // for itself. It is wrong for these three, because no macOS app
+            // answers cmd+z with a character, and a reader who presses it with
+            // nothing to undo means "undo" — not "type z".
+            try self.set.put(
                 alloc,
                 .{ .key = .{ .unicode = 't' }, .mods = .{ .super = true, .shift = true } },
                 .{ .undo = {} },
-                .{ .performable = true },
             );
-            try self.set.putFlags(
+            try self.set.put(
                 alloc,
                 .{ .key = .{ .unicode = 'z' }, .mods = .{ .super = true } },
                 .{ .undo = {} },
-                .{ .performable = true },
             );
-            try self.set.putFlags(
+            try self.set.put(
                 alloc,
                 .{ .key = .{ .unicode = 'z' }, .mods = .{ .super = true, .shift = true } },
                 .{ .redo = {} },
-                .{ .performable = true },
             );
 
             // Viewport scrolling
@@ -10915,6 +10950,70 @@ test "theme specifying light/dark sets theme usage in conditional state" {
 
         try testing.expect(cfg.@"window-theme" == .system);
         try testing.expect(cfg._conditional_set.contains(.theme));
+    }
+}
+
+test "undo and redo never type a character" {
+    if (comptime !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+
+    // A performable binding is encoded and sent on when its action cannot be
+    // performed, and an undo stack is empty most of the time — so the flag is
+    // what turned cmd+z into a way of typing `z` at an agent's prompt.
+    const Trigger = inputpkg.Binding.Trigger;
+    const Action = inputpkg.Binding.Action;
+    const cases = .{
+        .{ Trigger{ .key = .{ .unicode = 'z' }, .mods = .{ .super = true } }, Action.undo },
+        .{
+            Trigger{ .key = .{ .unicode = 'z' }, .mods = .{ .super = true, .shift = true } },
+            Action.redo,
+        },
+        .{
+            Trigger{ .key = .{ .unicode = 't' }, .mods = .{ .super = true, .shift = true } },
+            Action.undo,
+        },
+    };
+
+    inline for (cases) |case| {
+        const entry = cfg.keybind.set.get(case[0]) orelse return error.TestUnexpectedResult;
+        switch (entry.value_ptr.*) {
+            .leaf => |leaf| {
+                try testing.expectEqual(case[1], leaf.action);
+                try testing.expect(!leaf.flags.performable);
+            },
+            else => return error.TestUnexpectedResult,
+        }
+    }
+}
+
+test "option+delete kills the word to the left on macOS" {
+    if (comptime !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+
+    const entry = cfg.keybind.set.get(.{
+        .key = .{ .physical = .backspace },
+        .mods = .{ .alt = true },
+    }) orelse return error.TestUnexpectedResult;
+
+    // `ESC DEL`, which is what readline and zsh's ZLE read as
+    // `backward-kill-word`. Pinned as bytes rather than as a name because the
+    // bytes are the contract: the shell never sees the binding.
+    switch (entry.value_ptr.*) {
+        .leaf => |leaf| switch (leaf.action) {
+            .esc => |data| try testing.expectEqualStrings("\x7f", data),
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
     }
 }
 

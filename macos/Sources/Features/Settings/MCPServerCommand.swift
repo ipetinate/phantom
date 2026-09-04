@@ -65,5 +65,18 @@ enum MCPServerCommand {
     /// program and its arguments apart, which is what keeps a bundle living in
     /// a directory with a space in its name out of the quoting business
     /// entirely.
-    static let arguments: [String] = [action]
+    ///
+    /// **The socket is named here, and that is not belt and braces.** The
+    /// client resolves it from `PHANTOM_MCP_SOCKET`, which every Phantom
+    /// exports into the terminals it opens — so an agent started from a
+    /// release terminal reaches the release app *whichever binary the entry
+    /// names*. The entry called `phantom-debug`, pointing at the debug build's
+    /// own executable, then answers for the release build's windows: it opens
+    /// files in them, lists their terminals, and nothing anywhere says so.
+    ///
+    /// Measured, not theorised — it is how a debug build under test came to be
+    /// opening files in the reader's working app. The name, the binary and the
+    /// socket all have to agree, and this is the one of the three that was
+    /// left to the environment.
+    static var arguments: [String] { [action, "--socket=\(MCPSocketPath.current.path)"] }
 }

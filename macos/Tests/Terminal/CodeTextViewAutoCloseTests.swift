@@ -2,7 +2,16 @@ import AppKit
 @testable import Ghostty
 import Testing
 
-/// Auto-closing brackets and quotes as they are typed.
+/// Auto-closing brackets, quotes and tags as they are typed.
+///
+/// On the main actor and serialized, like `CodeTextViewReplaceTests`: every
+/// case here drives a real `NSTextView`, and `setSelectedRange` reaches
+/// AppKit's shared cursor controller, which builds an `NSWindow` and raises
+/// off the main thread. Run inside the whole suite the class passed anyway —
+/// something else had already built that controller on the main thread — so
+/// the isolation this states is what makes the class runnable on its own.
+@MainActor
+@Suite(.serialized)
 struct CodeTextViewAutoCloseTests {
     private func textView(_ contents: String, caretAt location: Int) -> CodeNSTextView {
         let textView = CodeNSTextView()
@@ -137,11 +146,12 @@ struct CodeTextViewAutoCloseTests {
     /// The switches default to on, which is what every editor this one is
     /// measured against does. A default that has to be discovered is a
     /// feature nobody finds.
-    @Test func allThreeSwitchesStartOn() {
+    @Test func everySwitchStartsOn() {
         let view = CodeNSTextView()
         #expect(view.closesBrackets)
         #expect(view.closesQuotes)
         #expect(view.closesTags)
+        #expect(view.expandsTags)
     }
 
     // MARK: Tags, through the real typing path
@@ -156,13 +166,80 @@ struct CodeTextViewAutoCloseTests {
         }
     }
 
-    @Test func typingATagCloseInsertsTheClosingTagAndStaysBetweenThem() {
+    @Test func typingATagCloseOpensTheElementForTyping() {
         let view = textView("", caretAt: 0)
         view.tagDialect = .html
         type("<div>", into: view)
 
-        #expect(view.string == "<div></div>")
-        #expect(view.selectedRange() == NSRange(location: 5, length: 0))
+        #expect(view.string == "<div>\n    \n</div>")
+        #expect(view.selectedRange() == NSRange(location: 10, length: 0))
+    }
+
+    /// The closing tag goes back to the opening tag's own column, and the
+    /// caret one level in from it.
+    @Test func theExpansionFollowsTheOpeningTagsIndentation() {
+        let view = textView("  ", caretAt: 2)
+        view.tagDialect = .html
+        type("<ul>", into: view)
+
+        #expect(view.string == "  <ul>\n      \n  </ul>")
+        #expect(view.selectedRange() == NSRange(location: 13, length: 0))
+    }
+
+    /// XML gets the same treatment, and gets it for the names HTML calls
+    /// void — there is no void element set in XML.
+    @Test func xmlExpandsTheNamesHTMLWouldRefuse() {
+        let view = textView("", caretAt: 0)
+        view.tagDialect = .xml
+        type("<link>", into: view)
+
+        #expect(view.string == "<link>\n    \n</link>")
+    }
+
+    /// A single-file component's template is markup, so it expands. Its
+    /// `<script>` block is not, and closes nothing at all.
+    @Test func anSFCTemplateExpandsAndItsScriptBlockDoesNot() {
+        let template = textView("<template>\n  ", caretAt: 13)
+        template.tagDialect = .sfc
+        type("<div>", into: template)
+        #expect(template.string == "<template>\n  <div>\n      \n  </div>")
+
+        let script = textView("<script setup>\nmount(", caretAt: 21)
+        script.tagDialect = .sfc
+        type("<div>", into: script)
+        #expect(script.string == "<script setup>\nmount(<div>")
+    }
+
+    /// In JSX an element is usually one term of an expression, and pushing
+    /// two newlines into the middle of a `return` line would move code the
+    /// reader did not ask to move. The closing tag still arrives.
+    @Test func jsxClosesFlatWithoutExpanding() {
+        let view = textView("return ", caretAt: 7)
+        view.tagDialect = .jsx
+        type("<div>", into: view)
+
+        #expect(view.string == "return <div></div>")
+        #expect(view.selectedRange() == NSRange(location: 12, length: 0))
+    }
+
+    /// A tag the reader closed themselves is left exactly as typed — there
+    /// is no element open to write inside.
+    @Test func aSelfClosedTagIsLeftAsTyped() {
+        let view = textView("", caretAt: 0)
+        view.tagDialect = .html
+        type("<input />", into: view)
+        #expect(view.string == "<input />")
+    }
+
+    /// Text already on the line after the caret declines the expansion: the
+    /// three-line shape would push it past the closing tag.
+    @Test func markupTypedInFrontOfTextClosesFlat() {
+        let view = textView("already here", caretAt: 0)
+        view.tagDialect = .html
+        type("<p>", into: view)
+
+        #expect(view.string == "<p></p>already here")
+        #expect(view.selectedRange() == NSRange(location: 3, length: 0))
     }
 
     /// The other half: `</` completes with the innermost element still open.
@@ -214,6 +291,39 @@ struct CodeTextViewAutoCloseTests {
         #expect(view.string == "<div>()")
     }
 
+    /// Two switches rather than one, and this is what the second buys: the
+    /// reader who wants `<div></div>` on one line keeps closing tags.
+    @Test func theExpansionSwitchLeavesTheFlatClosingTag() {
+        let view = textView("", caretAt: 0)
+        view.tagDialect = .html
+        view.expandsTags = false
+        type("<div>", into: view)
+
+        #expect(view.string == "<div></div>")
+        #expect(view.selectedRange() == NSRange(location: 5, length: 0))
+    }
+
+    /// And with tags not closing at all there is nothing left for the
+    /// expansion to expand, whatever it says.
+    @Test func theTagSwitchAlsoStopsTheExpansion() {
+        let view = textView("", caretAt: 0)
+        view.tagDialect = .html
+        view.closesTags = false
+        view.expandsTags = true
+        type("<div>", into: view)
+        #expect(view.string == "<div>")
+    }
+
+    /// Tabs where the reader asked for tabs, on the same setting Return
+    /// already reads.
+    @Test func theExpansionIndentsWithTheReadersOwnUnit() {
+        let view = textView("", caretAt: 0)
+        view.tagDialect = .html
+        view.insertsSpacesForTab = false
+        type("<div>", into: view)
+        #expect(view.string == "<div>\n\t\n</div>")
+    }
+
     /// One keystroke, one undo — the `>` and the `</div>` it produced go back
     /// together.
     ///
@@ -231,7 +341,7 @@ struct CodeTextViewAutoCloseTests {
         view.tagDialect = .html
 
         view.insertText(">", replacementRange: view.selectedRange())
-        #expect(view.string == "<div></div>")
+        #expect(view.string == "<div>\n    \n</div>")
 
         view.undoManager?.undo()
         #expect(view.string == "<div")

@@ -44,9 +44,20 @@ final class SidebarLayoutModel: ObservableObject {
 
     /// Opens a terminal — or a terminal already running an agent — with its
     /// cwd inside a chosen worktree. Wired by the controller like the
-    /// callbacks above; the worktree pane is the only caller.
-    var onNewWorktreeTab: (String) -> Void = { _ in }
-    var onNewWorktreeAgentTab: (String, CodingAgent) -> Void = { _, _ in }
+    /// callbacks above; the worktree pane and the row buttons are the callers.
+    ///
+    /// The group id is where the request came from: the row's own group, or
+    /// the group of the terminal the panel is following. The new terminal
+    /// joins it, because a worktree of the repository a group works in
+    /// belongs beside the terminals working in it — opened from a group's
+    /// terminal, it used to land at the very bottom of the list, outside
+    /// every group, and had to be dragged back in by hand.
+    ///
+    /// Nil is a real answer and means what it says: the request came from
+    /// outside every group, and the terminal stays outside them. A tab that
+    /// silently joins a group nobody was in is the other half of this bug.
+    var onNewWorktreeTab: (String, UUID?) -> Void = { _, _ in }
+    var onNewWorktreeAgentTab: (String, CodingAgent, UUID?) -> Void = { _, _, _ in }
 
     /// The same, from inside a group's header — where the terminal has to
     /// land *in that group*. Pressing a button on a group and watching the

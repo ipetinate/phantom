@@ -18,6 +18,18 @@ enum AgentTabState: String {
     /// The agent turn ended in an API error (red triangle).
     case failed
 
+    /// The agent is compacting its conversation: a long operation, and one
+    /// the reader must be able to tell from both a working turn and a failure.
+    ///
+    /// It has its own word rather than borrowing `working` because of how an
+    /// automatic compaction arrives. The turn overruns the context window, the
+    /// API refuses it, and Claude Code reports that refusal through its
+    /// `StopFailure` hook — so the tab goes red, and *then* spends minutes
+    /// compacting behind that red triangle. Three and a half minutes, in the
+    /// session that produced this comment. A distinct mark is what tells the
+    /// reader the agent is busy rather than broken.
+    case compacting
+
     /// A tool use was denied (orange stop sign).
     case denied
 

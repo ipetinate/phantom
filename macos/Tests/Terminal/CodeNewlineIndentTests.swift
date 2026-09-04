@@ -86,6 +86,55 @@ struct CodeNewlineIndentTests {
         #expect(applying("  |  deep") == "  \n  |  deep")
     }
 
+    // MARK: - Tags
+
+    /// The same caret marker, with the closing tag the scanner decided on
+    /// handed in: unlike a `}`, it is not in the document yet, so the
+    /// insertion has to carry it.
+    private func applyingTag(
+        _ marked: String,
+        closingTag: String,
+        indentUnit: String = "  "
+    ) -> String? {
+        let caret = (marked as NSString).range(of: "|").location
+        let line = marked.replacingOccurrences(of: "|", with: "") as NSString
+        guard let insertion = CodeNewlineIndent.tagInsertion(
+            forLine: line as String,
+            caretInLine: caret,
+            indentUnit: indentUnit,
+            closingTag: closingTag
+        ) else { return nil }
+
+        let result = NSMutableString(string: line)
+        result.insert(insertion.text, at: caret)
+        result.insert("|", at: caret + insertion.caretOffset)
+        return result as String
+    }
+
+    @Test func aClosedTagBecomesThreeLines() {
+        #expect(applyingTag("  <div>|", closingTag: "</div>") == "  <div>\n    |\n  </div>")
+    }
+
+    @Test func theClosingTagLandsAtTheOpeningTagsIndentation() {
+        #expect(applyingTag("<ul>|", closingTag: "</ul>") == "<ul>\n  |\n</ul>")
+        #expect(
+            applyingTag("\t\t<li>|", closingTag: "</li>", indentUnit: "\t")
+                == "\t\t<li>\n\t\t\t|\n\t\t</li>")
+    }
+
+    /// Whitespace after the caret is the end of the line by any reading, so
+    /// the expansion still applies.
+    @Test func trailingWhitespaceDoesNotStopTheExpansion() {
+        #expect(applyingTag("  <div>|  ", closingTag: "</div>") == "  <div>\n    |\n  </div>  ")
+    }
+
+    /// Text after the caret does stop it: expanding would push that text past
+    /// the closing tag, into a line and an element it does not belong to.
+    @Test func textAfterTheCaretDeclinesTheExpansion() {
+        #expect(applyingTag("<p>|already here", closingTag: "</p>") == nil)
+        #expect(applyingTag("<p>|</p>", closingTag: "</p>") == nil)
+    }
+
     // MARK: - Markdown lists
 
     @Test func continuesABullet() {

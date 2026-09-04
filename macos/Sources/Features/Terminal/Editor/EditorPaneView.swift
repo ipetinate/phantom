@@ -273,7 +273,7 @@ struct EditorPaneView: View {
 ///
 /// The failure travels as a string: it crosses an actor boundary, and what the
 /// reader needs from it is a sentence, not an error to re-inspect.
-enum PrettierAttempt: Sendable {
+enum FormatAttempt: Sendable {
     case notOurs
     case answered(PrettierEdit?)
     case failed(String)
@@ -293,7 +293,7 @@ enum EditorFormatTrigger: Sendable {
     case save
 }
 
-extension PrettierAttempt {
+extension FormatAttempt {
     /// The sentence this outcome is worth interrupting the reader with, or nil
     /// to say nothing at all.
     ///
@@ -311,11 +311,16 @@ extension PrettierAttempt {
     ///   its turn below, and reports for itself.
     /// - `.failed` — the reader asked for something and did not get it, and the
     ///   reason carries a parse error's line and column, an unreadable config,
-    ///   or a Prettier that is not installed. Worth a modal, but only on
+    ///   or a formatter that is not installed. Worth a modal, but only on
     ///   `.command`. The write goes ahead regardless.
+    ///
+    /// The reason is passed through whole rather than wrapped in a sentence
+    /// here. Which tool is speaking is known where the run happened and not
+    /// here — several can now — and "Prettier couldn't format this file: Ruff:
+    /// …" is what wrapping it produced.
     func notice(for trigger: EditorFormatTrigger) -> String? {
         guard trigger == .command, case .failed(let reason) = self else { return nil }
-        return "Prettier couldn't format this file: \(reason)"
+        return reason
     }
 }
 
@@ -393,6 +398,7 @@ private struct DocumentView: View {
 
     @AppStorage(EditorSettings.usesPrettierKey) private var usesPrettier = true
     @AppStorage(EditorSettings.markdownSnippetsKey) private var markdownSnippets = true
+    @AppStorage(EditorSettings.expandsTagsKey) private var expandsTags = true
     @AppStorage(EditorSettings.formatOnSaveKey) private var formatOnSave = false
 
     /// Read here as well as inside `MarkdownWidthToggle`, which is what keeps
@@ -834,6 +840,10 @@ private struct DocumentView: View {
             /// are the same `CodeLanguage`, and a tag closed in `.ts` is
             /// always wrong because a `<` there can only be a generic.
             tagDialect: CodeTagDialect.resolve(fileName: document.url.lastPathComponent),
+            /// Beside the dialect rather than inside the configuration,
+            /// because it is read on the keystroke that types a `>` and not
+            /// on the pass that decides how the text is drawn.
+            expandsTags: expandsTags,
             /// Asked of the running servers rather than of the file name: it
             /// is true only while something is attached that can answer inside
             /// a `class` attribute, and it turns back off by itself when that
@@ -1577,15 +1587,64 @@ private struct DocumentView: View {
     /// has no formatter is an ordinary state, and a modal saying so on every
     /// ⌘S would train the reader to dismiss alerts without reading them — so
     /// the save path reports nothing at all. What neither path reports is a
-    /// run that went fine: see `PrettierAttempt.notice(for:)`.
+    /// run that went fine: see `FormatAttempt.notice(for:)`.
     private func formatDocument(_ trigger: EditorFormatTrigger) async {
         /// Read-only means read-only, and formatting is the one write that
         /// does not begin with a keystroke. A non-editable text view refuses
         /// typing, but ⌘S with format-on-save turned on would still rewrite
         /// the file from underneath the banner saying it cannot be edited.
         guard divergence?.isReadOnly != true else { return }
+
+        let timedOut = await settleLanguageServer(trigger)
         if await formatWithPrettier(trigger) { return }
-        await formatWithLanguageServer(trigger)
+        if await formatWithPrettierFromPath(trigger, handshakeTimedOut: timedOut) { return }
+        if await formatWithExternalFormatter(trigger) { return }
+        if await formatWithLanguageServer(trigger) { return }
+
+        /// The server was asked and had nothing. Shell is the case: with
+        /// `bash-language-server` installed, it advertises formatting and
+        /// shells out to `shfmt` — so the external formatter defers to it, and
+        /// a server that cannot find `shfmt` on its own `PATH` answers with an
+        /// empty edit list while the tool sits installed and working. The
+        /// reader gets a sentence about a server instead of a formatted file.
+        ///
+        /// The same lesson Markdown taught: a server advertising a capability
+        /// is not the same as a server having it.
+        if await formatWithExternalFormatter(trigger, serverReturnedNothing: true) { return }
+
+        guard trigger == .command else { return }
+        reportEmpty(
+            whenHealthyAndEmpty: "The language server returned no formatting.",
+            whenUnsupported: "This language server doesn't offer formatting.",
+            capability: "documentFormattingProvider"
+        )
+    }
+
+    /// Waits out a handshake that is in flight, and answers whether it gave up.
+    ///
+    /// The routing below reads three facts off the language server, and all
+    /// three are unanswerable while it is still starting: what it is, whether
+    /// it formats, and whether the fallbacks should defer to it. Asking anyway
+    /// is how the first ⇧⌘F in a freshly opened Markdown file — pressed in the
+    /// second between `marksman` launching and it reporting its capabilities —
+    /// answered with a sentence about `marksman` not offering formatting.
+    ///
+    /// Polling rather than a continuation, because the status is `@Published`
+    /// state on a `@MainActor` object and every reader of it is a view. A
+    /// hundred milliseconds is far below the threshold where a reader suspects
+    /// their keystroke was lost, and the loop ends the moment the state moves.
+    private func settleLanguageServer(_ trigger: EditorFormatTrigger) async -> Bool {
+        let path = document.url.path
+        guard EditorFormatRoute.waitsForServer(
+            trigger: trigger, server: lsp.status(forPath: path))
+        else { return false }
+
+        let deadline = Date().addingTimeInterval(EditorFormatRoute.serverSettleTimeout)
+        while Date() < deadline {
+            guard lsp.status(forPath: path) == .starting else { return false }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return lsp.status(forPath: path) == .starting
     }
 
     private func format() {
@@ -1631,15 +1690,121 @@ private struct DocumentView: View {
         let outcome = await Task.detached(priority: .userInitiated) {
             let project = PrettierProject.discover(forFile: path)
             guard project.handles(fileNamed: (path as NSString).lastPathComponent)
-            else { return PrettierAttempt.notOurs }
+            else { return FormatAttempt.notOurs }
 
             do {
                 return .answered(try PrettierFormatter.edit(for: text, at: path, in: project))
             } catch {
-                return .failed(error.localizedDescription)
+                return .failed("Prettier couldn't format this file: \(error.localizedDescription)")
             }
         }.value
 
+        return apply(outcome, trigger: trigger, at: path, to: text, since: revision)
+    }
+
+    /// Prettier when the project did not ask for it.
+    ///
+    /// Returns false when this route does not apply, leaving the language
+    /// server to answer and to say what it has to say. See
+    /// `EditorFormatRoute.usesPrettierFromPath` for when it does.
+    private func formatWithPrettierFromPath(
+        _ trigger: EditorFormatTrigger,
+        handshakeTimedOut: Bool
+    ) async -> Bool {
+        guard usesPrettier else { return false }
+
+        let path = document.url.path
+        let name = (path as NSString).lastPathComponent
+        guard EditorFormatRoute.usesPrettierFromPath(
+            trigger: trigger,
+            prettierKnowsTheFile: PrettierProject.parserCanBeInferred(for: name),
+            server: lsp.status(forPath: path),
+            serverFormats: lsp.hasCapability("documentFormattingProvider", forPath: path),
+            handshakeTimedOut: handshakeTimedOut)
+        else { return false }
+
+        let revision = document.revision
+        let text = document.currentText
+
+        let outcome = await Task.detached(priority: .userInitiated) {
+            /// The project is still discovered, and still not asked to declare
+            /// Prettier: what it contributes here is the directory to run in
+            /// and, where there is one, the Prettier installed into it. A
+            /// project with neither falls through to the login shell's `PATH`,
+            /// which is what `PrettierFormatter.binary` already does.
+            let project = PrettierProject.discover(forFile: path)
+            do {
+                return FormatAttempt.answered(
+                    try PrettierFormatter.edit(for: text, at: path, in: project))
+            } catch {
+                return FormatAttempt.failed(
+                    "Prettier couldn't format this file: \(error.localizedDescription)")
+            }
+        }.value
+
+        return apply(outcome, trigger: trigger, at: path, to: text, since: revision)
+    }
+
+    /// The formatter for a language nothing else here formats: Ruff for
+    /// Python, shfmt for shell, StyLua for Lua, xmllint for XML.
+    ///
+    /// Unlike the Prettier fallback above, this runs on a save too. Prettier
+    /// is held back there because a stray global Prettier would claim files in
+    /// every JavaScript-adjacent repository, including ones formatted by
+    /// something else; these four are the only formatter their language has on
+    /// this machine, which is the same position the language server's own
+    /// formatter is in — and each is a switch in Settings.
+    private func formatWithExternalFormatter(
+        _ trigger: EditorFormatTrigger,
+        serverReturnedNothing: Bool = false
+    ) async -> Bool {
+        let path = document.url.path
+        let name = (path as NSString).lastPathComponent
+
+        guard let known = ExternalFormatterRegistry.formatter(forFileNamed: name),
+              let formatter = ExternalFormatterStore.effective(known),
+              EditorFormatRoute.usesExternalFormatter(
+                server: lsp.status(forPath: path),
+                serverFormats: lsp.hasCapability("documentFormattingProvider", forPath: path),
+                serverReturnedNothing: serverReturnedNothing)
+        else { return false }
+
+        let revision = document.revision
+        let text = document.currentText
+
+        let outcome = await Task.detached(priority: .userInitiated) {
+            do {
+                let formatted = try ExternalFormatterRunner.format(
+                    text,
+                    filePath: path,
+                    formatter: formatter,
+                    searchPath: LoginEnvironment.executableSearchPath(),
+                    workingDirectory: (path as NSString).deletingLastPathComponent,
+                    environment: LoginEnvironment.executableEnvironment())
+                return FormatAttempt.answered(
+                    formatted.flatMap { PrettierEdit.minimal(from: text, to: $0) })
+            } catch {
+                return FormatAttempt.failed(error.localizedDescription)
+            }
+        }.value
+
+        return apply(outcome, trigger: trigger, at: path, to: text, since: revision)
+    }
+
+    /// What to do with the buffer, and what to say — one copy for every
+    /// formatter route, because they differ in who runs and in nothing else.
+    ///
+    /// - Parameters:
+    ///   - text: the buffer as it was when the run started. The edit was
+    ///     measured against it.
+    ///   - revision: the document revision at the same moment.
+    private func apply(
+        _ outcome: FormatAttempt,
+        trigger: EditorFormatTrigger,
+        at path: String,
+        to text: String,
+        since revision: Int
+    ) -> Bool {
         /// One place decides what is worth saying, so the branches below are
         /// left deciding only what to do with the buffer.
         if let message = outcome.notice(for: trigger) {
@@ -1677,7 +1842,11 @@ private struct DocumentView: View {
     }
 
     /// What formatting was before Prettier: ask the language server.
-    private func formatWithLanguageServer(_ trigger: EditorFormatTrigger) async {
+    /// - Returns: whether the server formatted the file. False means it was
+    ///   asked and had nothing, which is a different answer from a failure and
+    ///   is what lets an external formatter follow it.
+    @discardableResult
+    private func formatWithLanguageServer(_ trigger: EditorFormatTrigger) async -> Bool {
             /// Captured before the request, compared after it.
             ///
             /// A formatting reply is a list of ranges computed against the
@@ -1700,16 +1869,12 @@ private struct DocumentView: View {
                 tabSize: configuration.tabWidth,
                 insertSpaces: configuration.insertsSpacesForTab
             )
-            guard !edits.isEmpty else {
-                guard trigger == .command else { return }
-                reportEmpty(
-                    whenHealthyAndEmpty: "The language server returned no formatting.",
-                    whenUnsupported: "This language server doesn't offer formatting.",
-                    capability: "documentFormattingProvider"
-                )
-                return
-            }
-            guard document.revision == revision else { return }
+            /// Nothing back, and the reporting is deliberately *not* here any
+            /// more: a server that advertised formatting and then returned
+            /// nothing is exactly when a tool that formats this language
+            /// should get its turn. See `formatDocument`.
+            guard !edits.isEmpty else { return false }
+            guard document.revision == revision else { return true }
             let formatted = LSPTextEdit.apply(edits, to: document.currentText)
             document.replaceText(formatted, named: "Formatting")
 
@@ -1724,6 +1889,7 @@ private struct DocumentView: View {
             /// positions that no longer exist. It repairs itself on the next
             /// keystroke, by accident, which is why nobody notices.
             lsp.didChange(path: document.url.path, text: formatted)
+            return true
     }
 
     /// Applies a rename across every file the server named.
@@ -1795,6 +1961,12 @@ private struct DocumentView: View {
 
         if status.isFailure {
             notice = "The language server \(status.summary)."
+        } else if status == .starting {
+            /// Still starting, after the routing already waited it out. It has
+            /// not said whether it formats, so neither sentence below is true
+            /// about it — and the one about capabilities is the one that read
+            /// as a verdict on a server that had not spoken yet.
+            notice = "The language server is still starting."
         } else if !lsp.hasCapability(capability, forPath: path) {
             notice = whenUnsupported
         } else {
