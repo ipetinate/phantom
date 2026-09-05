@@ -2,18 +2,6 @@ import Foundation
 @testable import Ghostty
 import Testing
 
-/// The JSON hooks engine, driven by the three descriptors that use it.
-///
-/// Claude Code and Codex share one top-level `hooks` key with everybody else's
-/// hooks and nest each handler in a `{ hooks: [...] }` group; Antigravity keys
-/// its file by a name the author picks and owns that whole key, with flat
-/// handlers under each event. Reading Phantom's own registration out of a file
-/// full of somebody else's is therefore a different operation for the two
-/// shapes, and each gets its own fixtures here.
-///
-/// Nothing touches the reader's home: every engine is built against `/h`, an
-/// empty environment and the release bundle id, so the paths it derives are
-/// the same on every machine and in every build.
 @MainActor
 struct JSONHooksInstallerTests {
     private let home = URL(fileURLWithPath: "/h", isDirectory: true)
@@ -195,8 +183,6 @@ struct JSONHooksInstallerTests {
         #expect(!claude.isRegisteredForAnyEvent(in: empty))
     }
 
-    /// The registration's own product reads back as installed, and its own
-    /// removal reads back as gone — for a shared key holding another hook.
     @Test func aSharedKeyRoundTrips() throws {
         let codex = try engine(AgentRegistry.codex)
         let before = try settings(#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/other.sh"}]}]}}"#)
@@ -429,8 +415,6 @@ struct JSONHooksInstallerTests {
         }
     }
 
-    /// The migration this release performs: a script from an older build is
-    /// stale, and the repair rewrites it and re-registers every event.
     @Test func anOlderScriptIsStaleAndRepairRewritesIt() throws {
         try withTemporaryHome { temporaryHome in
             let codex = try #require(JSONHooksInstaller(

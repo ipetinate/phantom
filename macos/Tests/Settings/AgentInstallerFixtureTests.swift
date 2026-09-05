@@ -3,13 +3,6 @@ import Foundation
 @testable import Ghostty
 import Testing
 
-/// What the six agents' installers wrote, pinned as literal documents, and
-/// what the engines driven by the built-in descriptors write now.
-///
-/// The literals were captured from the per-agent installers before those were
-/// deleted, and nobody can run the app to see whether an engine writes what its
-/// installer wrote. So every engine is built against `/h`, an empty environment
-/// and the release bundle id, and has to reproduce each document byte for byte.
 @MainActor
 struct AgentInstallerFixtureTests {
     private let executable = "/x/Phantom.app/Contents/MacOS/ghostty"

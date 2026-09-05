@@ -2,13 +2,6 @@ import Foundation
 @testable import Ghostty
 import Testing
 
-/// The two engines that do not merge into JSON: Kimi Code's TOML table and the
-/// plugin file OpenCode and Pi load.
-///
-/// What is covered is everything that decides *what gets written* — which for
-/// Kimi is the part that can destroy a reader's configuration, and for the
-/// plugins is the part that decides whether the extension reports anything at
-/// all. The disk half runs against a temporary directory the test creates.
 @MainActor
 struct TOMLAndPluginInstallerTests {
     private let home = URL(fileURLWithPath: "/h", isDirectory: true)
@@ -176,9 +169,6 @@ struct TOMLAndPluginInstallerTests {
 
     // MARK: Pi and OpenCode — the files they ship
 
-    /// The directory is the agent's and the name is this build's. A second
-    /// build gives the file a variant of its own — `phantom-debug.ts` — so the
-    /// name is read off the engine rather than spelled.
     @Test func theExtensionGoesWherePiLooksForIt() throws {
         let pi = try plugin(AgentRegistry.pi)
 

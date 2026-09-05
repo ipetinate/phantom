@@ -1,12 +1,6 @@
 @testable import Ghostty
 import Testing
 
-/// The six ids, pinned as the strings that are already on disk.
-///
-/// A raw value is written into every tab-state file as `agent=<id>` and into
-/// every chosen icon as `agent:<id>`, so it outlives any one build. The agent
-/// is a value keyed by that id now rather than an enum case, and nothing about
-/// the change may move a single byte of it.
 struct CodingAgentTests {
     private static let pinned: [(CodingAgent, String)] = [
         (.claude, "claude"),

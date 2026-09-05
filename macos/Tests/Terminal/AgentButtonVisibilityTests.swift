@@ -1,7 +1,6 @@
 @testable import Ghostty
 import Testing
 
-/// Which agent buttons each place draws, read through the pinned keys.
 struct AgentButtonVisibilityTests {
     @Test func nothingStoredDrawsTheDefaults() {
         let shown = AgentButtonVisibility.read { _ in nil }
@@ -23,7 +22,6 @@ struct AgentButtonVisibilityTests {
         #expect(shown[.groupHeader] == [.claude])
     }
 
-    /// The order is the registry's, whatever order the switches were flipped in.
     @Test func theOrderIsTheRegistrysNotTheStores() {
         let stored: [String: Bool] = [
             "SidebarGroupShowPi": true,
