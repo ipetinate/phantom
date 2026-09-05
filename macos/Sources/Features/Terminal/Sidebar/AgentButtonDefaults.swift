@@ -41,22 +41,17 @@ enum AgentButtonDefaults {
     }
 
     /// The agent's spelling inside a key, which is **not** its display name and
-    /// not its raw value.
-    ///
-    /// `OpenCode` is the one that decides the shape: the display name has no
-    /// space to drop and the raw value capitalises to `Opencode`, so neither
-    /// derivation produces the key that is already on disk. Written out, so
-    /// every one of the six is a decision rather than a coincidence that holds
-    /// for five of them.
+    /// not its raw value — see `AgentDescriptor.settingsKeyToken`.
     private static func token(_ agent: CodingAgent) -> String {
-        switch agent {
-        case .claude: return "Claude"
-        case .codex: return "Codex"
-        case .opencode: return "OpenCode"
-        case .antigravity: return "Antigravity"
-        case .kimi: return "Kimi"
-        case .pi: return "Pi"
-        }
+        agent.descriptor.settingsKeyToken
+    }
+
+    static func isShown(
+        _ surface: AgentButtonSurface,
+        _ agent: CodingAgent,
+        stored: (String) -> Bool?
+    ) -> Bool {
+        stored(key(surface, agent)) ?? isShown(agent)
     }
 }
 

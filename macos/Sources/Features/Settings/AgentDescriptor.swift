@@ -9,6 +9,15 @@ struct AgentDescriptor: Equatable, Sendable {
     let icon: AgentIcon
     let brandColour: AgentBrandColour
     let keepsOriginalColours: Bool
+
+    /// The agent's spelling inside a button preference key, which is **not**
+    /// its display name and not its id.
+    ///
+    /// `OpenCode` is the one that decides the shape: the display name has no
+    /// space to drop and the id capitalises to `Opencode`, so neither
+    /// derivation produces the key that is already on disk. Written out, so
+    /// every one of the six is a decision rather than a coincidence that holds
+    /// for five of them.
     let settingsKeyToken: String
     let hooks: HooksIntegration?
     let mcp: MCPIntegration?

@@ -101,6 +101,6 @@ struct AgentRegistryTests {
         #expect(placeholder.resume.command(sessionID: nil) == "acme.aider")
         #expect(placeholder.hooks == nil)
         #expect(placeholder.mcp == nil)
-        #expect(placeholder.sessions == .none)
+        #expect(placeholder.sessions == SessionDiscovery.none)
     }
 }

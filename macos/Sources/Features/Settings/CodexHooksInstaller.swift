@@ -17,17 +17,7 @@ enum CodexHooksInstaller {
     /// installer writing hooks into a home the reader never looks at is a
     /// silent failure with no symptom to chase.
     nonisolated static var codexDir: URL {
-        let environment = ProcessInfo.processInfo.environment
-        if let configured = environment["CODEX_HOME"], !configured.isEmpty {
-            return URL(fileURLWithPath: configured, isDirectory: true)
-        }
-
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let cliHome = home.appendingPathComponent(".codex-cli", isDirectory: true)
-        if FileManager.default.fileExists(atPath: cliHome.path) {
-            return cliHome
-        }
-        return home.appendingPathComponent(".codex", isDirectory: true)
+        AgentRegistry.codexHome.resolve()
     }
 
     static var scriptURL: URL { codexDir.appendingPathComponent(scriptName) }

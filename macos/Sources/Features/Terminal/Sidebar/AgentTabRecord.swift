@@ -3,9 +3,10 @@ import Foundation
 /// A coding agent Phantom can start in a terminal — and, after a restart,
 /// put back into the conversation it was in.
 ///
-/// Each CLI spells resumption differently, so the spellings live here rather
-/// than as string literals at the restore site. Adding a fourth agent is then
-/// a case with a command, not another branch threaded through the decoder.
+/// Each CLI spells resumption differently, so the spellings live on the
+/// agent's descriptor in `AgentRegistry` rather than as string literals at the
+/// restore site. Adding an agent is then a descriptor with its commands, not
+/// another branch threaded through the decoder.
 ///
 /// Three of the four spellings are verified against running binaries rather
 /// than against documentation: each CLI's own `--help` was read for the resume
@@ -23,13 +24,28 @@ import Foundation
 /// in this workspace. Its id is a `conversationId` rather than a session id,
 /// which is a difference in the word and not in the shape: the hook filter
 /// below is the same, and a value it rejects falls back to `--continue`.
-enum CodingAgent: String, Sendable, CaseIterable {
-    case claude
-    case codex
-    case opencode
-    case antigravity
-    case kimi
-    case pi
+struct CodingAgent: Hashable, RawRepresentable, Sendable, CaseIterable {
+    let rawValue: String
+
+    init?(rawValue: String) {
+        guard AgentRegistry.shared.descriptor(for: rawValue) != nil else { return nil }
+        self.rawValue = rawValue
+    }
+
+    private init(id: String) {
+        self.rawValue = id
+    }
+
+    static let claude = CodingAgent(id: AgentRegistry.claude.id)
+    static let codex = CodingAgent(id: AgentRegistry.codex.id)
+    static let opencode = CodingAgent(id: AgentRegistry.opencode.id)
+    static let antigravity = CodingAgent(id: AgentRegistry.antigravity.id)
+    static let kimi = CodingAgent(id: AgentRegistry.kimi.id)
+    static let pi = CodingAgent(id: AgentRegistry.pi.id)
+
+    static var allCases: [CodingAgent] {
+        AgentRegistry.shared.all.map { CodingAgent(id: $0.id) }
+    }
 
     var descriptor: AgentDescriptor {
         AgentRegistry.shared.descriptor(for: rawValue) ?? .placeholder(id: rawValue)
@@ -37,42 +53,25 @@ enum CodingAgent: String, Sendable, CaseIterable {
 
     /// What to call this agent in the interface.
     ///
-    /// Here beside `launchCommand` because the two are the same fact read two
-    /// ways — what the reader calls it and what the shell calls it — and a
-    /// fourth agent should have to answer both in one place.
-    var displayName: String {
-        switch self {
-        case .claude: "Claude Code"
-        case .codex: "Codex"
-        case .opencode: "OpenCode"
-        case .antigravity: "Antigravity"
-        case .kimi: "Kimi Code"
-        case .pi: "Pi"
-        }
-    }
+    /// Beside `launchCommand` because the two are the same fact read two
+    /// ways — what the reader calls it and what the shell calls it — and an
+    /// agent has to answer both in one place, its descriptor.
+    var displayName: String { descriptor.displayName }
 
     /// What starts a fresh session with this agent.
     ///
     /// Here rather than at the call site so that starting an agent and
     /// resuming it cannot come to disagree about which agent a tab holds:
-    /// the sidebar records the case and asks it for both commands.
+    /// the sidebar records the agent and asks it for both commands.
     ///
-    /// A switch rather than `rawValue`, which is what it used to be, because
-    /// Antigravity is the first agent whose binary is not named after itself:
-    /// the command is `agy`. The raw value stays the long name regardless,
-    /// since that is what a hook writes into the `agent=` line and what
-    /// `SidebarIconID` stores for a chosen icon — both of which outlive any
-    /// one build and neither of which should have to know a binary name.
-    var launchCommand: String {
-        switch self {
-        case .claude: "claude"
-        case .codex: "codex"
-        case .opencode: "opencode"
-        case .antigravity: "agy"
-        case .kimi: "kimi"
-        case .pi: "pi"
-        }
-    }
+    /// Read from the descriptor rather than from `rawValue`, which is what it
+    /// used to be, because Antigravity is the first agent whose binary is not
+    /// named after itself: the command is `agy`. The raw value stays the long
+    /// name regardless, since that is what a hook writes into the `agent=`
+    /// line and what `SidebarIconID` stores for a chosen icon — both of which
+    /// outlive any one build and neither of which should have to know a
+    /// binary name.
+    var launchCommand: String { descriptor.launchCommand }
 
     /// The command that resumes `sessionID` — or, when no id was ever
     /// captured, the closest thing the CLI offers.
@@ -84,31 +83,7 @@ enum CodingAgent: String, Sendable, CaseIterable {
     /// bug the ids fix — but landing in the wrong conversation is recoverable
     /// by hand, and landing in none at all costs the tab its reason to exist.
     func resumeCommand(sessionID: String?) -> String {
-        guard let sessionID, !sessionID.isEmpty else {
-            switch self {
-            case .claude: return "claude --continue"
-            case .codex: return "codex resume --last"
-            case .opencode: return "opencode --continue"
-            case .antigravity: return "agy --continue"
-            case .kimi: return "kimi --continue"
-            case .pi: return "pi --continue"
-            }
-        }
-
-        switch self {
-        case .claude: return "claude --resume \(sessionID)"
-        case .codex: return "codex resume \(sessionID)"
-        case .opencode: return "opencode --session \(sessionID)"
-        case .antigravity: return "agy --conversation \(sessionID)"
-
-        /// Both spell the id-bearing form `--session`, and both also have a
-        /// `--resume`. Kimi's `-r`/`--resume` is a hidden alias for
-        /// `--session`, and Pi's opens a picker for the reader to choose from
-        /// — a picker is the wrong thing for a tab restoring itself, which
-        /// knows exactly which conversation it wants. So `--session` for both.
-        case .kimi: return "kimi --session \(sessionID)"
-        case .pi: return "pi --session \(sessionID)"
-        }
+        descriptor.resume.command(sessionID: sessionID)
     }
 }
 

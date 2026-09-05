@@ -31,12 +31,7 @@ enum KimiHooksInstaller {
     /// set it did so to keep this out of their home. Writing to the default
     /// anyway would install a hook the agent never reads.
     nonisolated static var kimiDir: URL {
-        let environment = ProcessInfo.processInfo.environment
-        if let configured = environment["KIMI_CODE_HOME"], !configured.isEmpty {
-            return URL(fileURLWithPath: configured, isDirectory: true)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".kimi-code", isDirectory: true)
+        AgentRegistry.kimiHome.resolve()
     }
 
     static var scriptURL: URL { kimiDir.appendingPathComponent(scriptName) }

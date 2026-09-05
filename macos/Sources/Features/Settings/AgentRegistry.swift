@@ -148,6 +148,9 @@ final class AgentRegistry: @unchecked Sendable {
             withoutSession: "opencode --continue"),
         installation: AgentInstallation(
             commands: [
+                /// The tap rather than the core formula, on the project's own
+                /// advice: it calls the core one "maintained by the Homebrew
+                /// team and updated less frequently".
                 AgentInstallCommand(manager: .homebrew, command: "brew install anomalyco/tap/opencode"),
                 AgentInstallCommand(manager: .npm, command: "npm install -g opencode-ai"),
             ],
@@ -182,6 +185,9 @@ final class AgentRegistry: @unchecked Sendable {
         resume: ResumeCommand(
             withSession: "agy --conversation {session}",
             withoutSession: "agy --continue"),
+        /// Antigravity publishes one install for macOS and it is
+        /// `curl -fsSL … | bash`. See `AgentInstallPlan` for why that is not
+        /// offered from here.
         installation: AgentInstallation(
             commands: [],
             documentation: URL(string: "https://antigravity.google/docs/cli/install")),
@@ -209,6 +215,11 @@ final class AgentRegistry: @unchecked Sendable {
             entry: MCPIntegration.Entry(command: .separateArguments))),
         sessions: .none)
 
+    /// Kimi and Pi both spell the id-bearing form `--session`, and both also
+    /// have a `--resume`. Kimi's `-r`/`--resume` is a hidden alias for
+    /// `--session`, and Pi's opens a picker for the reader to choose from
+    /// — a picker is the wrong thing for a tab restoring itself, which
+    /// knows exactly which conversation it wants. So `--session` for both.
     static let kimi = AgentDescriptor(
         id: "kimi",
         displayName: "Kimi Code",
@@ -259,6 +270,10 @@ final class AgentRegistry: @unchecked Sendable {
             withoutSession: "pi --continue"),
         installation: AgentInstallation(
             commands: [
+                /// `--ignore-scripts` is the vendor's own spelling and is kept
+                /// rather than tidied away: dropping it would install the same
+                /// package a different way from the way its documentation says
+                /// to.
                 AgentInstallCommand(
                     manager: .npm,
                     command: "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"),

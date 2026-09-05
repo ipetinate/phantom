@@ -47,12 +47,7 @@ struct WorktreeFamilyView: View {
     @ObservedObject private var git: GitCenter = .shared
     @ObservedObject private var palette: ThemePalette = .shared
 
-    @AppStorage(AgentButtonDefaults.key(.chrome, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
-    @AppStorage(AgentButtonDefaults.key(.chrome, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
-    @AppStorage(AgentButtonDefaults.key(.chrome, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
-    @AppStorage(AgentButtonDefaults.key(.chrome, .antigravity)) private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
-    @AppStorage(AgentButtonDefaults.key(.chrome, .kimi)) private var showKimi = AgentButtonDefaults.isShown(.kimi)
-    @AppStorage(AgentButtonDefaults.key(.chrome, .pi)) private var showPi = AgentButtonDefaults.isShown(.pi)
+    @ObservedObject private var agentButtons: AgentButtonVisibility = .shared
 
     @State private var ownFilter = ""
 
@@ -373,16 +368,7 @@ struct WorktreeFamilyView: View {
     }
 
     private var offeredAgents: [CodingAgent] {
-        CodingAgent.allCases.filter { agent in
-            switch agent {
-            case .claude: return showClaude
-            case .codex: return showCodex
-            case .opencode: return showOpenCode
-            case .antigravity: return showAntigravity
-            case .kimi: return showKimi
-            case .pi: return showPi
-            }
-        }
+        agentButtons.agents(on: .chrome)
     }
 
     /// The tabs of every window, matched to worktrees by the one membership
