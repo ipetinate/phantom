@@ -58,21 +58,14 @@ class UpdateController {
     ///
     /// This is typically connected to a menu item action.
     ///
-    /// Disabled for Phantom: `feedURLString(for:)` (UpdateDelegate.swift) is
-    /// unmodified from upstream and points at Ghostty's own appcast, since
-    /// there's no Phantom release feed to point it at instead. Automatic
-    /// checks are already off via `SUEnableAutomaticChecks` in
-    /// Ghostty-Info.plist, but that flag doesn't gate this manual,
-    /// menu-triggered path — left uncaught, "Install and Relaunch" would
-    /// download a real, unmodified Ghostty release and install it in place
-    /// of Phantom.
+    /// This was an alert for a while, saying Phantom does not check for
+    /// updates. The reason was `feedURLString(for:)` still pointing at
+    /// Ghostty's appcast: left live, "Install and Relaunch" would have
+    /// downloaded a real Ghostty release and installed it over Phantom. The
+    /// feed is Phantom's now, published with every release and signed with a
+    /// key only this repo holds, so the check does what the menu item says.
     @objc func checkForUpdates() {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Phantom Doesn't Check for Updates"
-        alert.informativeText = "Phantom is a personal fork you build and install by hand — there's no Phantom release feed. This is disabled so it can't offer to install a real Ghostty release over Phantom by mistake. Rebuild from source to pick up changes."
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        updater.checkForUpdates()
     }
 
     /// Validate the check for updates menu item.

@@ -1041,8 +1041,11 @@ class AppDelegate: NSObject,
             updateController.updater.automaticallyDownloadsUpdates =
                 autoUpdate == .download
             /*
-             To test `auto-update` easily, uncomment the line below and
-             delete `SUEnableAutomaticChecks` in Ghostty-Info.plist.
+             To test `auto-update` easily, uncomment the line below.
+             `SUEnableAutomaticChecks` is already absent from Ghostty-Info.plist
+             — Phantom lets this configuration and Sparkle's own consent prompt
+             decide, rather than forcing checks off — so this branch is the one
+             that runs.
 
              Note: When `auto-update = download`, you may need to
              `Clean Build Folder` if a background install has already begun.
