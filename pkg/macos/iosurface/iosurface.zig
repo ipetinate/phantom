@@ -54,11 +54,17 @@ pub const IOSurface = opaque {
     pub fn deinit(self: *IOSurface) void {
         // We mark it purgeable so that it is immediately unloaded, so that we
         // don't have to wait for CoreFoundation garbage collection to trigger.
-        _ = c.IOSurfaceSetPurgeable(
-            @ptrCast(self),
-            c.kIOSurfacePurgeableEmpty,
-            null,
-        );
+        //
+        // A surface another client still uses is left alone: CoreAnimation
+        // holds the one a layer is displaying, and emptying that one blanks
+        // the window until a new frame arrives. It is freed with the layer.
+        if (c.IOSurfaceIsInUse(@ptrCast(self)) == 0) {
+            _ = c.IOSurfaceSetPurgeable(
+                @ptrCast(self),
+                c.kIOSurfacePurgeableEmpty,
+                null,
+            );
+        }
         foundation.CFRelease(self);
     }
 

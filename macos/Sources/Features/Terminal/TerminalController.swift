@@ -879,7 +879,15 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// Metal surface takes a few frames to draw its first content, and
     /// until then the near-transparent window shows raw desktop blur — a
     /// visible flash when clicking a tab that was never displayed.
+    ///
+    /// A pane whose layer already holds a frame is left alone. The shield is
+    /// the window's background colour at the configured opacity, so over
+    /// content it reads as the terminal dimming for a quarter of a second.
     private var didShieldFirstPresentation = false
+
+    private var surfacesHavePresentedAFrame: Bool {
+        surfaceTree.contains { $0.layer?.contents != nil }
+    }
 
     private func shieldFirstPresentationFlash() {
         guard !didShieldFirstPresentation,
@@ -887,6 +895,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
               let container = sidebarSplitView?.arrangedSubviews.last
         else { return }
         didShieldFirstPresentation = true
+        guard !surfacesHavePresentedAFrame else { return }
 
         let shield = NSView(frame: container.bounds)
         shield.autoresizingMask = [.width, .height]
