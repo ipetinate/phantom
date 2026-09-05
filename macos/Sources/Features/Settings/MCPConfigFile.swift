@@ -11,7 +11,7 @@ import Foundation
 /// rest", never "write out what Phantom knows about".
 ///
 /// The one agent left out is Codex, whose configuration is TOML. See
-/// `CodexMCPInstaller` for why that one cannot share this and what it does
+/// `TOMLMCPInstaller` for why that one cannot share this and what it does
 /// instead.
 enum MCPConfigFile {
     /// Reads a configuration, telling "there is nothing here yet" apart from
@@ -20,7 +20,7 @@ enum MCPConfigFile {
     /// An empty dictionary means the file is absent or empty, which an
     /// installer may safely create. Nil means a file exists that is not a JSON
     /// object — hand-edited, half-written, a top-level array — and the
-    /// installer must leave it alone. `CodexHooksInstaller.readSettings(at:)`
+    /// installer must leave it alone. `JSONHooksInstaller.readSettings(at:)`
     /// draws the same distinction and gives the same reason: collapsing the two
     /// is what turns one malformed byte into the atomic replacement of
     /// everything the reader had.

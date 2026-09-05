@@ -1541,14 +1541,9 @@ private struct SidebarTabRow: View {
     @AppStorage("SidebarShowPlan") private var showPlan = true
     @AppStorage("SidebarTabDensity") private var density = "default"
 
-    /// Which agents this row offers to start, mirroring the keys the sidebar
-    /// header and the group header already use for their own buttons.
-    @AppStorage(AgentButtonDefaults.key(.tabRow, .claude)) private var showClaudeAction = AgentButtonDefaults.isShown(.claude)
-    @AppStorage(AgentButtonDefaults.key(.tabRow, .codex)) private var showCodexAction = AgentButtonDefaults.isShown(.codex)
-    @AppStorage(AgentButtonDefaults.key(.tabRow, .opencode)) private var showOpenCodeAction = AgentButtonDefaults.isShown(.opencode)
-    @AppStorage(AgentButtonDefaults.key(.tabRow, .antigravity)) private var showAntigravityAction = AgentButtonDefaults.isShown(.antigravity)
-    @AppStorage(AgentButtonDefaults.key(.tabRow, .kimi)) private var showKimiAction = AgentButtonDefaults.isShown(.kimi)
-    @AppStorage(AgentButtonDefaults.key(.tabRow, .pi)) private var showPiAction = AgentButtonDefaults.isShown(.pi)
+    /// Which agents this row offers to start, read through the same keys the
+    /// sidebar header and the group header use for their own buttons.
+    @ObservedObject private var agentButtons: AgentButtonVisibility = .shared
     @AppStorage("SidebarTabShowWorktree") private var showWorktreeAction = true
     @AppStorage("SidebarTabAlwaysShowActions") private var alwaysShowActions = false
 
@@ -1586,32 +1581,15 @@ private struct SidebarTabRow: View {
     /// The agent buttons this row draws, decided by `TabRowAgentActions` — a
     /// tab already running one gets none, because these type into its shell.
     private var agentActions: [CodingAgent] {
-        var shown: Set<CodingAgent> = []
-        if showClaudeAction { shown.insert(.claude) }
-        if showCodexAction { shown.insert(.codex) }
-        if showOpenCodeAction { shown.insert(.opencode) }
-        if showAntigravityAction { shown.insert(.antigravity) }
-        if showKimiAction { shown.insert(.kimi) }
-        if showPiAction { shown.insert(.pi) }
-
-        return TabRowAgentActions.agents(
-            shown: shown,
+        TabRowAgentActions.agents(
+            shown: Set(agentButtons.agents(on: .tabRow)),
             liveAgent: tab.liveAgent,
             isIdle: isIdle)
     }
 
-    /// Each agent's own mark, at the size the group header uses. Separate
-    /// types rather than one image name, so this is a switch and not a lookup.
-    @ViewBuilder
+    /// Each agent's own mark, at the size the group header uses.
     private func agentIcon(_ agent: CodingAgent) -> some View {
-        switch agent {
-        case .claude: ClaudeIcon(size: 11)
-        case .codex: CodexIcon(size: 11)
-        case .opencode: OpenCodeIcon(size: 11)
-        case .antigravity: AntigravityIcon(size: 11)
-        case .kimi: KimiIcon(size: 11)
-        case .pi: PiIcon(size: 11)
-        }
+        AgentIconView(agent.descriptor, size: 11)
     }
 
     private var override: SidebarGroupStore.TabOverride? {

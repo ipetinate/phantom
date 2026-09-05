@@ -34,11 +34,11 @@ struct AgentInstallCommand: Equatable, Sendable {
 /// How to install each agent's CLI, and which agents this app will not offer to
 /// install.
 ///
-/// **Every command here was read off that agent's own documentation.** None is
-/// inferred from a package name that looks right — `pi` alone has three
-/// similarly named packages on npm by three different publishers, and the one
-/// that matches the extension directory Phantom writes is neither the shortest
-/// nor the first result.
+/// **Every command was read off that agent's own documentation**, and lives on
+/// the agent's descriptor in `AgentRegistry`. None is inferred from a package
+/// name that looks right — `pi` alone has three similarly named packages on npm
+/// by three different publishers, and the one that matches the extension
+/// directory Phantom writes is neither the shortest nor the first result.
 ///
 /// The refusals matter as much as the commands. An agent whose only documented
 /// install is a script piped into a shell is **not** offered: a welcome panel
@@ -57,7 +57,7 @@ enum AgentInstallPlan {
         /// The page the commands were read from, shown whether or not there is
         /// a command — an agent this app cannot install is still an agent the
         /// reader can go and install.
-        let documentation: URL
+        let documentation: URL?
     }
 
     /// What every one of these has in common once it is installed, said once
@@ -67,71 +67,30 @@ enum AgentInstallPlan {
         sign in the first time you run it, in its own terminal.
         """
 
-    static let all: [Entry] = [
-        Entry(
-            agent: .claude,
-            commands: [
-                AgentInstallCommand(manager: .homebrew, command: "brew install --cask claude-code"),
-                AgentInstallCommand(manager: .npm, command: "npm install -g @anthropic-ai/claude-code"),
-            ],
-            documentation: URL(string: "https://code.claude.com/docs/en/setup")!),
-        Entry(
-            agent: .codex,
-            commands: [
-                AgentInstallCommand(manager: .homebrew, command: "brew install --cask codex"),
-                AgentInstallCommand(manager: .npm, command: "npm install -g @openai/codex"),
-            ],
-            documentation: URL(string: "https://developers.openai.com/codex/quickstart")!),
-        Entry(
-            agent: .opencode,
-            commands: [
-                /// The tap rather than the core formula, on the project's own
-                /// advice: it calls the core one "maintained by the Homebrew
-                /// team and updated less frequently".
-                AgentInstallCommand(
-                    manager: .homebrew, command: "brew install anomalyco/tap/opencode"),
-                AgentInstallCommand(manager: .npm, command: "npm install -g opencode-ai"),
-            ],
-            documentation: URL(string: "https://opencode.ai/docs/")!),
-        Entry(
-            agent: .kimi,
-            commands: [
-                AgentInstallCommand(
-                    manager: .npm, command: "npm install -g @moonshot-ai/kimi-code"),
-            ],
-            documentation: URL(
-                string: "https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started.html")!),
-        Entry(
-            agent: .pi,
-            commands: [
-                /// `--ignore-scripts` is the vendor's own spelling and is kept
-                /// rather than tidied away: dropping it would install the same
-                /// package a different way from the way its documentation says
-                /// to.
-                AgentInstallCommand(
-                    manager: .npm,
-                    command: "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"),
-            ],
-            documentation: URL(string: "https://pi.dev/docs/latest/")!),
-    ]
+    static var all: [Entry] {
+        CodingAgent.allCases.compactMap { agent in
+            let installation = agent.descriptor.installation
+            guard !installation.commands.isEmpty else { return nil }
+            return Entry(
+                agent: agent,
+                commands: installation.commands,
+                documentation: installation.documentation)
+        }
+    }
 
-    /// Agents this app will not offer to install, and why — declared rather
-    /// than implied by omission, the discipline `MCPServerRegistration`
-    /// established: a test asserts this set and ``all`` together account for
-    /// every `CodingAgent`, so a seventh agent fails the suite until somebody
-    /// decides which side it belongs on.
-    ///
-    /// Antigravity publishes one install for macOS and it is
-    /// `curl -fsSL … | bash`. See the type's own note for why that is not
-    /// offered from here.
-    static let withoutInstallCommand: Set<CodingAgent> = [.antigravity]
+    /// Agents this app will not offer to install — the ones whose descriptor
+    /// carries no command — declared so a test can assert this set and ``all``
+    /// together account for every `CodingAgent`.
+    static var withoutInstallCommand: Set<CodingAgent> {
+        Set(CodingAgent.allCases.filter { $0.descriptor.installation.commands.isEmpty })
+    }
 
     /// The page for an agent, whether or not this app can install it.
-    static let documentation: [CodingAgent: URL] = {
-        var pages = Dictionary(uniqueKeysWithValues: all.map { ($0.agent, $0.documentation) })
-        pages[.antigravity] = URL(string: "https://antigravity.google/docs/cli/install")!
-        return pages
-    }()
+    static var documentation: [CodingAgent: URL] {
+        Dictionary(uniqueKeysWithValues: CodingAgent.allCases.compactMap { agent in
+            agent.descriptor.installation.documentation.map { (agent, $0) }
+        })
+    }
 
     static func entry(for agent: CodingAgent) -> Entry? {
         all.first { $0.agent == agent }

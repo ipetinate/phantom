@@ -1,14 +1,25 @@
 import Foundation
 
-/// The four agents, and the one place that knows all of them.
+@MainActor
+protocol MCPEngine: AnyObject {
+    var descriptor: AgentDescriptor { get }
+    var isRegistered: Bool { get }
+    var lastError: String? { get }
+
+    @discardableResult func register() -> Bool
+    @discardableResult func remove() -> Bool
+    @discardableResult func repairIfStale() -> Bool
+}
+
+/// The agents, and the one place that knows all of them.
 ///
-/// A list of closures rather than a protocol, for the reason
-/// `MCPToolRegistry` gives about tools: each installer is a value that lives
-/// beside the file it writes, and adding a fifth agent should be one entry
-/// here rather than a type hierarchy. `AgentsSettingsView` writes the same four
-/// rows out longhand for the hooks; this exists because the MCP pane has a
-/// second caller — the launch-time repair — and two hand-written lists of four
-/// agents is how the fifth one ends up in only one of them.
+/// A list of closures rather than a protocol on the row, for the reason
+/// `MCPToolRegistry` gives about tools: each engine is a value that lives
+/// beside the file it writes, and adding an agent should be one descriptor in
+/// the registry rather than a type hierarchy. `AgentsSettingsView` writes the
+/// same rows out for the hooks; this exists because the MCP pane has a second
+/// caller — the launch-time repair — and two hand-written lists of agents is how
+/// the next one ends up in only one of them.
 @MainActor
 enum MCPServerRegistration {
     struct Agent: Identifiable {
@@ -18,61 +29,45 @@ enum MCPServerRegistration {
         /// menu takes it.
         var name: String { id.displayName }
 
-        let isRegistered: () -> Bool
-        let register: () -> Bool
-        let remove: () -> Bool
-        let repairIfStale: () -> Bool
-        let lastError: () -> String?
+        let isRegistered: @MainActor () -> Bool
+        let register: @MainActor () -> Bool
+        let remove: @MainActor () -> Bool
+        let repairIfStale: @MainActor () -> Bool
+        let lastError: @MainActor () -> String?
+
+        init(id: CodingAgent, engine: MCPEngine) {
+            self.id = id
+            self.isRegistered = { engine.isRegistered }
+            self.register = { engine.register() }
+            self.remove = { engine.remove() }
+            self.repairIfStale = { engine.repairIfStale() }
+            self.lastError = { engine.lastError }
+        }
+    }
+
+    static func engine(for agent: CodingAgent) -> MCPEngine? {
+        engine(for: agent.descriptor)
+    }
+
+    static func engine(for descriptor: AgentDescriptor) -> MCPEngine? {
+        switch descriptor.mcp {
+        case .json(let mcp)?:
+            return JSONMCPInstaller(descriptor: descriptor, mcp: mcp)
+        case .toml(let mcp)?:
+            return TOMLMCPInstaller(descriptor: descriptor, mcp: mcp)
+        case nil:
+            return nil
+        }
     }
 
     static var agents: [Agent] {
-        [
-            Agent(
-                id: .claude,
-                isRegistered: { ClaudeMCPInstaller.isRegistered },
-                register: { ClaudeMCPInstaller.register() },
-                remove: { ClaudeMCPInstaller.remove() },
-                repairIfStale: { ClaudeMCPInstaller.repairIfStale() },
-                lastError: { ClaudeMCPInstaller.lastError }),
-            Agent(
-                id: .codex,
-                isRegistered: { CodexMCPInstaller.isRegistered },
-                register: { CodexMCPInstaller.register() },
-                remove: { CodexMCPInstaller.remove() },
-                repairIfStale: { CodexMCPInstaller.repairIfStale() },
-                lastError: { CodexMCPInstaller.lastError }),
-            Agent(
-                id: .opencode,
-                isRegistered: { OpenCodeMCPInstaller.isRegistered },
-                register: { OpenCodeMCPInstaller.register() },
-                remove: { OpenCodeMCPInstaller.remove() },
-                repairIfStale: { OpenCodeMCPInstaller.repairIfStale() },
-                lastError: { OpenCodeMCPInstaller.lastError }),
-            Agent(
-                id: .antigravity,
-                isRegistered: { AntigravityMCPInstaller.isRegistered },
-                register: { AntigravityMCPInstaller.register() },
-                remove: { AntigravityMCPInstaller.remove() },
-                repairIfStale: { AntigravityMCPInstaller.repairIfStale() },
-                lastError: { AntigravityMCPInstaller.lastError }),
-            Agent(
-                id: .kimi,
-                isRegistered: { KimiMCPInstaller.isRegistered },
-                register: { KimiMCPInstaller.register() },
-                remove: { KimiMCPInstaller.remove() },
-                repairIfStale: { KimiMCPInstaller.repairIfStale() },
-                lastError: { KimiMCPInstaller.lastError }),
-            Agent(
-                id: .pi,
-                isRegistered: { PiMCPInstaller.isRegistered },
-                register: { PiMCPInstaller.register() },
-                remove: { PiMCPInstaller.remove() },
-                repairIfStale: { PiMCPInstaller.repairIfStale() },
-                lastError: { PiMCPInstaller.lastError }),
-        ]
+        CodingAgent.allCases.compactMap { agent in
+            engine(for: agent).map { Agent(id: agent, engine: $0) }
+        }
     }
 
-    /// Agents this app knows but does not register itself with, and why.
+    /// Agents this app knows but does not register itself with: the ones whose
+    /// descriptor carries no MCP integration.
     ///
     /// Declared rather than implied by omission, because omission is exactly
     /// how an agent gets forgotten: `everyAgentIsOffered` asserts that this set
@@ -86,7 +81,9 @@ enum MCPServerRegistration {
     /// read by an extension rather than by Pi itself — and the mechanism is
     /// what made that a decision somebody had to make instead of a gap nobody
     /// noticed. The next agent gets the same treatment.
-    static let withoutInstaller: Set<CodingAgent> = []
+    static var withoutInstaller: Set<CodingAgent> {
+        Set(CodingAgent.allCases.filter { $0.descriptor.mcp == nil })
+    }
 
     /// Who is registered right now, read off disk each time.
     ///
@@ -104,9 +101,10 @@ enum MCPServerRegistration {
     ///
     /// The same rule the hooks installers' `repairIfStale` follows, and here it
     /// carries more weight than there: the command each entry holds is a path
-    /// into this bundle, so moving Phantom on disk breaks all four at once and
-    /// nothing about the failure the reader sees names Phantom. An agent with
-    /// no entry is an agent the reader never asked about, and stays that way.
+    /// into this bundle, so moving Phantom on disk breaks all of them at once
+    /// and nothing about the failure the reader sees names Phantom. An agent
+    /// with no entry is an agent the reader never asked about, and stays that
+    /// way.
     static func repairAll() {
         for agent in agents { _ = agent.repairIfStale() }
     }
