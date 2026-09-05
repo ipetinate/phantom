@@ -159,3 +159,12 @@ struct ExtensionDocumentCenterTests {
         #expect(center.selected?.extensionDocument == lua)
     }
 }
+
+extension ExtensionDocumentTests {
+    @Test func aRestoredPathNamesTheExtensionItCameFrom() {
+        let document = ExtensionDocument(extensionID: "ipetinate.lua", title: "Lua")
+        #expect(ExtensionDocument.extensionID(fromPath: document.path) == "ipetinate.lua")
+        #expect(ExtensionDocument.extensionID(fromPath: "/Users/someone/lua.md") == nil)
+        #expect(ExtensionDocument.extensionID(fromPath: "phantom-extension://../escape") == nil)
+    }
+}

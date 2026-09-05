@@ -578,6 +578,10 @@ final class EditorCenter: ObservableObject {
         return true
     }
 
+    static func restoredExtensionTitle(_ extensionID: String) -> String {
+        ExtensionStore.shared.installed.first { $0.id == extensionID }?.name ?? extensionID
+    }
+
     func openExtension(_ document: ExtensionDocument) {
         extensions[document.path] = document
         activeGroupID = tree.open(document.tab, in: activeGroupID)
@@ -973,7 +977,13 @@ final class EditorCenter: ObservableObject {
     /// sources of truth for them.
     func restore(_ state: EditorGridState) {
         var opened: Set<String> = []
-        for path in state.paths where FileManager.default.fileExists(atPath: path) {
+        for path in state.paths {
+            if let extensionID = ExtensionDocument.extensionID(fromPath: path) {
+                openExtension(ExtensionDocument(extensionID: extensionID, title: Self.restoredExtensionTitle(extensionID)))
+                opened.insert(path)
+                continue
+            }
+            guard FileManager.default.fileExists(atPath: path) else { continue }
             if open(URL(fileURLWithPath: path)) { opened.insert(path) }
         }
 
