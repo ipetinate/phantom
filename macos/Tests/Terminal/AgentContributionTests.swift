@@ -167,10 +167,12 @@ struct AgentContributionTests {
         #expect(parsed.resume == ResumeCommand(
             withSession: "gemini --resume {session}", withoutSession: "gemini"))
         #expect(parsed.resume.command(sessionID: "abc") == "gemini --resume abc")
-        #expect(parsed.installation == AgentInstallation(
+        let installation = AgentInstallation(
             commands: [AgentInstallCommand(manager: .npm, command: "npm install -g @google/gemini-cli")],
-            documentation: URL(string: "https://geminicli.com/docs/")))
-        #expect(parsed.brandColour == .rgb(red: 0x42 / 255, green: 0x85 / 255, blue: 0xf4 / 255))
+            documentation: URL(string: "https://geminicli.com/docs/"))
+        #expect(parsed.installation == installation)
+        let googleBlue = AgentBrandColour.rgb(red: 66.0 / 255, green: 133.0 / 255, blue: 244.0 / 255)
+        #expect(parsed.brandColour == googleBlue)
 
         guard case .file(let iconURL) = parsed.icon else {
             Issue.record("icon was \(parsed.icon)")
@@ -516,7 +518,7 @@ struct AgentContributionTests {
             let parsed = try #require(agent(#""brandColour": "\#(colour)""#))
             #expect(parsed.brandColour == .label, "\(colour)")
         }
-        let white = try #require(agent(#""brandColour": "#ffffff""#))
+        let white = try #require(agent(##""brandColour": "#ffffff""##))
         #expect(white.brandColour == .rgb(red: 1, green: 1, blue: 1))
         let artwork = try #require(agent(#""brandColour": "artwork""#))
         #expect(artwork.brandColour == .artwork)
