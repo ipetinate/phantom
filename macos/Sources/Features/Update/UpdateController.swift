@@ -66,23 +66,12 @@ class UpdateController {
     /// menu-triggered path — left uncaught, "Install and Relaunch" would
     /// download a real, unmodified Ghostty release and install it in place
     /// of Phantom.
-    @objc func checkForUpdates() {
+    func checkForUpdates() {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "Phantom Doesn't Check for Updates"
         alert.informativeText = "Phantom is a personal fork you build and install by hand — there's no Phantom release feed. This is disabled so it can't offer to install a real Ghostty release over Phantom by mistake. Rebuild from source to pick up changes."
         alert.addButton(withTitle: "OK")
         alert.runModal()
-    }
-
-    /// Validate the check for updates menu item.
-    ///
-    /// - Parameter item: The menu item to validate
-    /// - Returns: Whether the menu item should be enabled
-    func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if item.action == #selector(checkForUpdates) {
-            return updater.canCheckForUpdates
-        }
-        return true
     }
 }

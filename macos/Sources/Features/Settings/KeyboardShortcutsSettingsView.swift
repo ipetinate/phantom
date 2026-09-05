@@ -215,7 +215,7 @@ struct KeyboardShortcutsSettingsView: View {
     /// action-string parse and one hash lookup inside libghostty, and a cache
     /// would need invalidating on exactly the reload `configRevision` is
     /// already read here to catch.
-    private var configGroups: [GhosttyConfigBindingGroup] {
+    @MainActor private var configGroups: [GhosttyConfigBindingGroup] {
         guard let config = ghostty?.config else { return [] }
         return GhosttyConfigShortcutCatalog.resolved(in: config) { entry in
             KeyboardShortcutSearch.matches(query: search, in: entry.title, entry.action)

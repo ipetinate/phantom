@@ -52,7 +52,6 @@ struct AboutView: View {
         )) ?? AttributedString(Phantom.upstreamCredit)
     }
 
-    #if os(macOS)
     // This creates a background style similar to the Apple "About My Mac" Window
     private struct VisualEffectBackground: NSViewRepresentable {
         let material: NSVisualEffectView.Material
@@ -79,7 +78,6 @@ struct AboutView: View {
             return visualEffect
         }
     }
-    #endif
 
     /// The window's fixed content width. Height is deliberately not fixed
     /// here: `AboutController` measures this view's natural height at this
@@ -154,9 +152,7 @@ struct AboutView: View {
         }
         .padding(Self.margin)
         .frame(width: Self.windowWidth)
-        #if os(macOS)
         .background(VisualEffectBackground(material: .underWindowBackground).ignoresSafeArea())
-        #endif
     }
 
     private struct PropertyRow: View {
