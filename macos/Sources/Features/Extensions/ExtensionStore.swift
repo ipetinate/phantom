@@ -46,15 +46,105 @@ final class ExtensionStore: ObservableObject {
         extensionsDirOverride ?? GuiConfigStore.shared.extensionsDirURL
     }
 
-    func refresh() async {}
+    func refresh() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        do {
+            index = try await Self.fetchIndex()
+            lastRefreshError = nil
+        } catch {
+            lastRefreshError = Self.refreshMessage(for: error)
+        }
+    }
 
     func reloadInstalled() {
         installed = Self.scanInstalled(in: extensionsDir)
     }
 
-    func install(_ entry: ExtensionIndex.Entry) async {}
+    func install(_ entry: ExtensionIndex.Entry) async {
+        guard activity[entry.id] == nil else { return }
+        errors[entry.id] = nil
+        activity[entry.id] = .downloading(fraction: nil)
+        defer { activity[entry.id] = nil }
 
-    func remove(id: String) async {}
+        let directory = extensionsDir
+        do {
+            try await ExtensionInstaller.install(entry, into: directory) { [weak self] step in
+                self?.activity[entry.id] = step
+            }
+            noteInstalledChanged()
+        } catch {
+            errors[entry.id] = Self.message(for: error)
+            reloadInstalled()
+        }
+    }
+
+    func remove(id: String) async {
+        guard activity[id] == nil else { return }
+        errors[id] = nil
+        activity[id] = .removing
+        defer { activity[id] = nil }
+
+        let directory = extensionsDir
+        let candidate = installed.first { $0.id == id }?.root
+            ?? directory.appendingPathComponent(id, isDirectory: true)
+        let outcome = await Task.detached(priority: .utility) {
+            Result { try ExtensionInstaller.remove(at: candidate, in: directory) }
+        }.value
+
+        switch outcome {
+        case .success:
+            noteInstalledChanged()
+        case .failure(let error):
+            errors[id] = Self.message(for: error)
+            reloadInstalled()
+        }
+    }
+
+    private func noteInstalledChanged() {
+        reloadInstalled()
+        guard extensionsDirOverride == nil else { return }
+        LanguageResolver.shared.reload()
+        LSPCenter.shared.noteAvailabilityChanged()
+    }
+
+    // MARK: Registry
+
+    static let refreshTimeout: TimeInterval = 15
+
+    nonisolated static func fetchIndex() async throws -> ExtensionIndex {
+        let request = URLRequest(
+            url: indexURL,
+            cachePolicy: .reloadRevalidatingCacheData,
+            timeoutInterval: refreshTimeout
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw ExtensionInstaller.Failure.download("the server did not answer over HTTP.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ExtensionInstaller.Failure.httpStatus(http.statusCode)
+        }
+        return try ExtensionIndex.parse(data)
+    }
+
+    nonisolated static func refreshMessage(for error: Error) -> String {
+        switch error {
+        case let parse as ExtensionIndex.ParseError:
+            return "The registry could not be read: \(parse.message)."
+        case ExtensionInstaller.Failure.httpStatus(let code):
+            return "Could not reach the registry: the server answered \(code)."
+        default:
+            return "Could not reach the registry: \(error.localizedDescription)"
+        }
+    }
+
+    nonisolated static func message(for error: Error) -> String {
+        if let failure = error as? ExtensionInstaller.Failure { return failure.message }
+        return error.localizedDescription
+    }
 
     func state(for entry: ExtensionIndex.Entry) -> ExtensionState {
         Self.state(

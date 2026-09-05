@@ -134,7 +134,7 @@ extension ExtensionIndex.Entry {
         let raw = (value as? [Any]) ?? []
         var seen: Set<String> = []
         return raw
-            .compactMap(LanguageManifest.displayString)
+            .compactMap { LanguageManifest.displayString($0) }
             .filter { seen.insert($0).inserted }
             .prefix(maxListItems)
             .map { $0 }
@@ -144,7 +144,7 @@ extension ExtensionIndex.Entry {
         let raw = (value as? [Any]) ?? []
         var seen: Set<String> = []
         return raw
-            .compactMap(LanguageContribution.validLanguageID)
+            .compactMap { LanguageContribution.validLanguageID($0) }
             .filter { seen.insert($0).inserted }
             .prefix(maxListItems)
             .map { $0 }
