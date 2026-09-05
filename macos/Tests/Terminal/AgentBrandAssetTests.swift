@@ -10,9 +10,9 @@ import Testing
 /// against a list written out twice.
 @MainActor
 struct AgentBrandAssetTests {
-    @Test func everyAgentHasAMarkInTheCatalogue() {
+    @Test func everyAgentHasAMarkInTheCatalogue() throws {
         for agent in CodingAgent.allCases {
-            let name = AgentBrandMark.asset(for: agent)
+            let name = try #require(AgentBrandMark.asset(for: agent))
             #expect(NSImage(named: name) != nil, "\(agent) names \(name), which the bundle has not")
         }
     }
@@ -20,7 +20,8 @@ struct AgentBrandAssetTests {
     /// Six agents, six marks. A duplicate would be the bug this replaced —
     /// one glyph standing for all of them — spelled differently.
     @Test func noTwoAgentsShareAMark() {
-        let names = CodingAgent.allCases.map { AgentBrandMark.asset(for: $0) }
+        let names = CodingAgent.allCases.compactMap { AgentBrandMark.asset(for: $0) }
+        #expect(names.count == CodingAgent.allCases.count)
         #expect(Set(names).count == names.count)
     }
 
@@ -101,11 +102,88 @@ struct AgentBrandAssetTests {
 
     /// Sizing the copy must not resize the catalogue's own image, which every
     /// other drawing of the mark reads.
-    @Test func sizingTheMenuIconLeavesTheCatalogueAlone() {
-        let name = AgentBrandMark.asset(for: .claude)
+    @Test func sizingTheMenuIconLeavesTheCatalogueAlone() throws {
+        let name = try #require(AgentBrandMark.asset(for: .claude))
         let before = NSImage(named: name)?.size
         _ = AgentBrandMark.menuIcon(for: .claude)
         #expect(NSImage(named: name)?.size == before)
         #expect(before?.width != AgentBrandMark.menuIconSide)
+    }
+
+    // MARK: A mark that is a file rather than an asset
+
+    private let svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="32" viewBox="0 0 24 32">\
+        <rect width="24" height="32" fill="#336699"/></svg>
+        """
+
+    private func withSVGFile(_ body: (URL) throws -> Void) throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("phantom-mark-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let file = directory.appendingPathComponent("aider.svg")
+        try svg.write(to: file, atomically: true, encoding: .utf8)
+        try body(file)
+    }
+
+    private func fileAgent(_ url: URL, keepsOriginalColours: Bool) -> AgentDescriptor {
+        AgentDescriptor(
+            id: "acme.aider",
+            displayName: "Aider",
+            launchCommand: "aider",
+            resume: ResumeCommand(withSession: "aider --resume {session}", withoutSession: "aider"),
+            installation: AgentInstallation(commands: [], documentation: nil),
+            icon: .file(url),
+            brandColour: .artwork,
+            keepsOriginalColours: keepsOriginalColours,
+            settingsKeyToken: "Aider",
+            hooks: nil,
+            mcp: nil,
+            sessions: .none)
+    }
+
+    @Test func anSVGFileLoadsAsAMark() throws {
+        try withSVGFile { file in
+            let image = try #require(AgentBrandMark.image(for: .file(file)))
+            #expect(image.size.width > 0)
+            #expect(image.size.height > image.size.width)
+        }
+    }
+
+    @Test func aFileMarkHasNoCatalogueName() throws {
+        try withSVGFile { file in
+            let descriptor = fileAgent(file, keepsOriginalColours: true)
+
+            #expect(AgentBrandMark.asset(of: descriptor) == nil)
+            #expect(AgentBrandMark.image(for: descriptor.icon) != nil)
+        }
+    }
+
+    @Test func aFileMarkIsSizedAndTintedForAMenuLikeAnAsset() throws {
+        try withSVGFile { file in
+            let tinted = try #require(AgentBrandMark.menuIcon(
+                for: fileAgent(file, keepsOriginalColours: false)))
+            let coloured = try #require(AgentBrandMark.menuIcon(
+                for: fileAgent(file, keepsOriginalColours: true)))
+
+            #expect(tinted.size.height == AgentBrandMark.menuIconSide)
+            #expect(tinted.size.width == AgentBrandMark.menuIconSide * 24 / 32)
+            #expect(tinted.isTemplate)
+            #expect(!coloured.isTemplate)
+        }
+    }
+
+    @Test func aMissingFileIsNoMark() {
+        let gone = URL(fileURLWithPath: "/nonexistent/phantom/aider.svg")
+
+        #expect(AgentBrandMark.image(for: .file(gone)) == nil)
+        #expect(AgentBrandMark.menuIcon(for: fileAgent(gone, keepsOriginalColours: false)) == nil)
+    }
+
+    @Test func aSymbolIsAMarkToo() {
+        let image = AgentBrandMark.image(for: .symbol("sparkles"))
+        #expect(image != nil)
     }
 }

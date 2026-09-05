@@ -31,6 +31,10 @@ enum CodingAgent: String, Sendable, CaseIterable {
     case kimi
     case pi
 
+    var descriptor: AgentDescriptor {
+        AgentRegistry.shared.descriptor(for: rawValue) ?? .placeholder(id: rawValue)
+    }
+
     /// What to call this agent in the interface.
     ///
     /// Here beside `launchCommand` because the two are the same fact read two
