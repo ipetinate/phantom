@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		FE1C0N7HEME50000000001 /* icon-themes in Resources */ = {isa = PBXBuildFile; fileRef = FE1C0N7HEME50000000002 /* icon-themes */; };
 		FEC0D1C0N50000000001 /* codicons in Resources */ = {isa = PBXBuildFile; fileRef = FEC0D1C0N50000000002 /* codicons */; };
+		FEE7B1E00000000000000001 /* extension-viewer in Resources */ = {isa = PBXBuildFile; fileRef = FEE7B1E00000000000000002 /* extension-viewer */; };
+		FEE7B1E00000000000000003 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = FEE7B1E00000000000000004 /* WebKit.framework */; };
 		6F12C049EEFE4A658EF336CB /* PhantomIconVariants in Resources */ = {isa = PBXBuildFile; fileRef = 1A193CAD60CA403F9852A3A2 /* PhantomIconVariants */; };
 		29C15B1D2CDC3B2900520DD4 /* bat in Resources */ = {isa = PBXBuildFile; fileRef = 29C15B1C2CDC3B2000520DD4 /* bat */; };
 		55154BE02B33911F001622DC /* ghostty in Resources */ = {isa = PBXBuildFile; fileRef = 55154BDF2B33911F001622DC /* ghostty */; };
@@ -71,6 +73,8 @@
 /* Begin PBXFileReference section */
 		FE1C0N7HEME50000000002 /* icon-themes */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "icon-themes"; path = "Resources/icon-themes"; sourceTree = "<group>"; };
 		FEC0D1C0N50000000002 /* codicons */ = {isa = PBXFileReference; lastKnownFileType = folder; name = codicons; path = "Resources/codicons"; sourceTree = "<group>"; };
+		FEE7B1E00000000000000002 /* extension-viewer */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "extension-viewer"; path = "Resources/extension-viewer"; sourceTree = "<group>"; };
+		FEE7B1E00000000000000004 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		1A193CAD60CA403F9852A3A2 /* PhantomIconVariants */ = {isa = PBXFileReference; lastKnownFileType = folder; name = PhantomIconVariants; path = "Resources/PhantomIconVariants"; sourceTree = "<group>"; };
 		29C15B1C2CDC3B2000520DD4 /* bat */ = {isa = PBXFileReference; lastKnownFileType = folder; name = bat; path = "../zig-out/share/bat"; sourceTree = "<group>"; };
 		3B39CAA42B33949B00DABEB8 /* GhosttyReleaseLocal.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GhosttyReleaseLocal.entitlements; sourceTree = "<group>"; };
@@ -152,6 +156,7 @@
 			files = (
 				A51BFC272B30F1B800E92F16 /* Sparkle in Frameworks */,
 				A56B880B2A840447007A0E29 /* Carbon.framework in Frameworks */,
+				FEE7B1E00000000000000003 /* WebKit.framework in Frameworks */,
 				A571AB1D2A206FCF00248498 /* GhosttyKit.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -165,6 +170,7 @@
 				FC9ABA9B2D0F538D0020D4C8 /* bash-completion */,
 				29C15B1C2CDC3B2000520DD4 /* bat */,
 				FEC0D1C0N50000000002 /* codicons */,
+				FEE7B1E00000000000000002 /* extension-viewer */,
 				FE1C0N7HEME50000000002 /* icon-themes */,
 				1A193CAD60CA403F9852A3A2 /* PhantomIconVariants */,
 				A586167B2B7703CC009BDB1D /* fish */,
@@ -213,6 +219,7 @@
 			isa = PBXGroup;
 			children = (
 				A56B880A2A840447007A0E29 /* Carbon.framework */,
+				FEE7B1E00000000000000004 /* WebKit.framework */,
 				A5D495A1299BEC7E00DD1313 /* GhosttyKit.xcframework */,
 			);
 			name = Frameworks;
@@ -393,6 +400,7 @@
 				FC9ABA9C2D0F53F80020D4C8 /* bash-completion in Resources */,
 				29C15B1D2CDC3B2900520DD4 /* bat in Resources */,
 				FEC0D1C0N50000000001 /* codicons in Resources */,
+				FEE7B1E00000000000000001 /* extension-viewer in Resources */,
 				FE1C0N7HEME50000000001 /* icon-themes in Resources */,
 				6F12C049EEFE4A658EF336CB /* PhantomIconVariants in Resources */,
 				A586167C2B7703CC009BDB1D /* fish in Resources */,
