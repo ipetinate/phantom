@@ -9,7 +9,7 @@ import Foundation
 /// a publisher long before anything verifies them, because a format that
 /// gains identity later cannot be retrofitted onto files already published.
 /// `contributes` is the same bet: v1 reads `contributes.languages`,
-/// `formatters`, `themes` and `iconThemes`, and every other key is counted
+/// `formatters`, `themes`, `iconThemes` and `agents`, and every other key is counted
 /// and ignored rather than rejected, so a file written for a later build
 /// still installs the half this one understands.
 ///
@@ -85,6 +85,7 @@ struct LanguageManifest: Equatable, Sendable {
     let formatters: [FormatterContribution]
     let themes: [ThemeContribution]
     let iconThemes: [IconThemeContribution]
+    let agents: [AgentDescriptor]
 
     /// Keys this build ignored, top-level and under `contributes`, so
     /// Settings can say how much of the file it did not understand.
@@ -130,6 +131,7 @@ struct LanguageManifest: Equatable, Sendable {
     /// parses cleanly and reports itself unsupported.
     var isUsable: Bool {
         !languages.isEmpty || !formatters.isEmpty || !themes.isEmpty || !iconThemes.isEmpty
+            || !agents.isEmpty
     }
 
     /// A short reason to show beside an entry that isn't fully in force, or
@@ -182,7 +184,7 @@ struct LanguageManifest: Equatable, Sendable {
         "schemaVersion", "id", "name", "version", "publisher", "contributes",
     ]
     private static let knownContributesKeys: Set<String> = [
-        "languages", "formatters", "themes", "iconThemes",
+        "languages", "formatters", "themes", "iconThemes", "agents",
     ]
 
     /// Builds the value from an already-decoded object and a digest taken
@@ -220,12 +222,16 @@ struct LanguageManifest: Equatable, Sendable {
             }
 
         let formatters: [FormatterContribution]
+        let agents: [AgentDescriptor]
         switch eligibility {
         case .eligible:
             formatters = objects(contributes["formatters"], limit: FormatterContribution.maxFormatters)
                 .compactMap(FormatterContribution.parse(json:))
+            agents = objects(contributes["agents"], limit: AgentContribution.maxAgents)
+                .compactMap { AgentContribution.parse(json: $0, root: root) }
         case .needsNewerApp, .unidentified:
             formatters = []
+            agents = []
         }
         let themes = objects(contributes["themes"], limit: ThemeContribution.maxThemes)
             .compactMap { ThemeContribution.parse(json: $0, root: root) }
@@ -242,6 +248,7 @@ struct LanguageManifest: Equatable, Sendable {
             formatters: deduped(formatters, by: \.id),
             themes: deduped(themes, by: \.name),
             iconThemes: deduped(iconThemes, by: \.name),
+            agents: deduped(agents, by: \.id),
             unrecognizedFields: unrecognized.sorted(),
             digest: digest,
             manifestURL: url,
