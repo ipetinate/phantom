@@ -58,7 +58,11 @@ enum CodexHooksInstaller {
     /// argument rather than an empty one — see `ClaudeHooksInstaller.command`
     /// for why the distinction matters.
     static func command(for state: String) -> String {
-        state.isEmpty ? "'\(scriptURL.path)'" : "'\(scriptURL.path)' \(state)"
+        command(for: state, scriptPath: scriptURL.path)
+    }
+
+    static func command(for state: String, scriptPath: String) -> String {
+        state.isEmpty ? "'\(scriptPath)'" : "'\(scriptPath)' \(state)"
     }
 
     /// The id extraction here has since been run against a real Codex: the
@@ -203,22 +207,10 @@ enum CodexHooksInstaller {
             return fail("writing Codex hook script", error)
         }
 
-        guard var settings = readSettings() else {
+        guard let before = readSettings() else {
             return fail("hooks.json is unreadable or isn't a JSON object")
         }
-        var hooks = settings["hooks"] as? [String: Any] ?? [:]
-        for (event, state) in eventStates {
-            var entries = hooks[event] as? [[String: Any]] ?? []
-            entries.removeAll { commands(in: $0).contains { $0.contains(scriptName) } }
-            entries.append([
-                "hooks": [[
-                    "type": "command",
-                    "command": Self.command(for: state)
-                ]]
-            ])
-            hooks[event] = entries
-        }
-        settings["hooks"] = hooks
+        let settings = registered(into: before, scriptPath: scriptURL.path)
         guard writeSettings(settings), isInstalled else {
             return fail("Codex hooks were written but could not be verified")
         }
@@ -226,11 +218,27 @@ enum CodexHooksInstaller {
         return true
     }
 
-    @discardableResult
-    static func uninstall() -> Bool {
-        guard var settings = readSettings() else {
-            return fail("hooks.json is unreadable or isn't a JSON object")
+    static func registered(into settings: [String: Any], scriptPath: String) -> [String: Any] {
+        let scriptName = (scriptPath as NSString).lastPathComponent
+        var settings = settings
+        var hooks = settings["hooks"] as? [String: Any] ?? [:]
+        for (event, state) in eventStates {
+            var entries = hooks[event] as? [[String: Any]] ?? []
+            entries.removeAll { commands(in: $0).contains { $0.contains(scriptName) } }
+            entries.append([
+                "hooks": [[
+                    "type": "command",
+                    "command": Self.command(for: state, scriptPath: scriptPath)
+                ]]
+            ])
+            hooks[event] = entries
         }
+        settings["hooks"] = hooks
+        return settings
+    }
+
+    static func removed(from settings: [String: Any], scriptName: String) -> [String: Any] {
+        var settings = settings
         if var hooks = settings["hooks"] as? [String: Any] {
             for (event, value) in hooks {
                 guard var entries = value as? [[String: Any]] else { continue }
@@ -239,6 +247,15 @@ enum CodexHooksInstaller {
             }
             settings["hooks"] = hooks
         }
+        return settings
+    }
+
+    @discardableResult
+    static func uninstall() -> Bool {
+        guard let before = readSettings() else {
+            return fail("hooks.json is unreadable or isn't a JSON object")
+        }
+        let settings = removed(from: before, scriptName: scriptName)
         try? FileManager.default.removeItem(at: scriptURL)
         guard writeSettings(settings),
               !isRegisteredForAnyEvent(in: readSettings())

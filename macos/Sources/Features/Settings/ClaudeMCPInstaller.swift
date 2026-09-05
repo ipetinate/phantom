@@ -50,11 +50,16 @@ enum ClaudeMCPInstaller {
     /// emits it and a file where Phantom's entry is the only one missing it
     /// reads like an entry somebody hand-wrote wrong.
     static var entry: [String: Any]? {
-        guard let path = MCPServerCommand.executablePath else { return nil }
-        return [
+        MCPServerCommand.executablePath.map {
+            entry(executable: $0, arguments: MCPServerCommand.arguments)
+        }
+    }
+
+    static func entry(executable: String, arguments: [String]) -> [String: Any] {
+        [
             "type": "stdio",
-            "command": path,
-            "args": MCPServerCommand.arguments,
+            "command": executable,
+            "args": arguments,
         ]
     }
 

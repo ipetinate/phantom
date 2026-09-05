@@ -46,10 +46,15 @@ enum OpenCodeMCPInstaller {
     /// off by hand and then pressed Register would otherwise get a registration
     /// that reports as installed and does nothing.
     static var entry: [String: Any]? {
-        guard let path = MCPServerCommand.executablePath else { return nil }
-        return [
+        MCPServerCommand.executablePath.map {
+            entry(executable: $0, arguments: MCPServerCommand.arguments)
+        }
+    }
+
+    static func entry(executable: String, arguments: [String]) -> [String: Any] {
+        [
             "type": "local",
-            "command": [path] + MCPServerCommand.arguments,
+            "command": [executable] + arguments,
             "enabled": true,
         ]
     }

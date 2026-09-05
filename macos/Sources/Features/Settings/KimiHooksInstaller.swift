@@ -58,7 +58,11 @@ enum KimiHooksInstaller {
     ]
 
     static func command(for state: String) -> String {
-        state.isEmpty ? "'\(scriptURL.path)'" : "'\(scriptURL.path)' \(state)"
+        command(for: state, scriptPath: scriptURL.path)
+    }
+
+    static func command(for state: String, scriptPath: String) -> String {
+        state.isEmpty ? "'\(scriptPath)'" : "'\(scriptPath)' \(state)"
     }
 
     /// One `[[hooks]]` block per event.
@@ -67,6 +71,10 @@ enum KimiHooksInstaller {
     /// for every tool. `timeout` is set low on purpose — this script writes one
     /// small file, and a hook that hangs holds up the agent's turn.
     static var block: String {
+        block(scriptPath: scriptURL.path)
+    }
+
+    static func block(scriptPath: String) -> String {
         var lines = [
             "# Phantom: reports this tab's agent state to the sidebar.",
             "# Managed by Phantom. Edit the app's Settings rather than these blocks.",
@@ -76,11 +84,19 @@ enum KimiHooksInstaller {
                 "",
                 "[[hooks]]",
                 "event = \"\(event)\"",
-                "command = \(tomlString(command(for: state)))",
+                "command = \(tomlString(command(for: state, scriptPath: scriptPath)))",
                 "timeout = 5",
             ]
         }
         return lines.joined(separator: "\n")
+    }
+
+    static func installed(into text: String, scriptPath: String) -> String {
+        let cleaned = removed(from: text)
+        let separator = cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? ""
+            : "\n\n"
+        return cleaned + separator + block(scriptPath: scriptPath) + "\n"
     }
 
     /// A TOML basic string. The path is the reader's home directory and can
@@ -271,11 +287,7 @@ enum KimiHooksInstaller {
         }
 
         let existing = read(at: configURL) ?? ""
-        let cleaned = removed(from: existing)
-        let separator = cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? ""
-            : "\n\n"
-        return write(cleaned + separator + block + "\n", to: configURL)
+        return write(installed(into: existing, scriptPath: scriptURL.path), to: configURL)
     }
 
     static func uninstall() -> Bool {

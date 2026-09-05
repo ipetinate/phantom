@@ -47,12 +47,16 @@ enum CodexMCPInstaller {
 
     /// The four lines Phantom writes, and the whole of what it owns.
     static func block(executable: String) -> String {
-        let args = MCPServerCommand.arguments
+        block(executable: executable, arguments: MCPServerCommand.arguments, name: MCPServerCommand.name)
+    }
+
+    static func block(executable: String, arguments: [String], name: String) -> String {
+        let args = arguments
             .map { "\"\(escaped($0))\"" }
             .joined(separator: ", ")
 
         return """
-        [\(table)]
+        [mcp_servers.\(name)]
         command = "\(escaped(executable))"
         args = [\(args)]
         """

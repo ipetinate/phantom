@@ -119,7 +119,11 @@ enum AntigravityHooksInstaller {
     /// it beats parsing `hookEventName` back out of the payload: a word the
     /// installer already knows cannot fail to parse.
     static func command(for state: String, event: String) -> String {
-        "'\(scriptURL.path)' \(state) \(event)"
+        command(for: state, event: event, scriptPath: scriptURL.path)
+    }
+
+    static func command(for state: String, event: String, scriptPath: String) -> String {
+        "'\(scriptPath)' \(state) \(event)"
     }
 
     /// Not private, so a test can run the real script against a real payload.
@@ -313,12 +317,16 @@ enum AntigravityHooksInstaller {
     /// `{ matcher, hooks }` form belongs to the tool events, which
     /// `eventStates` deliberately does not register.
     static var registration: [String: Any] {
+        registration(scriptPath: scriptURL.path)
+    }
+
+    static func registration(scriptPath: String) -> [String: Any] {
         var events: [String: Any] = [:]
         for (event, state) in eventStates {
             events[event] = [
                 [
                     "type": "command",
-                    "command": Self.command(for: state, event: event),
+                    "command": Self.command(for: state, event: event, scriptPath: scriptPath),
                 ]
             ]
         }

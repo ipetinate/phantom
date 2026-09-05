@@ -44,10 +44,15 @@ enum AntigravityMCPInstaller {
     /// `url` and `httpUrl` fields are gone, which is worth knowing only because
     /// it says how much this schema has moved.
     static var entry: [String: Any]? {
-        guard let path = MCPServerCommand.executablePath else { return nil }
-        return [
-            "command": path,
-            "args": MCPServerCommand.arguments,
+        MCPServerCommand.executablePath.map {
+            entry(executable: $0, arguments: MCPServerCommand.arguments)
+        }
+    }
+
+    static func entry(executable: String, arguments: [String]) -> [String: Any] {
+        [
+            "command": executable,
+            "args": arguments,
         ]
     }
 

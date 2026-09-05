@@ -122,7 +122,11 @@ enum ClaudeHooksInstaller {
     /// them a state word. Omitting the argument reads the same both ways, and
     /// the script already treats a missing `$1` as "identity only".
     static func command(for state: String) -> String {
-        state.isEmpty ? "'\(scriptURL.path)'" : "'\(scriptURL.path)' \(state)"
+        command(for: state, scriptPath: scriptURL.path)
+    }
+
+    static func command(for state: String, scriptPath: String) -> String {
+        state.isEmpty ? "'\(scriptPath)'" : "'\(scriptPath)' \(state)"
     }
 
     /// Not private, so that a test can run the real script against a real
@@ -402,33 +406,11 @@ enum ClaudeHooksInstaller {
             return fail("writing hook script", error)
         }
 
-        guard var settings = readSettings() else {
+        guard let before = readSettings() else {
             return fail("settings.json unreadable or not an object")
         }
-        var hooks = settings["hooks"] as? [String: Any] ?? [:]
-
-        for (event, state) in eventStates {
-            var entries = hooks[event] as? [[String: Any]] ?? []
-
-            entries.removeAll { entry in
-                commandsIn(entry).contains {
-                    $0.contains(scriptName)
-                        || (!legacyScriptName.isEmpty && $0.contains(legacyScriptName))
-                }
-            }
-
-            entries.append([
-                "hooks": [
-                    [
-                        "type": "command",
-                        "command": Self.command(for: state),
-                    ]
-                ]
-            ])
-            hooks[event] = entries
-        }
-
-        settings["hooks"] = hooks
+        let settings = registered(
+            into: before, scriptPath: scriptURL.path, legacyScriptName: legacyScriptName)
         guard writeSettings(settings) else {
             return fail("writing settings.json")
         }
@@ -445,12 +427,46 @@ enum ClaudeHooksInstaller {
         return true
     }
 
-    @discardableResult
-    static func uninstall() -> Bool {
-        guard var settings = readSettings() else {
-            return fail("settings.json unreadable or not an object")
+    static func registered(
+        into settings: [String: Any],
+        scriptPath: String,
+        legacyScriptName: String
+    ) -> [String: Any] {
+        let scriptName = (scriptPath as NSString).lastPathComponent
+        var settings = settings
+        var hooks = settings["hooks"] as? [String: Any] ?? [:]
+
+        for (event, state) in eventStates {
+            var entries = hooks[event] as? [[String: Any]] ?? []
+
+            entries.removeAll { entry in
+                commandsIn(entry).contains {
+                    $0.contains(scriptName)
+                        || (!legacyScriptName.isEmpty && $0.contains(legacyScriptName))
+                }
+            }
+
+            entries.append([
+                "hooks": [
+                    [
+                        "type": "command",
+                        "command": Self.command(for: state, scriptPath: scriptPath),
+                    ]
+                ]
+            ])
+            hooks[event] = entries
         }
 
+        settings["hooks"] = hooks
+        return settings
+    }
+
+    static func removed(
+        from settings: [String: Any],
+        scriptName: String,
+        legacyScriptName: String
+    ) -> [String: Any] {
+        var settings = settings
         if var hooks = settings["hooks"] as? [String: Any] {
             for (event, value) in hooks {
                 guard var entries = value as? [[String: Any]] else { continue }
@@ -464,6 +480,16 @@ enum ClaudeHooksInstaller {
             }
             settings["hooks"] = hooks
         }
+        return settings
+    }
+
+    @discardableResult
+    static func uninstall() -> Bool {
+        guard let before = readSettings() else {
+            return fail("settings.json unreadable or not an object")
+        }
+        let settings = removed(
+            from: before, scriptName: scriptName, legacyScriptName: legacyScriptName)
 
         try? FileManager.default.removeItem(at: scriptURL)
         guard writeSettings(settings) else {
