@@ -30,4 +30,32 @@ struct ConfirmationPromptTests {
     @Test func noDetailsIsNoText() {
         #expect(prompt(details: []).detailText.isEmpty)
     }
+
+    @Test func theTrustPromptDefaultsToRefusing() {
+        let request = LanguageTrustAlert.Request(
+            extensionName: "Lua",
+            extensionID: "acme.lua",
+            publisher: "Acme",
+            extensionVersion: "1.0.0",
+            languageName: "Lua",
+            command: "lua-language-server",
+            arguments: ["--stdio"],
+            resolvedPath: "/opt/homebrew/bin/lua-language-server",
+            manifestPath: "/Users/x/.config/phantom/extensions/acme.lua/extension.json",
+            change: .firstRun
+        )
+
+        let prompt = LanguageTrustAlert.prompt(for: request)
+
+        #expect(prompt.secondary == .init(title: "Don't Run", isDefault: true))
+        #expect(prompt.primary == .init(title: "Run Language Server"))
+        #expect(prompt.change == nil)
+        #expect(prompt.details.map(\.label) == [
+            "Publisher", "Command", "Resolves to", "Manifest", "Extension", "Version",
+        ])
+        #expect(prompt.detailText.contains("Command: lua-language-server --stdio"))
+        #expect(LanguageTrustAlert.informativeText(for: request) == [
+            prompt.consequence, prompt.remember,
+        ].compactMap { $0 }.joined(separator: "\n\n"))
+    }
 }
