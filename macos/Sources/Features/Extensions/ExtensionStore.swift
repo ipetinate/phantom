@@ -251,9 +251,22 @@ final class ExtensionStore: ObservableObject {
 
     static let refreshTimeout: TimeInterval = 15
 
+    /// The registry's index carries a stamp of the minute it is asked for.
+    ///
+    /// A release asset is served from a cache that keeps answering with the
+    /// bytes it already has for minutes after the asset is replaced, so a
+    /// freshly published extension was invisible to the store while the plain
+    /// URL was still handing out yesterday's catalogue.
+    nonisolated static func indexRequestURL(_ base: URL = indexURL, now: Date = Date()) -> URL {
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
+        let minute = Int(now.timeIntervalSince1970 / 60)
+        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "t", value: String(minute))]
+        return components.url ?? base
+    }
+
     nonisolated static func fetchIndex() async throws -> ExtensionIndex {
         let request = URLRequest(
-            url: indexURL,
+            url: indexRequestURL(),
             cachePolicy: .reloadRevalidatingCacheData,
             timeoutInterval: refreshTimeout
         )

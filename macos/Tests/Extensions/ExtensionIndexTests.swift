@@ -179,3 +179,14 @@ struct ExtensionIndexTests {
         #expect(index.extensions.isEmpty)
     }
 }
+
+struct ExtensionIndexRequestTests {
+    @Test func theIndexIsAskedForByTheMinute() {
+        let base = ExtensionStore.indexURL
+        let at = Date(timeIntervalSince1970: 1_800_000_120)
+        let url = ExtensionStore.indexRequestURL(base, now: at)
+        #expect(url.absoluteString == base.absoluteString + "?t=30000002")
+        #expect(ExtensionStore.indexRequestURL(base, now: at.addingTimeInterval(30)) == url)
+        #expect(ExtensionStore.indexRequestURL(base, now: at.addingTimeInterval(90)) != url)
+    }
+}
