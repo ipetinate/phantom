@@ -93,11 +93,11 @@ struct ExtensionCardTests {
         let paths = ["/etc/passwd", "../cover.png", "media/../cover.png", "media\\cover.png", "~/cover.png",
                      "./media/cover.png", "media/", "", "media/co\u{202E}ver.png"]
         for path in paths {
-            #expect(ExtensionCard.parse(Self.card(["cover": path])) == nil, path)
-            #expect(ExtensionCard.parse(Self.card(["screenshots": [path]])) == nil, path)
-            #expect(ExtensionCard.parse(Self.card(["icon": path])) == nil, path)
+            #expect(ExtensionCard.parse(Self.card(["cover": path])) == nil, "\(path)")
+            #expect(ExtensionCard.parse(Self.card(["screenshots": [path]])) == nil, "\(path)")
+            #expect(ExtensionCard.parse(Self.card(["icon": path])) == nil, "\(path)")
             let media: [[String: Any]] = [["path": path, "bytes": 10]]
-            #expect(ExtensionCard.parse(Self.card(["media": media])) == nil, path)
+            #expect(ExtensionCard.parse(Self.card(["media": media])) == nil, "\(path)")
         }
     }
 

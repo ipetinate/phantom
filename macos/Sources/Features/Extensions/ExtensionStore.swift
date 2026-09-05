@@ -20,6 +20,12 @@ enum ExtensionActivity: Equatable, Sendable {
     case removing
 }
 
+enum PreviewState: Equatable, Sendable {
+    case loading
+    case ready(document: URL, base: URL)
+    case unavailable(String)
+}
+
 @MainActor
 final class ExtensionStore: ObservableObject {
     static let shared = ExtensionStore()
@@ -32,18 +38,35 @@ final class ExtensionStore: ObservableObject {
     @Published private(set) var installed: [InstalledExtension] = []
     @Published private(set) var activity: [String: ExtensionActivity] = [:]
     @Published private(set) var errors: [String: String] = [:]
+    @Published private(set) var previews: [String: PreviewState] = [:]
+    @Published private(set) var viewerHTML: URL?
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastRefreshError: String?
 
     private let extensionsDirOverride: URL?
+    private let cachesDirOverride: URL?
+    private var stagings: [String: Task<URL, Error>] = [:]
 
-    init(extensionsDir: URL? = nil) {
+    init(extensionsDir: URL? = nil, cachesDir: URL? = nil) {
         self.extensionsDirOverride = extensionsDir
+        self.cachesDirOverride = cachesDir
         reloadInstalled()
+
+        guard cachesDir != nil || extensionsDir == nil else { return }
+        let root = previewRoot
+        Task.detached(priority: .utility) { ExtensionPreviewCache.evict(root: root) }
     }
 
     var extensionsDir: URL {
         extensionsDirOverride ?? GuiConfigStore.shared.extensionsDirURL
+    }
+
+    var cachesDir: URL {
+        cachesDirOverride ?? GuiConfigStore.shared.cachesDirURL
+    }
+
+    var previewRoot: URL {
+        ExtensionPreviewCache.root(cachesDir: cachesDir)
     }
 
     func refresh() async {
@@ -66,14 +89,16 @@ final class ExtensionStore: ObservableObject {
     func install(_ entry: ExtensionIndex.Entry) async {
         guard activity[entry.id] == nil else { return }
         errors[entry.id] = nil
-        activity[entry.id] = .downloading(fraction: nil)
+        activity[entry.id] = .verifying
         defer { activity[entry.id] = nil }
 
         let directory = extensionsDir
         do {
-            try await ExtensionInstaller.install(entry, into: directory) { [weak self] step in
-                self?.activity[entry.id] = step
-            }
+            let staged = try await stagedDirectory(for: entry)
+            activity[entry.id] = .installing
+            try await Task.detached(priority: .utility) {
+                try ExtensionInstaller.install(from: staged, as: entry, into: directory)
+            }.value
             noteInstalledChanged()
         } catch {
             errors[entry.id] = Self.message(for: error)
@@ -110,6 +135,101 @@ final class ExtensionStore: ObservableObject {
         LSPCenter.shared.noteAvailabilityChanged()
     }
 
+    // MARK: Preview
+
+    func preview(_ entry: ExtensionIndex.Entry) async {
+        let root = previewRoot
+        let expected = ExtensionPreviewCache.directory(for: entry, root: root)
+        guard shouldPreview(id: entry.id, expecting: expected) else { return }
+        previews[entry.id] = .loading
+
+        do {
+            try await prepareViewer(in: root)
+            let directory = try await stagedDirectory(for: entry)
+            let icon = entry.card?.icon
+            try await Task.detached(priority: .utility) {
+                try ExtensionMediaGate.check(directory: directory, icon: icon)
+            }.value
+            previews[entry.id] = Self.previewState(directory: directory, root: root)
+        } catch {
+            previews[entry.id] = .unavailable(Self.message(for: error))
+        }
+    }
+
+    func preview(installed: InstalledExtension) async {
+        let root = previewRoot
+        guard let manifest = LanguageManifest.load(directory: installed.root, scope: .user) else {
+            previews[installed.id] = .unavailable(ExtensionPreviewCache.Failure.unreadableManifest.message)
+            return
+        }
+        let expected = ExtensionPreviewCache.localDirectory(
+            id: installed.id, version: installed.version, manifestDigest: manifest.digest, root: root)
+        guard shouldPreview(id: installed.id, expecting: expected) else { return }
+        previews[installed.id] = .loading
+
+        do {
+            try await prepareViewer(in: root)
+            let digest = manifest.digest
+            let directory = try await Task.detached(priority: .utility) {
+                try ExtensionPreviewCache.mirror(installed: installed, manifestDigest: digest, root: root)
+            }.value
+            previews[installed.id] = Self.previewState(directory: directory, root: root)
+        } catch {
+            previews[installed.id] = .unavailable(Self.message(for: error))
+        }
+    }
+
+    func forgetPreview(id: String) {
+        previews[id] = nil
+    }
+
+    private func shouldPreview(id: String, expecting directory: URL) -> Bool {
+        switch previews[id] {
+        case .loading:
+            return false
+        case .ready(let document, _):
+            return document.deletingLastPathComponent().standardizedFileURL != directory.standardizedFileURL
+        case .unavailable, .none:
+            return true
+        }
+    }
+
+    private func prepareViewer(in root: URL) async throws {
+        let viewer = try await Task.detached(priority: .utility) {
+            try ExtensionViewerBundle.copyIfNeeded(into: root)
+        }.value
+        viewerHTML = ExtensionViewerBundle.html(in: viewer)
+    }
+
+    private func stagedDirectory(for entry: ExtensionIndex.Entry) async throws -> URL {
+        if let running = stagings[entry.id] { return try await running.value }
+
+        let root = previewRoot
+        let verified = await Task.detached(priority: .utility) {
+            ExtensionPreviewCache.verified(entry, root: root)
+        }.value
+        if let verified { return verified }
+
+        let report: @MainActor @Sendable (ExtensionActivity) -> Void = { [weak self] step in
+            guard let self, self.activity[entry.id] != nil else { return }
+            self.activity[entry.id] = step
+        }
+        let staging = Task<URL, Error>.detached(priority: .utility) {
+            try await ExtensionPreviewCache.stage(entry, root: root, progress: report)
+        }
+        stagings[entry.id] = staging
+        defer { stagings[entry.id] = nil }
+        return try await staging.value
+    }
+
+    nonisolated static func previewState(directory: URL, root: URL) -> PreviewState {
+        let document = directory.appendingPathComponent(ExtensionCard.documentFileName)
+        guard FileManager.default.fileExists(atPath: document.path) else {
+            return .unavailable("The extension ships no document.")
+        }
+        return .ready(document: document, base: root)
+    }
+
     // MARK: Registry
 
     static let refreshTimeout: TimeInterval = 15
@@ -142,8 +262,13 @@ final class ExtensionStore: ObservableObject {
     }
 
     nonisolated static func message(for error: Error) -> String {
-        if let failure = error as? ExtensionInstaller.Failure { return failure.message }
-        return error.localizedDescription
+        switch error {
+        case let failure as ExtensionInstaller.Failure: return failure.message
+        case let violation as ExtensionMediaGate.Violation: return violation.message
+        case let failure as ExtensionPreviewCache.Failure: return failure.message
+        case let failure as ExtensionViewerBundle.Failure: return failure.message
+        default: return error.localizedDescription
+        }
     }
 
     func state(for entry: ExtensionIndex.Entry) -> ExtensionState {
