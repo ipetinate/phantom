@@ -17,6 +17,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # build.zig.zon declares the version and phantom-release.yml derives the tag,
+  # the release title and the Info.plist from it. The Xcode project declares it
+  # a second time, and that copy is what a build made outside the release
+  # workflow reports — including to Sparkle, which compares it against the
+  # appcast to decide whether an update is newer. Two declarations that can
+  # disagree in silence are one too many, so this makes them disagree loudly.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: build.zig.zon and MARKETING_VERSION agree
+        run: |
+          set -euo pipefail
+          DECLARED=$(grep -m1 '\.version' build.zig.zon | sed -E 's/.*"([^"]+)".*/\1/')
+          NUMBER=${DECLARED%%-*}
+          MARKETING=$(grep -m1 'MARKETING_VERSION = ' macos/Ghostty.xcodeproj/project.pbxproj \
+            | sed -E 's/.*MARKETING_VERSION = ([^;]+);.*/\1/')
+          echo "build.zig.zon=$DECLARED  number=$NUMBER  MARKETING_VERSION=$MARKETING"
+          if [ "$NUMBER" != "$MARKETING" ]; then
+            echo "::error::build.zig.zon declares $DECLARED but MARKETING_VERSION is $MARKETING" >&2
+            exit 1
+          fi
+
   zig-fmt:
     runs-on: ubuntu-latest
     steps:
