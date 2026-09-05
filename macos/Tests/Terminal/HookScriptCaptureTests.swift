@@ -365,11 +365,11 @@ struct HookScriptCaptureTests {
     /// two tabs in one directory are told apart — which no on-disk lookup can
     /// do, because nothing on disk distinguishes them.
     @Test func bothInstallersRegisterASessionStartThatReportsNoState() {
-        let claude = ClaudeHooksInstaller.eventStates
-        let codex = CodexHooksInstaller.eventStates
+        let claude = AgentRegistry.claude.hooks?.hookEvents ?? []
+        let codex = AgentRegistry.codex.hooks?.hookEvents ?? []
 
-        #expect(claude.contains { $0.event == "SessionStart" && $0.state.isEmpty })
-        #expect(codex.contains { $0.event == "SessionStart" && $0.state.isEmpty })
+        #expect(claude.contains { $0.name == "SessionStart" && $0.state.isEmpty })
+        #expect(codex.contains { $0.name == "SessionStart" && $0.state.isEmpty })
 
         // Exactly one event may be stateless. Anything else reporting an empty
         // word would silently erase a live indicator.
@@ -381,7 +381,7 @@ struct HookScriptCaptureTests {
     /// Codex's internal normalization and appear only as bookkeeping keys under
     /// `[hooks.state]` in `config.toml`; writing those would register nothing.
     @Test func codexEventNamesArePascalCase() {
-        for (event, _) in CodexHooksInstaller.eventStates {
+        for event in AgentRegistry.codex.hooks?.events ?? [] {
             #expect(!event.contains("_"), "\(event) is not the spelling hooks.json takes")
             #expect(event.first?.isUppercase == true, "\(event) is not PascalCase")
         }
@@ -391,17 +391,19 @@ struct HookScriptCaptureTests {
     /// so the registered line cannot carry a literal `''` whose meaning depends
     /// on whether a shell is in the way. The descriptor's options follow the
     /// script either way, and the agent is always named.
-    @Test func aStatelessEventRegistersWithNoStateWord() {
-        let path = ClaudeHooksInstaller.scriptURL.path
-        let stateless = ClaudeHooksInstaller.command(for: "")
+    @Test func aStatelessEventRegistersWithNoStateWord() throws {
+        let claude = try #require(JSONHooksInstaller(descriptor: AgentRegistry.claude))
+        let codex = try #require(JSONHooksInstaller(descriptor: AgentRegistry.codex))
+        let start = HooksIntegration.Event("SessionStart", "")
+        let stateless = claude.command(for: start)
 
         #expect(!stateless.hasSuffix(" "))
         #expect(!stateless.contains("''"))
-        #expect(stateless.hasPrefix("'\(path)' --agent claude"))
-        #expect(ClaudeHooksInstaller.command(for: "done").hasPrefix("'\(path)' done --agent claude"))
-        #expect(CodexHooksInstaller.command(for: "")
-            .hasPrefix("'\(CodexHooksInstaller.scriptURL.path)' --agent codex"))
-        #expect(!CodexHooksInstaller.command(for: "").hasSuffix(" "))
+        #expect(stateless.hasPrefix("'\(claude.scriptURL.path)' --agent claude"))
+        #expect(claude.command(for: .init("Stop", "done"))
+            .hasPrefix("'\(claude.scriptURL.path)' done --agent claude"))
+        #expect(codex.command(for: start).hasPrefix("'\(codex.scriptURL.path)' --agent codex"))
+        #expect(!codex.command(for: start).hasSuffix(" "))
     }
 
     /// Invoked the way that registration invokes it — no argument — the script

@@ -149,6 +149,14 @@ enum HooksIntegration: Equatable, Sendable {
         let events: [String]
     }
 
+    var hookEvents: [Event] {
+        switch self {
+        case .json(let hooks): return hooks.events
+        case .toml(let hooks): return hooks.events
+        case .file: return []
+        }
+    }
+
     var events: [String] {
         switch self {
         case .json(let hooks): return hooks.events.map(\.name)

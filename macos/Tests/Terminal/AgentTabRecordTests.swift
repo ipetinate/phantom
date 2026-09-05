@@ -323,7 +323,7 @@ struct ClaudeHookScriptTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let script = dir.appendingPathComponent(ClaudeHooksInstaller.scriptName)
+        let script = dir.appendingPathComponent(TabStateScript.fileName)
         try TabStateScript.body.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: script.path)
@@ -574,7 +574,8 @@ struct UninstallableAgentHookTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let plugin = dir.appendingPathComponent("phantom-integration.mjs")
-        try OpenCodeHooksInstaller.pluginBody.write(to: plugin, atomically: true, encoding: .utf8)
+        try #require(PluginFileInstaller.body(of: AgentRegistry.opencode))
+            .write(to: plugin, atomically: true, encoding: .utf8)
 
         let check = Process()
         check.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -646,7 +647,8 @@ struct UninstallableAgentHookTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let plugin = dir.appendingPathComponent("phantom-integration.mjs")
-        try OpenCodeHooksInstaller.pluginBody.write(to: plugin, atomically: true, encoding: .utf8)
+        try #require(PluginFileInstaller.body(of: AgentRegistry.opencode))
+            .write(to: plugin, atomically: true, encoding: .utf8)
 
         let stateFile = dir.appendingPathComponent("state")
         // The plugin serializes its writes through a promise chain, so the

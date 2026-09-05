@@ -3,16 +3,27 @@ import Foundation
 @testable import Ghostty
 import Testing
 
-/// What the six agents' installers write, pinned as literal documents.
+/// What the six agents' installers wrote, pinned as literal documents, and
+/// what the engines driven by the built-in descriptors write now.
 ///
-/// The installers are about to be replaced by engines driven by the built-in
-/// descriptors, and nobody can run the app to see whether an engine wrote what
-/// its installer wrote. So the products of today's pure builders are written
-/// out here, byte for byte, and the engines have to reproduce them.
+/// The literals were captured from the per-agent installers before those were
+/// deleted, and nobody can run the app to see whether an engine writes what its
+/// installer wrote. So every engine is built against `/h`, an empty environment
+/// and the release bundle id, and has to reproduce each document byte for byte.
 @MainActor
 struct AgentInstallerFixtureTests {
     private let executable = "/x/Phantom.app/Contents/MacOS/ghostty"
     private let arguments = ["+mcp-server", "--socket=/tmp/phantom.sock"]
+    private let home = URL(fileURLWithPath: "/h", isDirectory: true)
+
+    private func hooks(_ descriptor: AgentDescriptor) throws -> JSONHooksInstaller {
+        try #require(JSONHooksInstaller(
+            descriptor: descriptor, environment: [:], home: home, bundleID: PhantomBuild.releaseBundleID))
+    }
+
+    private func mcp(_ descriptor: AgentDescriptor) throws -> JSONMCPInstaller {
+        try #require(JSONMCPInstaller(descriptor: descriptor, environment: [:], home: home))
+    }
 
     private func json(_ text: String) throws -> [String: Any] {
         try #require(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
@@ -70,32 +81,33 @@ struct AgentInstallerFixtureTests {
     """#
 
     @Test func claudeHooksDocument() throws {
-        let produced = ClaudeHooksInstaller.registered(
-            into: try json(Self.claudeSettingsBefore),
-            scriptPath: "/h/.claude/hooks/phantom-tab-state.sh",
-            legacyScriptName: "ghostty-tab-state.sh")
+        let produced = try hooks(AgentRegistry.claude).registered(
+            into: try json(Self.claudeSettingsBefore))
 
         try expectSame(produced, try json(Self.claudeSettingsAfter))
     }
 
     @Test func claudeHooksRemoval() throws {
-        let produced = ClaudeHooksInstaller.removed(
-            from: try json(Self.claudeSettingsAfter),
-            scriptName: "phantom-tab-state.sh",
-            legacyScriptName: "ghostty-tab-state.sh")
+        let produced = try hooks(AgentRegistry.claude).removed(
+            from: try json(Self.claudeSettingsAfter))
 
         try expectSame(produced, try json(Self.claudeSettingsRemoved))
     }
 
-    @Test func claudeCommandLines() {
-        let path = "/h/.claude/hooks/phantom-tab-state.sh"
+    @Test func claudeCommandLines() throws {
+        let claude = try hooks(AgentRegistry.claude)
 
-        #expect(ClaudeHooksInstaller.command(for: "", scriptPath: path) == "'/h/.claude/hooks/phantom-tab-state.sh' --agent claude --session-key session_id --state-from source=compact:compacting")
-        #expect(ClaudeHooksInstaller.command(for: "done", scriptPath: path) == "'/h/.claude/hooks/phantom-tab-state.sh' done --agent claude --session-key session_id --state-from source=compact:compacting")
+        #expect(claude.scriptURL.path == "/h/.claude/hooks/phantom-tab-state.sh")
+        #expect(claude.command(for: .init("SessionStart", ""))
+            == "'/h/.claude/hooks/phantom-tab-state.sh' --agent claude --session-key session_id --state-from source=compact:compacting")
+        #expect(claude.command(for: .init("Stop", "done"))
+            == "'/h/.claude/hooks/phantom-tab-state.sh' done --agent claude --session-key session_id --state-from source=compact:compacting")
     }
 
     @Test func claudeMCPEntry() throws {
-        let produced = ClaudeMCPInstaller.entry(executable: executable, arguments: arguments)
+        let claude = try mcp(AgentRegistry.claude)
+        let produced = claude.entry(executable: executable, arguments: arguments)
+        #expect(claude.configURL.path == "/h/.claude.json")
         let expected = try json(#"""
         {"type":"stdio","command":"/x/Phantom.app/Contents/MacOS/ghostty","args":["+mcp-server","--socket=/tmp/phantom.sock"]}
         """#)
@@ -130,25 +142,27 @@ struct AgentInstallerFixtureTests {
     """#
 
     @Test func codexHooksDocument() throws {
-        let produced = CodexHooksInstaller.registered(
-            into: try json(Self.codexHooksBefore),
-            scriptPath: "/h/.codex/phantom-tab-state.sh")
+        let produced = try hooks(AgentRegistry.codex).registered(
+            into: try json(Self.codexHooksBefore))
 
         try expectSame(produced, try json(Self.codexHooksAfter))
     }
 
     @Test func codexHooksRemoval() throws {
-        let produced = CodexHooksInstaller.removed(
-            from: try json(Self.codexHooksAfter), scriptName: "phantom-tab-state.sh")
+        let produced = try hooks(AgentRegistry.codex).removed(
+            from: try json(Self.codexHooksAfter))
 
         try expectSame(produced, try json(Self.codexHooksRemoved))
     }
 
-    @Test func codexCommandLines() {
-        let path = "/h/.codex/phantom-tab-state.sh"
+    @Test func codexCommandLines() throws {
+        let codex = try hooks(AgentRegistry.codex)
 
-        #expect(CodexHooksInstaller.command(for: "", scriptPath: path) == "'/h/.codex/phantom-tab-state.sh' --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id")
-        #expect(CodexHooksInstaller.command(for: "working", scriptPath: path) == "'/h/.codex/phantom-tab-state.sh' working --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id")
+        #expect(codex.scriptURL.path == "/h/.codex/phantom-tab-state.sh")
+        #expect(codex.command(for: .init("SessionStart", ""))
+            == "'/h/.codex/phantom-tab-state.sh' --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id")
+        #expect(codex.command(for: .init("PreToolUse", "working"))
+            == "'/h/.codex/phantom-tab-state.sh' working --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id")
     }
 
     static let codexMCPTable = """
@@ -157,17 +171,21 @@ struct AgentInstallerFixtureTests {
     args = ["+mcp-server", "--socket=/tmp/phantom.sock"]
     """
 
-    @Test func codexMCPBlock() {
-        let produced = CodexMCPInstaller.block(
-            executable: executable, arguments: arguments, name: "phantom")
+    @Test func codexMCPBlock() throws {
+        let codex = try #require(TOMLMCPInstaller(
+            descriptor: AgentRegistry.codex, environment: [:], home: home))
+        let produced = codex.block(executable: executable, arguments: arguments, name: "phantom")
 
         #expect(produced == Self.codexMCPTable)
+        #expect(codex.configURL.path == "/h/.codex/config.toml")
     }
 
     // MARK: OpenCode
 
     @Test func openCodeMCPEntry() throws {
-        let produced = OpenCodeMCPInstaller.entry(executable: executable, arguments: arguments)
+        let opencode = try mcp(AgentRegistry.opencode)
+        let produced = opencode.entry(executable: executable, arguments: arguments)
+        #expect(opencode.configURL.path == "/h/.config/opencode/opencode.json")
         let expected = try json(#"""
         {"type":"local","command":["/x/Phantom.app/Contents/MacOS/ghostty","+mcp-server","--socket=/tmp/phantom.sock"],"enabled":true}
         """#)
@@ -175,10 +193,11 @@ struct AgentInstallerFixtureTests {
         try expectSame(produced, expected)
     }
 
-    @Test func openCodePluginBody() {
-        #expect(sha256(OpenCodeHooksInstaller.pluginBody)
-            == "3309039ceb21cd890bc87e9e53230702258a2cba20d456653eb2e010042dfe98")
-        #expect(OpenCodeHooksInstaller.pluginBody == Self.filled(AgentRegistry.openCodePlugin, agent: "opencode"))
+    @Test func openCodePluginBody() throws {
+        let body = try #require(PluginFileInstaller.body(of: AgentRegistry.opencode))
+
+        #expect(sha256(body) == "3309039ceb21cd890bc87e9e53230702258a2cba20d456653eb2e010042dfe98")
+        #expect(body == Self.filled(AgentRegistry.openCodePlugin, agent: "opencode"))
     }
 
     // MARK: Antigravity
@@ -189,14 +208,18 @@ struct AgentInstallerFixtureTests {
     """#
 
     @Test func antigravityHooksRegistration() throws {
-        let produced = AntigravityHooksInstaller.registration(
-            scriptPath: "/h/.gemini/config/phantom-tab-state.sh")
+        let antigravity = try hooks(AgentRegistry.antigravity)
+        let produced = try #require(
+            antigravity.registered(into: [:])["phantom-tab-state"] as? [String: Any])
 
+        #expect(antigravity.scriptURL.path == "/h/.gemini/config/phantom-tab-state.sh")
         try expectSame(produced, try json(Self.antigravityRegistration))
     }
 
     @Test func antigravityMCPEntry() throws {
-        let produced = AntigravityMCPInstaller.entry(executable: executable, arguments: arguments)
+        let antigravity = try mcp(AgentRegistry.antigravity)
+        let produced = antigravity.entry(executable: executable, arguments: arguments)
+        #expect(antigravity.configURL.path == "/h/.gemini/config/mcp_config.json")
         let expected = try json(#"""
         {"command":"/x/Phantom.app/Contents/MacOS/ghostty","args":["+mcp-server","--socket=/tmp/phantom.sock"]}
         """#)
@@ -258,21 +281,31 @@ struct AgentInstallerFixtureTests {
     timeout = 5
     """
 
-    @Test func kimiHooksBlock() {
-        #expect(KimiHooksInstaller.block(scriptPath: "/h/.kimi-code/phantom-tab-state.sh") == Self.kimiBlock)
+    private func kimi() throws -> TOMLHooksInstaller {
+        try #require(TOMLHooksInstaller(
+            descriptor: AgentRegistry.kimi, environment: [:], home: home, bundleID: PhantomBuild.releaseBundleID))
     }
 
-    @Test func kimiHooksDocument() {
-        let produced = KimiHooksInstaller.installed(
-            into: Self.kimiReaderConfig, scriptPath: "/h/.kimi-code/phantom-tab-state.sh")
+    @Test func kimiHooksBlock() throws {
+        let kimi = try self.kimi()
+
+        #expect(kimi.scriptURL.path == "/h/.kimi-code/phantom-tab-state.sh")
+        #expect(kimi.block == Self.kimiBlock)
+    }
+
+    @Test func kimiHooksDocument() throws {
+        let kimi = try self.kimi()
+        let produced = kimi.installed(into: Self.kimiReaderConfig, scriptPath: kimi.scriptURL.path)
 
         #expect(produced == Self.kimiReaderConfig + "\n\n" + Self.kimiBlock + "\n")
-        #expect(KimiHooksInstaller.removed(from: produced)
+        #expect(kimi.removed(from: produced)
             .trimmingCharacters(in: .whitespacesAndNewlines) == Self.kimiReaderConfig)
     }
 
     @Test func kimiMCPEntry() throws {
-        let produced = KimiMCPInstaller.entry(executable: executable, arguments: arguments)
+        let kimi = try mcp(AgentRegistry.kimi)
+        let produced = kimi.entry(executable: executable, arguments: arguments)
+        #expect(kimi.configURL.path == "/h/.kimi-code/mcp.json")
         let expected = try json(#"""
         {"command":"/x/Phantom.app/Contents/MacOS/ghostty","args":["+mcp-server","--socket=/tmp/phantom.sock"]}
         """#)
@@ -282,14 +315,17 @@ struct AgentInstallerFixtureTests {
 
     // MARK: Pi
 
-    @Test func piExtensionBody() {
-        #expect(sha256(PiHooksInstaller.source)
-            == "6498f2e0b4e931cb7fe6121bb7d06b58047a377f63aaf086e6c31fdcd3918454")
-        #expect(PiHooksInstaller.source == Self.filled(AgentRegistry.piExtension, agent: "pi"))
+    @Test func piExtensionBody() throws {
+        let body = try #require(PluginFileInstaller.body(of: AgentRegistry.pi))
+
+        #expect(sha256(body) == "6498f2e0b4e931cb7fe6121bb7d06b58047a377f63aaf086e6c31fdcd3918454")
+        #expect(body == Self.filled(AgentRegistry.piExtension, agent: "pi"))
     }
 
     @Test func piMCPEntry() throws {
-        let produced = PiMCPInstaller.entry(executable: executable, arguments: arguments)
+        let pi = try mcp(AgentRegistry.pi)
+        let produced = pi.entry(executable: executable, arguments: arguments)
+        #expect(pi.configURL.path == "/h/.pi/agent/mcp.json")
         let expected = try json(#"""
         {"command":"/x/Phantom.app/Contents/MacOS/ghostty","args":["+mcp-server","--socket=/tmp/phantom.sock"]}
         """#)
@@ -299,12 +335,11 @@ struct AgentInstallerFixtureTests {
 
     // MARK: The shell scripts
 
-    @Test func everyShellHookIsTheOneSharedScript() {
-        #expect(ClaudeHooksInstaller.scriptBody == TabStateScript.body)
-        #expect(CodexHooksInstaller.scriptBody == TabStateScript.body)
-        #expect(AntigravityHooksInstaller.scriptBody == TabStateScript.body)
-        #expect(KimiHooksInstaller.scriptBody == TabStateScript.body)
+    @Test func theSharedScriptKeepsItsNames() {
         #expect(TabStateScript.body.hasPrefix("#!/bin/bash\n"))
+        #expect(TabStateScript.fileName(forBundleID: PhantomBuild.releaseBundleID) == "phantom-tab-state.sh")
+        #expect(TabStateScript.fileName(forBundleID: "com.ipetinate.phantom.debug") == "phantom-debug-tab-state.sh")
+        #expect(TabStateScript.stateFileVariable == "GHOSTTY_TAB_STATE_FILE")
     }
 
     private static func filled(_ template: String, agent: String) -> String {

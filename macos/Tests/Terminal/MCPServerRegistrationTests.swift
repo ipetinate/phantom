@@ -21,6 +21,11 @@ import Testing
 /// damage would be.
 @MainActor
 struct MCPServerRegistrationTests {
+    private let claude = JSONMCPInstaller(descriptor: AgentRegistry.claude)
+    private let opencode = JSONMCPInstaller(descriptor: AgentRegistry.opencode)
+    private let antigravity = JSONMCPInstaller(descriptor: AgentRegistry.antigravity)
+    private let codex = TOMLMCPInstaller(descriptor: AgentRegistry.codex)
+
     // MARK: - Harness
 
     private func json(_ text: String) throws -> [String: Any] {
@@ -182,16 +187,18 @@ struct MCPServerRegistrationTests {
     /// MCP servers live at the top level of `~/.claude.json`, a different file
     /// in a different directory, and putting them in the hooks file would
     /// register nothing.
-    @Test func claudeWritesToItsOwnConfigurationRatherThanItsSettings() {
-        let path = ClaudeMCPInstaller.configURL.path
+    @Test func claudeWritesToItsOwnConfigurationRatherThanItsSettings() throws {
+        let claude = try #require(self.claude)
+        let path = claude.configURL.path
 
         #expect(path.hasSuffix("/.claude.json"))
         #expect(!path.contains("/.claude/"))
-        #expect(ClaudeMCPInstaller.key == "mcpServers")
+        #expect(claude.key == "mcpServers")
     }
 
     @Test func claudeTakesACommandAndASeparateArgumentList() throws {
-        let entry = try #require(ClaudeMCPInstaller.entry)
+        let claude = try #require(self.claude)
+        let entry = try #require(claude.entry)
 
         #expect(entry["command"] is String)
         #expect(entry["args"] as? [String] == MCPServerCommand.arguments)
@@ -199,14 +206,15 @@ struct MCPServerRegistrationTests {
     }
 
     @Test func claudeReadsItsOwnEntryBack() throws {
-        let entry = try #require(ClaudeMCPInstaller.entry)
+        let claude = try #require(self.claude)
+        let entry = try #require(claude.entry)
         let before = try claudeConfig()
         let after = MCPConfigFile.merged(
-            entry, named: MCPServerCommand.name, under: ClaudeMCPInstaller.key, into: before)
+            entry, named: MCPServerCommand.name, under: claude.key, into: before)
 
-        #expect(ClaudeMCPInstaller.isRegistered(in: after))
-        #expect(!ClaudeMCPInstaller.isStale(in: after))
-        #expect(!ClaudeMCPInstaller.isRegistered(in: before))
+        #expect(claude.isRegistered(in: after))
+        #expect(!claude.isStale(in: after))
+        #expect(!claude.isRegistered(in: before))
     }
 
     /// The bundle moves — a reader drags Phantom out of `~/Downloads` — and
@@ -219,22 +227,23 @@ struct MCPServerRegistrationTests {
             "command": "/Volumes/somebody-elses-disk/Phantom.app/Contents/MacOS/ghostty",
             "args": [MCPServerCommand.action],
         ]
+        let claude = try #require(self.claude)
         let config = MCPConfigFile.merged(
-            stale, named: MCPServerCommand.name, under: ClaudeMCPInstaller.key, into: [:])
+            stale, named: MCPServerCommand.name, under: claude.key, into: [:])
 
-        #expect(ClaudeMCPInstaller.isRegistered(in: config))
-        #expect(ClaudeMCPInstaller.isStale(in: config))
+        #expect(claude.isRegistered(in: config))
+        #expect(claude.isStale(in: config))
     }
 
     /// Nothing registered is not stale. Otherwise the launch-time repair would
     /// install itself into the configuration of an agent the reader never
     /// mentioned.
-    @Test func anAbsentEntryIsNotStale() {
-        #expect(!ClaudeMCPInstaller.isStale(in: [:]))
-        #expect(!ClaudeMCPInstaller.isStale(in: nil))
-        #expect(!OpenCodeMCPInstaller.isStale(in: [:]))
-        #expect(!AntigravityMCPInstaller.isStale(in: [:]))
-        #expect(!CodexMCPInstaller.isStale(in: ""))
+    @Test func anAbsentEntryIsNotStale() throws {
+        #expect(try #require(self.claude).isStale(in: [:]) == false)
+        #expect(try #require(self.claude).isStale(in: nil) == false)
+        #expect(try #require(self.opencode).isStale(in: [:]) == false)
+        #expect(try #require(self.antigravity).isStale(in: [:]) == false)
+        #expect(try #require(self.codex).isStale(in: "") == false)
     }
 
     // MARK: - OpenCode
@@ -246,9 +255,10 @@ struct MCPServerRegistrationTests {
     /// `args` or an `env` here fails validation outright rather than being
     /// ignored.
     @Test func openCodeTakesOneCommandArrayAndNoArgumentList() throws {
-        let entry = try #require(OpenCodeMCPInstaller.entry)
+        let opencode = try #require(self.opencode)
+        let entry = try #require(opencode.entry)
 
-        #expect(OpenCodeMCPInstaller.key == "mcp")
+        #expect(opencode.key == "mcp")
         #expect(entry["type"] as? String == "local")
         #expect(entry["args"] == nil)
         #expect(entry["env"] == nil)
@@ -260,28 +270,28 @@ struct MCPServerRegistrationTests {
     }
 
     @Test func openCodeMergesBesideTheReadersOtherSettings() throws {
-        let entry = try #require(OpenCodeMCPInstaller.entry)
+        let opencode = try #require(self.opencode)
+        let entry = try #require(opencode.entry)
         let before = try json("""
         {"$schema":"https://opencode.ai/config.json","model":"anthropic/claude",\
         "mcp":{"weather":{"type":"local","command":["weather-cli"]}}}
         """)
         let after = MCPConfigFile.merged(
-            entry, named: MCPServerCommand.name, under: OpenCodeMCPInstaller.key, into: before)
+            entry, named: MCPServerCommand.name, under: opencode.key, into: before)
         let servers = try #require(after["mcp"] as? [String: Any])
 
         #expect(after["model"] as? String == "anthropic/claude")
         #expect(after["$schema"] != nil)
         #expect(servers["weather"] != nil)
-        #expect(OpenCodeMCPInstaller.isRegistered(in: after))
+        #expect(opencode.isRegistered(in: after))
     }
 
-    @Test func openCodeWritesBesideItsPlugin() {
-        let path = OpenCodeMCPInstaller.configURL.path
+    @Test func openCodeWritesBesideItsPlugin() throws {
+        let opencode = try #require(self.opencode)
+        let plugin = try #require(PluginFileInstaller(descriptor: AgentRegistry.opencode))
 
-        #expect(path.hasSuffix("/opencode/opencode.json"))
-        #expect(
-            OpenCodeMCPInstaller.configURL.deletingLastPathComponent()
-                == OpenCodeHooksInstaller.configDir)
+        #expect(opencode.configURL.path.hasSuffix("/opencode/opencode.json"))
+        #expect(opencode.configURL.deletingLastPathComponent() == plugin.directory)
     }
 
     // MARK: - Antigravity
@@ -289,22 +299,23 @@ struct MCPServerRegistrationTests {
     /// Beside the hooks, not in them: `hooks.json` and `mcp_config.json` are
     /// two files in `~/.gemini/config`, and the directory comes from the hooks
     /// installer so the two cannot drift into different Antigravity homes.
-    @Test func antigravityWritesBesideItsHooks() {
-        #expect(AntigravityMCPInstaller.configURL.lastPathComponent == "mcp_config.json")
-        #expect(
-            AntigravityMCPInstaller.configURL.deletingLastPathComponent()
-                == AntigravityHooksInstaller.configDir)
-        #expect(
-            AntigravityMCPInstaller.configURL.path.hasSuffix("/.gemini/config/mcp_config.json"))
+    @Test func antigravityWritesBesideItsHooks() throws {
+        let antigravity = try #require(self.antigravity)
+        let hooks = try #require(JSONHooksInstaller(descriptor: AgentRegistry.antigravity))
+
+        #expect(antigravity.configURL.lastPathComponent == "mcp_config.json")
+        #expect(antigravity.configURL.deletingLastPathComponent() == hooks.directory)
+        #expect(antigravity.configURL.path.hasSuffix("/.gemini/config/mcp_config.json"))
     }
 
     /// A `command` string and a separate `args` array, and no discriminator:
     /// the transport is chosen by which of `command` and `serverUrl` is
     /// present, so a `type` here would be a field the schema does not define.
     @Test func antigravityTakesACommandAndArgumentsWithNoDiscriminator() throws {
-        let entry = try #require(AntigravityMCPInstaller.entry)
+        let antigravity = try #require(self.antigravity)
+        let entry = try #require(antigravity.entry)
 
-        #expect(AntigravityMCPInstaller.key == "mcpServers")
+        #expect(antigravity.key == "mcpServers")
         #expect(entry["command"] is String)
         #expect(entry["args"] as? [String] == MCPServerCommand.arguments)
         #expect(entry["type"] == nil)
@@ -314,18 +325,19 @@ struct MCPServerRegistrationTests {
     /// The file is MCP's alone, but Antigravity's own MCP store and its `/mcp`
     /// command write servers into it, so it is merged rather than replaced.
     @Test func antigravityKeepsServersItDidNotWrite() throws {
-        let entry = try #require(AntigravityMCPInstaller.entry)
+        let antigravity = try #require(self.antigravity)
+        let entry = try #require(antigravity.entry)
         let before = try json("""
         {"mcpServers":{"sqlite-explorer":{"command":"node",\
         "args":["/usr/local/bin/sqlite-mcp-server.js"]}}}
         """)
         let after = MCPConfigFile.merged(
-            entry, named: MCPServerCommand.name, under: AntigravityMCPInstaller.key, into: before)
+            entry, named: MCPServerCommand.name, under: antigravity.key, into: before)
         let servers = try #require(after["mcpServers"] as? [String: Any])
 
         #expect(servers["sqlite-explorer"] != nil)
         #expect(servers.count == 2)
-        #expect(AntigravityMCPInstaller.isRegistered(in: after))
+        #expect(antigravity.isRegistered(in: after))
     }
 
     // MARK: - The four together
@@ -387,9 +399,9 @@ struct MCPServerRegistrationTests {
     /// bundle in a folder with a space in its name never reaches a shell as two
     /// words.
     @Test func noEntryFoldsTheArgumentsIntoTheCommand() throws {
-        let claude = try #require(ClaudeMCPInstaller.entry)
-        let antigravity = try #require(AntigravityMCPInstaller.entry)
-        let openCode = try #require(OpenCodeMCPInstaller.entry)
+        let claude = try #require(self.claude?.entry)
+        let antigravity = try #require(self.antigravity?.entry)
+        let openCode = try #require(self.opencode?.entry)
 
         #expect(claude["command"] as? String == MCPServerCommand.executablePath)
         #expect(antigravity["command"] as? String == MCPServerCommand.executablePath)
@@ -404,7 +416,11 @@ struct MCPServerRegistrationTests {
 /// parse-and-reserialize would have lost the comments even when it lost nothing
 /// else — which is why this edits lines rather than a document.
 @MainActor
-struct CodexMCPInstallerTests {
+struct TOMLMCPInstallerTests {
+    private let codex = TOMLMCPInstaller(descriptor: AgentRegistry.codex)
+    private let kimi = JSONMCPInstaller(descriptor: AgentRegistry.kimi)
+    private let pi = JSONMCPInstaller(descriptor: AgentRegistry.pi)
+
     private let existing = """
     model = "gpt-5"
     approval_policy = "on-request"
@@ -420,11 +436,13 @@ struct CodexMCPInstallerTests {
 
     // MARK: - Where and what
 
-    @Test func codexWritesBesideItsHooks() {
-        #expect(CodexMCPInstaller.configURL.lastPathComponent == "config.toml")
-        #expect(
-            CodexMCPInstaller.configURL.deletingLastPathComponent()
-                == CodexHooksInstaller.codexDir)
+    @Test func codexWritesBesideItsHooks() throws {
+        let codex = try #require(self.codex)
+        let hooks = try #require(JSONHooksInstaller(descriptor: AgentRegistry.codex))
+
+        #expect(codex.configURL.lastPathComponent == "config.toml")
+        #expect(codex.configURL.deletingLastPathComponent() == hooks.directory)
+        #expect(codex.configURL.deletingLastPathComponent() == AgentRegistry.codexHome.resolve())
     }
 
     /// snake_case. `mcpServers` is the other three agents' spelling and would
@@ -432,9 +450,11 @@ struct CodexMCPInstallerTests {
     /// Snake case, and the entry's own name — which carries the build
     /// variant, so this cannot be written as a literal without pinning one
     /// build's spelling and failing in the other.
-    @Test func theTableIsSnakeCase() {
-        #expect(CodexMCPInstaller.table == "mcp_servers.\(MCPServerCommand.name)")
-        #expect(CodexMCPInstaller.table.hasPrefix("mcp_servers."))
+    @Test func theTableIsSnakeCase() throws {
+        let codex = try #require(self.codex)
+
+        #expect(codex.table == "mcp_servers.\(MCPServerCommand.name)")
+        #expect(codex.table.hasPrefix("mcp_servers."))
     }
 
     /// The arguments come from `MCPServerCommand` rather than being written
@@ -442,8 +462,8 @@ struct CodexMCPInstallerTests {
     /// socket path, which carries the build. Spelled as a literal, this test
     /// pinned one build's entry and failed in the other — and it failed only
     /// in a full run, because the drift is invisible to the class on its own.
-    @Test func theBlockIsACommandAndAnArgumentList() {
-        let block = CodexMCPInstaller.block(executable: "/x/Phantom.app/Contents/MacOS/ghostty")
+    @Test func theBlockIsACommandAndAnArgumentList() throws {
+        let block = try #require(self.codex).block(executable: "/x/Phantom.app/Contents/MacOS/ghostty")
         let args = MCPServerCommand.arguments
             .map { "\"\($0)\"" }
             .joined(separator: ", ")
@@ -463,42 +483,44 @@ struct CodexMCPInstallerTests {
 
     /// A basic TOML string takes exactly two characters badly, and a reader's
     /// path can hold either.
-    @Test func aPathWithQuotesInItIsEscaped() {
-        let block = CodexMCPInstaller.block(executable: #"/x/a"b\c/ghostty"#)
+    @Test func aPathWithQuotesInItIsEscaped() throws {
+        let block = try #require(self.codex).block(executable: #"/x/a"b\c/ghostty"#)
         #expect(block.contains(#"command = "/x/a\"b\\c/ghostty""#))
     }
 
     // MARK: - Reading the file as lines
 
     @Test func aTableHeaderIsRecognisedThroughItsWhitespace() {
-        #expect(CodexMCPInstaller.header(of: "[mcp_servers.phantom]") == "mcp_servers.phantom")
-        #expect(CodexMCPInstaller.header(of: "  [ mcp_servers.phantom ] ") == "mcp_servers.phantom")
-        #expect(CodexMCPInstaller.header(of: "command = \"x\"") == nil)
-        #expect(CodexMCPInstaller.header(of: "# [mcp_servers.phantom]") == nil)
+        #expect(TOMLMCPInstaller.header(of: "[mcp_servers.phantom]") == "mcp_servers.phantom")
+        #expect(TOMLMCPInstaller.header(of: "  [ mcp_servers.phantom ] ") == "mcp_servers.phantom")
+        #expect(TOMLMCPInstaller.header(of: "command = \"x\"") == nil)
+        #expect(TOMLMCPInstaller.header(of: "# [mcp_servers.phantom]") == nil)
     }
 
     /// An array of tables is not a table. Treating `[[…]]` as a header would
     /// let the removal below swallow entries that are not Phantom's.
     @Test func anArrayOfTablesIsNotAHeader() {
-        #expect(CodexMCPInstaller.header(of: "[[profiles]]") == nil)
+        #expect(TOMLMCPInstaller.header(of: "[[profiles]]") == nil)
     }
 
-    @Test func aQuotedKeyIsStillTheSameKey() {
+    @Test func aQuotedKeyIsStillTheSameKey() throws {
+        let codex = try #require(self.codex)
         let name = MCPServerCommand.name
 
-        #expect(CodexMCPInstaller.isPhantom("mcp_servers.\(name)"))
-        #expect(CodexMCPInstaller.isPhantom("mcp_servers.\"\(name)\""))
-        #expect(CodexMCPInstaller.isPhantom("mcp_servers.\(name).env"))
-        #expect(!CodexMCPInstaller.isPhantom("mcp_servers.context7"))
-        #expect(!CodexMCPInstaller.isPhantom("mcp_servers"))
-        #expect(!CodexMCPInstaller.isPhantom("hooks.\(name)"))
+        #expect(codex.isPhantom("mcp_servers.\(name)"))
+        #expect(codex.isPhantom("mcp_servers.\"\(name)\""))
+        #expect(codex.isPhantom("mcp_servers.\(name).env"))
+        #expect(!codex.isPhantom("mcp_servers.context7"))
+        #expect(!codex.isPhantom("mcp_servers"))
+        #expect(!codex.isPhantom("hooks.\(name)"))
     }
 
     // MARK: - Merging
 
     @Test func mergingKeepsEveryOtherTableAndEveryComment() throws {
-        let block = CodexMCPInstaller.block(executable: "/x/ghostty")
-        let after = try #require(CodexMCPInstaller.merged(block, into: existing))
+        let codex = try #require(self.codex)
+        let block = codex.block(executable: "/x/ghostty")
+        let after = try #require(codex.merged(block, into: existing))
 
         #expect(after.contains("model = \"gpt-5\""))
         #expect(after.contains("approval_policy = \"on-request\""))
@@ -510,8 +532,9 @@ struct CodexMCPInstallerTests {
     }
 
     @Test func mergingIntoAnEmptyFileWritesOnlyTheBlock() throws {
-        let block = CodexMCPInstaller.block(executable: "/x/ghostty")
-        let after = try #require(CodexMCPInstaller.merged(block, into: ""))
+        let codex = try #require(self.codex)
+        let block = codex.block(executable: "/x/ghostty")
+        let after = try #require(codex.merged(block, into: ""))
 
         #expect(after == block + "\n")
     }
@@ -520,9 +543,10 @@ struct CodexMCPInstallerTests {
     /// twice, so the second registration would be the one that stopped Codex
     /// from starting.
     @Test func registeringTwiceLeavesOneTable() throws {
-        let block = CodexMCPInstaller.block(executable: "/x/ghostty")
-        let once = try #require(CodexMCPInstaller.merged(block, into: existing))
-        let twice = try #require(CodexMCPInstaller.merged(block, into: once))
+        let codex = try #require(self.codex)
+        let block = codex.block(executable: "/x/ghostty")
+        let once = try #require(codex.merged(block, into: existing))
+        let twice = try #require(codex.merged(block, into: once))
         let header = "[mcp_servers.\(MCPServerCommand.name)]"
         let headers = twice.components(separatedBy: .newlines)
             .filter { $0.trimmingCharacters(in: .whitespaces) == header }
@@ -534,6 +558,7 @@ struct CodexMCPInstallerTests {
     /// under no `[mcp_servers.phantom]` is a table with no parent, which Codex
     /// would accept and nothing would ever clean up.
     @Test func rewritingCarriesPhantomsSubTablesAway() throws {
+        let codex = try #require(self.codex)
         /// Built from the entry's own name rather than written as a literal:
         /// the name carries the build variant, so a fixture spelling one
         /// build's table describes a table this build would never find.
@@ -548,8 +573,8 @@ struct CodexMCPInstallerTests {
         [mcp_servers.\(name).env]
         LEFTOVER = "1"
         """
-        let block = CodexMCPInstaller.block(executable: "/new/ghostty")
-        let after = try #require(CodexMCPInstaller.merged(block, into: old))
+        let block = codex.block(executable: "/new/ghostty")
+        let after = try #require(codex.merged(block, into: old))
 
         #expect(!after.contains("LEFTOVER"))
         #expect(!after.contains("/old/ghostty"))
@@ -558,14 +583,15 @@ struct CodexMCPInstallerTests {
     }
 
     @Test func removingTakesOnlyPhantom() throws {
-        let block = CodexMCPInstaller.block(executable: "/x/ghostty")
-        let merged = try #require(CodexMCPInstaller.merged(block, into: existing))
-        let after = CodexMCPInstaller.removed(from: merged)
+        let codex = try #require(self.codex)
+        let block = codex.block(executable: "/x/ghostty")
+        let merged = try #require(codex.merged(block, into: existing))
+        let after = codex.removed(from: merged)
 
         #expect(!after.contains("[mcp_servers.phantom]"))
         #expect(after.contains("[mcp_servers.context7]"))
         #expect(after.contains("model = \"gpt-5\""))
-        #expect(!CodexMCPInstaller.isRegistered(in: after))
+        #expect(!codex.isRegistered(in: after))
     }
 
     // MARK: - Refusing rather than corrupting
@@ -575,62 +601,69 @@ struct CodexMCPInstallerTests {
     /// appended under it, defining the same key twice — and TOML's answer to a
     /// duplicate key is to reject the entire file, so Codex would stop starting
     /// rather than merely ignore the entry.
-    @Test func aBareServersTableIsRefusedRatherThanMergedInto() {
+    @Test func aBareServersTableIsRefusedRatherThanMergedInto() throws {
+        let codex = try #require(self.codex)
         let file = """
         [mcp_servers]
         phantom = { command = "/somewhere/else" }
         """
-        let block = CodexMCPInstaller.block(executable: "/x/ghostty")
+        let block = codex.block(executable: "/x/ghostty")
 
-        #expect(CodexMCPInstaller.hasUnownableTable(in: file))
-        #expect(CodexMCPInstaller.merged(block, into: file) == nil)
+        #expect(codex.hasUnownableTable(in: file))
+        #expect(codex.merged(block, into: file) == nil)
     }
 
-    @Test func aTopLevelAssignmentIsRefused() {
+    @Test func aTopLevelAssignmentIsRefused() throws {
+        let codex = try #require(self.codex)
         let file = #"mcp_servers = { phantom = { command = "/x" } }"#
-        let block = CodexMCPInstaller.block(executable: "/x/ghostty")
+        let block = codex.block(executable: "/x/ghostty")
 
-        #expect(CodexMCPInstaller.hasUnownableTable(in: file))
-        #expect(CodexMCPInstaller.merged(block, into: file) == nil)
+        #expect(codex.hasUnownableTable(in: file))
+        #expect(codex.merged(block, into: file) == nil)
     }
 
     /// A key of the same name inside somebody else's table is
     /// `that_table.mcp_servers` and collides with nothing, so refusing there
     /// would refuse a file that is perfectly fine.
-    @Test func aSimilarKeyInsideAnotherTableIsNotACollision() {
+    @Test func aSimilarKeyInsideAnotherTableIsNotACollision() throws {
+        let codex = try #require(self.codex)
         let file = """
         [profiles.work]
         mcp_servers = ["a"]
         """
-        #expect(!CodexMCPInstaller.hasUnownableTable(in: file))
+        #expect(!codex.hasUnownableTable(in: file))
     }
 
-    @Test func theDocumentedShapeIsNotACollision() {
-        #expect(!CodexMCPInstaller.hasUnownableTable(in: existing))
+    @Test func theDocumentedShapeIsNotACollision() throws {
+        let codex = try #require(self.codex)
+        #expect(!codex.hasUnownableTable(in: existing))
     }
 
     // MARK: - Staleness
 
     @Test func aMovedBundleIsStale() throws {
+        let codex = try #require(self.codex)
         let old = try #require(
-            CodexMCPInstaller.merged(
-                CodexMCPInstaller.block(executable: "/Volumes/gone/ghostty"), into: existing))
+            codex.merged(
+                codex.block(executable: "/Volumes/gone/ghostty"), into: existing))
 
-        #expect(CodexMCPInstaller.isRegistered(in: old))
-        #expect(CodexMCPInstaller.isStale(in: old))
+        #expect(codex.isRegistered(in: old))
+        #expect(codex.isStale(in: old))
     }
 
     @Test func thisBuildsOwnEntryIsNotStale() throws {
-        let block = try #require(CodexMCPInstaller.block)
-        let current = try #require(CodexMCPInstaller.merged(block, into: existing))
+        let codex = try #require(self.codex)
+        let block = try #require(codex.block)
+        let current = try #require(codex.merged(block, into: existing))
 
-        #expect(CodexMCPInstaller.isRegistered(in: current))
-        #expect(!CodexMCPInstaller.isStale(in: current))
+        #expect(codex.isRegistered(in: current))
+        #expect(!codex.isStale(in: current))
     }
 
-    @Test func aFileWithNoPhantomTableIsNotRegistered() {
-        #expect(!CodexMCPInstaller.isRegistered(in: existing))
-        #expect(CodexMCPInstaller.phantomBlock(in: existing) == nil)
+    @Test func aFileWithNoPhantomTableIsNotRegistered() throws {
+        let codex = try #require(self.codex)
+        #expect(!codex.isRegistered(in: existing))
+        #expect(codex.phantomBlock(in: existing) == nil)
     }
 
     // MARK: - Disk
@@ -638,7 +671,7 @@ struct CodexMCPInstallerTests {
     @Test func anAbsentFileReadsAsEmptyText() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("phantom-codex-\(UUID().uuidString).toml")
-        #expect(CodexMCPInstaller.read(at: url) == "")
+        #expect(TOMLMCPInstaller.read(at: url) == "")
     }
 
     // MARK: One entry name per build
@@ -719,36 +752,39 @@ struct CodexMCPInstallerTests {
     /// which is the whole reason its installer is the shortest here: no login
     /// session, no model setting, no permission mode in the blast radius.
     @Test func kimiTakesACommandAndArgumentsInItsOwnFile() throws {
-        let entry = try #require(KimiMCPInstaller.entry)
+        let kimi = try #require(self.kimi)
+        let entry = try #require(kimi.entry)
 
         #expect(entry["command"] as? String == MCPServerCommand.executablePath)
         #expect(entry["args"] as? [String] == MCPServerCommand.arguments)
-        #expect(KimiMCPInstaller.configURL.path.hasSuffix("/mcp.json"))
-        #expect(KimiMCPInstaller.key == "mcpServers")
+        #expect(kimi.configURL.path.hasSuffix("/mcp.json"))
+        #expect(kimi.key == "mcpServers")
     }
 
     /// Not in `config.toml`. Kimi documents MCP as living in its own file, and
     /// writing the TOML instead would put an entry where nothing reads it while
     /// risking the settings that *are* in there.
-    @Test func kimiDoesNotWriteTheTomlConfig() {
-        #expect(!KimiMCPInstaller.configURL.path.hasSuffix("config.toml"))
+    @Test func kimiDoesNotWriteTheTomlConfig() throws {
+        #expect(try #require(self.kimi).configURL.path.hasSuffix("config.toml") == false)
     }
 
     /// `type` is omitted on purpose: Kimi documents an entry with a `command`
     /// as being stdio, so a key its documentation never mentions is a key it
     /// might reject.
     @Test func kimiWritesNoTypeKey() throws {
-        let entry = try #require(KimiMCPInstaller.entry)
+        let kimi = try #require(self.kimi)
+        let entry = try #require(kimi.entry)
 
         #expect(entry["type"] == nil)
     }
 
     @Test func piWritesWhereItsExtensionReads() throws {
-        let entry = try #require(PiMCPInstaller.entry)
+        let pi = try #require(self.pi)
+        let entry = try #require(pi.entry)
 
         #expect(entry["command"] as? String == MCPServerCommand.executablePath)
-        #expect(PiMCPInstaller.configURL.path.hasSuffix("/.pi/agent/mcp.json"))
-        #expect(PiMCPInstaller.key == "mcpServers")
+        #expect(pi.configURL.path.hasSuffix("/.pi/agent/mcp.json"))
+        #expect(pi.key == "mcpServers")
     }
 
     /// The registry's own note has to say Pi is conditional, because a reader
@@ -763,7 +799,7 @@ struct CodexMCPInstallerTests {
     @Test func bothPointAtThisCopyOfPhantom() throws {
         let path = try #require(MCPServerCommand.executablePath)
 
-        #expect(KimiMCPInstaller.entry?["command"] as? String == path)
-        #expect(PiMCPInstaller.entry?["command"] as? String == path)
+        #expect(try #require(self.kimi).entry?["command"] as? String == path)
+        #expect(try #require(self.pi).entry?["command"] as? String == path)
     }
 }

@@ -11,21 +11,24 @@ import Testing
 /// where it would be easiest to lose it: outside Phantom, and with an
 /// unwritable state file.
 ///
-/// **The file is a map of named hooks.** Antigravity's `hooks.json` is keyed by
-/// a name the author picks, with the events nested inside, where the other two
-/// nest everything under a top-level `"hooks"`. Reading Phantom's own key out
-/// of a file full of somebody else's is therefore a different operation from
-/// the one the other installers perform, and gets its own fixtures.
+/// **The id is a conversation id.** Antigravity calls it a conversation where
+/// the others call it a session, and its spelling comes first in the keys the
+/// descriptor registers.
 ///
-/// The write half of `install()` and `uninstall()` is not exercised, for the
-/// reason `CodexHooksInstallerTests` gives: both resolve their own path from
-/// `configDir`, so testing them would mean either a test-only seam on a
-/// production singleton or writing into the developer's real `~/.gemini`
-/// during a test run.
+/// The file half — the owned key in `hooks.json` — is covered by
+/// `JSONHooksInstallerTests`, against the same descriptor.
 @MainActor
-struct AntigravityHooksInstallerTests {
+struct AntigravityHookScriptTests {
     private let real = "fe5e4f94-d3e0-4af7-b877-42073d603aff"
     private let nested = "deadbeef-0000-4000-8000-000000000000"
+
+    private var events: [HooksIntegration.Event] {
+        AgentRegistry.antigravity.hooks?.hookEvents ?? []
+    }
+
+    private func reply(for event: String) -> String? {
+        events.first { $0.name == event }?.reply
+    }
 
     // MARK: - Harness
 
@@ -78,7 +81,7 @@ struct AntigravityHooksInstallerTests {
             agent: AgentRegistry.antigravity.id,
             state: state,
             options: TabStateScript.options(of: AgentRegistry.antigravity),
-            reply: AntigravityHooksInstaller.reply(for: event))
+            reply: reply(for: event))
 
         var environment = ProcessInfo.processInfo.environment
         if inPhantom {
@@ -160,12 +163,12 @@ struct AntigravityHooksInstallerTests {
     }
 
     @Test func everyRegisteredEventCarriesAReply() {
-        for (event, _) in AntigravityHooksInstaller.eventStates {
-            #expect(AntigravityHooksInstaller.reply(for: event) != nil, event)
+        for event in events {
+            #expect(event.reply != nil, Comment(rawValue: event.name))
         }
-        #expect(AntigravityHooksInstaller.reply(for: "Stop") == #"{"decision":"stop"}"#)
-        #expect(AntigravityHooksInstaller.reply(for: "PreInvocation") == "{}")
-        #expect(AntigravityHooksInstaller.reply(for: "SomeFutureEvent") == nil)
+        #expect(reply(for: "Stop") == #"{"decision":"stop"}"#)
+        #expect(reply(for: "PreInvocation") == "{}")
+        #expect(reply(for: "SomeFutureEvent") == nil)
     }
 
     /// The reply is printed before the state work, so nothing about the state
@@ -205,8 +208,6 @@ struct AntigravityHooksInstallerTests {
 
     // MARK: - The conversation id
 
-    /// Antigravity calls it a conversation where the others call it a session,
-    /// and `conversationId` is the documented spelling.
     @Test func theConversationIdIsRecordedAsTheSessionId() throws {
         try withInstalledScript { installed in
             let fired = try fire(
@@ -227,7 +228,7 @@ struct AntigravityHooksInstallerTests {
     @Test func aNestedIdDoesNotWinOverTheRealOne() throws {
         try withInstalledScript { installed in
             let fired = try fire(
-                installed, state: "working", event: "PostToolUse",
+                installed, state: "working", event: "PreInvocation",
                 payload: """
                 {"conversationId":"\(real)",\
                 "toolCall":{"args":{"conversationId":"\(nested)"}},\
@@ -283,220 +284,23 @@ struct AntigravityHooksInstallerTests {
         }
     }
 
-    // MARK: - What is registered, and what is refused
-
-    /// `PreToolUse` is the refusal that matters. Its stdout contract makes
-    /// `decision` mandatory, and the only value a reporting hook could send is
-    /// `allow` — a standing approval of every tool call the agent ever makes.
-    /// Registering it would trade the reader's permission prompts for an
-    /// indicator light.
-    @Test func noToolPermissionEventIsRegistered() {
-        let events = AntigravityHooksInstaller.eventStates.map(\.event)
-
-        #expect(!events.contains("PreToolUse"))
-
-        // `PostInvocation` fires after each model call, and an agent turn is
-        // many calls with tool runs between them. Reporting `done` there would
-        // blink the tab to finished in the middle of work still going.
-        #expect(!events.contains("PostInvocation"))
-    }
-
-    /// Every registered event is one Antigravity documents. A name it does not
-    /// recognize registers nothing, and nothing is what the sidebar would then
-    /// show — with no error anywhere to explain it.
-    @Test func everyRegisteredEventIsARealAntigravityEvent() {
-        let known: Set<String> = [
-            "PreToolUse", "PostToolUse", "PreInvocation", "PostInvocation", "Stop",
-        ]
-
-        for (event, _) in AntigravityHooksInstaller.eventStates {
-            #expect(known.contains(event), "\(event) is not an Antigravity hook event")
-        }
-
-        #expect(!AntigravityHooksInstaller.eventStates.isEmpty)
-    }
-
-    /// Only events that take their handlers *directly* under the event key are
-    /// registered. The grouped `{ matcher, hooks }` form belongs to the tool
-    /// events, whose matcher grammar is undocumented — the schema's one example
-    /// matches a literal tool name, so a wildcard may well register a hook that
-    /// never fires.
-    @Test func theRegistrationUsesTheUngroupedHandlerShape() throws {
-        let registration = AntigravityHooksInstaller.registration
-
-        #expect(registration.count == AntigravityHooksInstaller.eventStates.count)
-
-        for (event, _) in AntigravityHooksInstaller.eventStates {
-            let handlers = try #require(
-                registration[event] as? [[String: Any]],
-                "\(event) is not a list of handlers")
-
-            #expect(handlers.count == 1)
-            #expect(handlers.first?["type"] as? String == "command")
-            #expect(handlers.first?["matcher"] == nil)
-            #expect(handlers.first?["hooks"] == nil)
-        }
-    }
+    // MARK: - The registered command line
 
     /// The state and the options are bare words; only the JSON reply is
     /// quoted, because it holds quotes of its own. A quoted argument in a
     /// registered command line reads differently depending on whether a shell
-    /// is in the way — see `ClaudeHooksInstaller.command`.
-    @Test func theRegisteredCommandPassesBareWordsAndAQuotedReply() {
-        let path = AntigravityHooksInstaller.scriptURL.path
-        let working = AntigravityHooksInstaller.command(for: "working", event: "PreInvocation")
-        let done = AntigravityHooksInstaller.command(for: "done", event: "Stop")
+    /// is in the way.
+    @Test func theRegisteredCommandPassesBareWordsAndAQuotedReply() throws {
+        let engine = try #require(JSONHooksInstaller(descriptor: AgentRegistry.antigravity))
+        let path = engine.scriptURL.path
+        let working = engine.command(for: .init("PreInvocation", "working", reply: "{}"))
+        let done = engine.command(for: .init("Stop", "done", reply: #"{"decision":"stop"}"#))
 
         #expect(working.hasPrefix("'\(path)' working --agent antigravity --session-key conversationId"))
         #expect(working.hasSuffix(" --reply '{}'"))
         #expect(done.hasSuffix(#" --reply '{"decision":"stop"}'"#))
         #expect(!working.contains("''"))
         #expect(!working.hasSuffix(" "))
-    }
-
-    /// The registration has to survive its own serializer. `install()` writes
-    /// it through `JSONSerialization`, and a value that cannot be encoded fails
-    /// there rather than here.
-    @Test func theRegistrationSerializesToJSON() throws {
-        let payload = [AntigravityHooksInstaller.hookName: AntigravityHooksInstaller.registration]
-
-        #expect(JSONSerialization.isValidJSONObject(payload))
-
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        let round = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        #expect(round?[AntigravityHooksInstaller.hookName] != nil)
-    }
-
-    // MARK: - Reading somebody else's hooks.json
-
-    private func settings(_ json: String) throws -> [String: Any] {
-        try #require(
-            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-    }
-
-    /// The whole registration, read back as installed.
-    @Test func aCompleteRegistrationReadsAsInstalled() throws {
-        let file = try settings(#"{"phantom-tab-state":\#(registrationJSON())}"#)
-
-        #expect(AntigravityHooksInstaller.isRegistered(in: file))
-        #expect(AntigravityHooksInstaller.isRegisteredForAnyEvent(in: file))
-    }
-
-    /// A registration short of one event is not installed — but is still
-    /// *something*, which is what lets `repairIfStale` finish it and what stops
-    /// `uninstall` from calling a partial removal a success.
-    /// The command names the script, and the script's name carries the build
-    /// — `phantom-debug-tab-state.sh` in a second build — so the fixture asks
-    /// the installer for it rather than spelling it. Spelled out, this pinned
-    /// one build and failed in the other.
-    @Test func aPartialRegistrationIsIncompleteButPresent() throws {
-        let script = AntigravityHooksInstaller.scriptName
-        let file = try settings("""
-        {"\(AntigravityHooksInstaller.hookName)":{"Stop":[{"type":"command",\
-        "command":"'/x/\(script)' done Stop"}]}}
-        """)
-
-        #expect(!AntigravityHooksInstaller.isRegistered(in: file))
-        #expect(AntigravityHooksInstaller.isRegisteredForAnyEvent(in: file))
-    }
-
-    /// Somebody else's hooks are not Phantom's, however many there are and
-    /// whatever they run. Reading them as installed would have the settings
-    /// screen offer to remove a hook it does not own.
-    @Test func anotherAuthorsHooksAreNotPhantoms() throws {
-        let file = try settings("""
-        {"my-linter-hook":{"PostToolUse":[{"matcher":"run_command",\
-        "hooks":[{"type":"command","command":"./scripts/lint.sh"}]}]},\
-        "safety-gate":{"enabled":false,"PreToolUse":[{"matcher":"run_command",\
-        "hooks":[{"command":"./scripts/safety-check.sh"}]}]}}
-        """)
-
-        #expect(!AntigravityHooksInstaller.isRegistered(in: file))
-        #expect(!AntigravityHooksInstaller.isRegisteredForAnyEvent(in: file))
-    }
-
-    /// A command naming Phantom's script under somebody else's hook name is not
-    /// Phantom's registration: `install` would not update it and `uninstall`
-    /// would not remove it, so counting it would describe a state the buttons
-    /// cannot act on.
-    @Test func theScriptUnderAnotherHookNameDoesNotCount() throws {
-        let file = try settings("""
-        {"someone-elses-hook":{"Stop":[{"type":"command",\
-        "command":"'/x/phantom-tab-state.sh' done Stop"}]}}
-        """)
-
-        #expect(!AntigravityHooksInstaller.isRegistered(in: file))
-        #expect(!AntigravityHooksInstaller.isRegisteredForAnyEvent(in: file))
-    }
-
-    @Test func anEmptyFileIsNotARegistration() {
-        #expect(!AntigravityHooksInstaller.isRegistered(in: [:]))
-        #expect(!AntigravityHooksInstaller.isRegisteredForAnyEvent(in: [:]))
-        #expect(!AntigravityHooksInstaller.isRegistered(in: nil))
-        #expect(!AntigravityHooksInstaller.isRegisteredForAnyEvent(in: nil))
-    }
-
-    private func registrationJSON() throws -> String {
-        let data = try JSONSerialization.data(
-            withJSONObject: AntigravityHooksInstaller.registration)
-        return try #require(String(data: data, encoding: .utf8))
-    }
-
-    // MARK: - Telling "nothing here" from "something I don't understand"
-
-    private func temporaryFile(_ contents: String?) throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("phantom-agy-\(UUID().uuidString).json")
-        if let contents {
-            try contents.write(to: url, atomically: true, encoding: .utf8)
-        }
-        return url
-    }
-
-    @Test func anAbsentFileReadsAsAnEmptyConfiguration() throws {
-        let url = try temporaryFile(nil)
-        let read = AntigravityHooksInstaller.readSettings(at: url)
-
-        #expect(read != nil)
-        #expect(read?.isEmpty == true)
-    }
-
-    @Test func anEmptyFileReadsAsAnEmptyConfiguration() throws {
-        let url = try temporaryFile("")
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        #expect(AntigravityHooksInstaller.readSettings(at: url)?.isEmpty == true)
-    }
-
-    /// The one that matters: nil, so the caller refuses to write. Antigravity's
-    /// file holds every hook the reader has, keyed by name, so replacing it on
-    /// a parse failure loses all of them at once.
-    @Test func malformedJSONRefusesToBeRead() throws {
-        let url = try temporaryFile(#"{"phantom-tab-state": {"Stop": [}}"#)
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        #expect(AntigravityHooksInstaller.readSettings(at: url) == nil)
-    }
-
-    @Test func aTopLevelArrayRefusesToBeRead() throws {
-        let url = try temporaryFile(#"[{"phantom-tab-state":{}}]"#)
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        #expect(AntigravityHooksInstaller.readSettings(at: url) == nil)
-    }
-
-    /// Other authors' hooks are read back whole, which is the property the
-    /// name-scoped merge depends on.
-    @Test func anotherAuthorsHooksAreReadBackWhole() throws {
-        let url = try temporaryFile("""
-        {"my-linter-hook":{"PostToolUse":[{"matcher":"run_command",\
-        "hooks":[{"type":"command","command":"./scripts/lint.sh"}]}]}}
-        """)
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let read = AntigravityHooksInstaller.readSettings(at: url)
-        #expect(read?["my-linter-hook"] != nil)
-        #expect(read?.count == 1)
     }
 
     // MARK: - The spellings that reach a shell prompt

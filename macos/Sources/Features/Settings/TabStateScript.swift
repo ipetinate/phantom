@@ -2,6 +2,7 @@ import Foundation
 
 enum TabStateScript {
     static let releaseName = "phantom-tab-state.sh"
+    static let stateFileVariable = "GHOSTTY_TAB_STATE_FILE"
 
     static var fileName: String { PhantomBuild.fileName(releaseName) }
 
