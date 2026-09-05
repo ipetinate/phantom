@@ -17,6 +17,7 @@ final class GuiConfigStore: ObservableObject {
     @Published private(set) var values: [String: String] = [:]
 
     private let configDir: URL
+    private let cachesDirOverride: URL?
 
     var guiFileURL: URL { configDir.appendingPathComponent(Self.fileName) }
     var mainConfigURL: URL { configDir.appendingPathComponent("config") }
@@ -55,8 +56,23 @@ final class GuiConfigStore: ObservableObject {
     /// alongside would be one the manifest's author could grant itself.
     var extensionsDirURL: URL { configDir.appendingPathComponent("extensions", isDirectory: true) }
 
-    init(configDir: URL? = nil) {
+    var cachesDirURL: URL { cachesDirOverride ?? Self.defaultCachesDir() }
+
+    nonisolated static func cachesDir(bundleID: String, base: URL) -> URL {
+        base.appendingPathComponent(bundleID, isDirectory: true)
+    }
+
+    nonisolated private static func defaultCachesDir() -> URL {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Caches", isDirectory: true)
+        return cachesDir(bundleID: Bundle.main.bundleIdentifier ?? PhantomBuild.releaseBundleID, base: base)
+    }
+
+    init(configDir: URL? = nil, cachesDir: URL? = nil) {
         self.configDir = configDir ?? Self.defaultConfigDir()
+        self.cachesDirOverride = cachesDir
         load()
         var changed = Self.applyForkDefaults(to: &values)
         changed = Self.applyFactoryTheme(to: &values, in: self.configDir) || changed
