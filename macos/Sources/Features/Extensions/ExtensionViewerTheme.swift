@@ -37,8 +37,8 @@ enum ExtensionViewerTheme {
             "bg": hex(backgroundColor),
             "fg": hex(colors[ANSI.white]),
             "accent": hex(colors[ANSI.blue]),
-            "muted": hex(colors[ANSI.brightBlack]),
-            "border": hex(colors[ANSI.brightBlack]),
+            "muted": hex(mixed(colors[ANSI.white], towards: backgroundColor, fraction: mutedMix)),
+            "border": hex(mixed(backgroundColor, towards: colors[ANSI.white], fraction: borderMix)),
             "codeBg": hex(shifted(backgroundColor)),
             "danger": hex(colors[ANSI.red]),
             "warning": hex(colors[ANSI.yellow]),
@@ -52,6 +52,14 @@ enum ExtensionViewerTheme {
         let channels = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent]
             .map { max(0, min(255, Int(($0 * 255).rounded()))) }
         return String(format: "#%02x%02x%02x", channels[0], channels[1], channels[2])
+    }
+
+    static let mutedMix: CGFloat = 0.45
+    static let borderMix: CGFloat = 0.14
+
+    static func mixed(_ color: NSColor, towards other: NSColor, fraction: CGFloat) -> NSColor {
+        guard let rgb = color.usingColorSpace(.sRGB), let target = other.usingColorSpace(.sRGB) else { return color }
+        return rgb.blended(withFraction: fraction, of: target) ?? rgb
     }
 
     static func shifted(_ background: NSColor) -> NSColor {

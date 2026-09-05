@@ -40,8 +40,11 @@ struct ExtensionViewerThemeTests {
         #expect(colors["danger"] == "#ff5555")
         #expect(colors["warning"] == "#f1fa8c")
         #expect(colors["success"] == "#50fa7b")
-        #expect(colors["muted"] == "#6272a4")
-        #expect(colors["border"] == "#6272a4")
+        #expect(colors["muted"] == ExtensionViewerTheme.hex(
+            ExtensionViewerTheme.mixed(color("#f8f8f2"), towards: color("#060608"), fraction: ExtensionViewerTheme.mutedMix)))
+        #expect(colors["border"] == ExtensionViewerTheme.hex(
+            ExtensionViewerTheme.mixed(color("#060608"), towards: color("#f8f8f2"), fraction: ExtensionViewerTheme.borderMix)))
+        #expect(colors["border"] != "#6272a4")
         #expect(colors.count == 9)
     }
 
