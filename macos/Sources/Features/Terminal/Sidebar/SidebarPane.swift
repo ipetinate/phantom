@@ -72,6 +72,26 @@ enum SidebarPane: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+enum SidebarTabBarPlacement: String, CaseIterable, Identifiable {
+    case top
+    case side
+
+    static let defaultsKey = "SidebarTabBarPlacement"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .top: return "Top"
+        case .side: return "Side"
+        }
+    }
+
+    init(raw: String?) {
+        self = raw.flatMap(Self.init(rawValue:)) ?? .top
+    }
+}
+
 /// A panel's icon, whether it comes from SF Symbols or the asset catalog.
 struct SidebarPaneIcon: View {
     let pane: SidebarPane

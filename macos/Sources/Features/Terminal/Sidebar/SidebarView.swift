@@ -171,48 +171,66 @@ struct SidebarView: View {
         enabledPanes.contains(layout.selectedPane) ? layout.selectedPane : .terminals
     }
 
+    @AppStorage(SidebarTabBarPlacement.defaultsKey)
+    private var tabBarPlacementRaw = SidebarTabBarPlacement.top.rawValue
+
+    private var tabBarPlacement: SidebarTabBarPlacement {
+        SidebarTabBarPlacement(raw: tabBarPlacementRaw)
+    }
+
     private var expanded: some View {
-        VStack(spacing: 0) {
-            if enabledPanes.count > 1 {
-                SidebarPaneTabBar(selection: $layout.selectedPane, panes: enabledPanes)
+        HStack(alignment: .top, spacing: 0) {
+            if enabledPanes.count > 1, tabBarPlacement == .side {
+                SidebarActivityBar(selection: $layout.selectedPane, panes: enabledPanes)
             }
 
-            switch visiblePane {
-            case .terminals:
-                terminalList
-            case .files:
-                FileExplorerView(
-                    tabManager: tabManager,
-                    store: store,
-                    onSpawnTerminal: onSpawnTerminalBesideSelection,
-                    onOpenInEditor: onOpenInEditor,
-                    editorCenter: editorCenter
-                )
-            case .git:
-                GitPanelView(
-                    tabManager: tabManager,
-                    editorCenter: editorCenter,
-                    onSpawnTerminal: onSpawnTerminalBesideSelection,
-                    onOpenInEditor: onOpenInEditor,
-                    onOpenDiff: onOpenDiff,
-                    onOpenBranchDiff: onOpenBranchDiff
-                )
-            case .worktrees:
-                WorktreePanelView(
-                    tabManager: tabManager,
-                    editorCenter: editorCenter,
-                    /// The panel follows one terminal, so that terminal's
-                    /// group is where a worktree opened from here belongs.
-                    onNewTerminal: { path in
-                        layout.onNewWorktreeTab(path, selectedGroupId)
-                    },
-                    onNewAgentTab: { path, agent in
-                        layout.onNewWorktreeAgentTab(path, agent, selectedGroupId)
-                    }
-                )
-            case .extensions:
-                ExtensionsPanelView()
+            VStack(spacing: 0) {
+                if enabledPanes.count > 1, tabBarPlacement == .top {
+                    SidebarPaneTabBar(selection: $layout.selectedPane, panes: enabledPanes)
+                }
+
+                paneContent
             }
+        }
+    }
+
+    @ViewBuilder
+    private var paneContent: some View {
+        switch visiblePane {
+        case .terminals:
+            terminalList
+        case .files:
+            FileExplorerView(
+                tabManager: tabManager,
+                store: store,
+                onSpawnTerminal: onSpawnTerminalBesideSelection,
+                onOpenInEditor: onOpenInEditor,
+                editorCenter: editorCenter
+            )
+        case .git:
+            GitPanelView(
+                tabManager: tabManager,
+                editorCenter: editorCenter,
+                onSpawnTerminal: onSpawnTerminalBesideSelection,
+                onOpenInEditor: onOpenInEditor,
+                onOpenDiff: onOpenDiff,
+                onOpenBranchDiff: onOpenBranchDiff
+            )
+        case .worktrees:
+            WorktreePanelView(
+                tabManager: tabManager,
+                editorCenter: editorCenter,
+                /// The panel follows one terminal, so that terminal's
+                /// group is where a worktree opened from here belongs.
+                onNewTerminal: { path in
+                    layout.onNewWorktreeTab(path, selectedGroupId)
+                },
+                onNewAgentTab: { path, agent in
+                    layout.onNewWorktreeAgentTab(path, agent, selectedGroupId)
+                }
+            )
+        case .extensions:
+            ExtensionsPanelView()
         }
     }
 
