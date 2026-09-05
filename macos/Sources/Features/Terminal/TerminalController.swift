@@ -1978,6 +1978,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         openInEditor(url)
     }
 
+    func openExtensionInEditor(_ document: ExtensionDocument) {
+        editorCenter.openExtension(document)
+    }
+
     /// Opens a file as the branch review sees it: its diff against the base
     /// the review was measured from, rather than against the working tree.
     func openBranchDiff(_ url: URL, base: String) {

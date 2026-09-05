@@ -56,6 +56,13 @@ struct ExtensionCardTests {
         #expect(card.mediaBytes == 673_234)
     }
 
+    @Test func theDocumentIsMarkdownOrMDXAtTheRoot() throws {
+        let markdown = try #require(ExtensionCard.parse(Self.card(["document": "extension.md"])))
+        #expect(markdown.document == "extension.md")
+        #expect(ExtensionCard.parse(Self.lua)?.document == "extension.mdx")
+        #expect(ExtensionCard.documentFileNames == ["extension.mdx", "extension.md"])
+    }
+
     @Test func theOptionalFieldsMayBeAbsent() throws {
         let sparse = Self.card([
             "tagline": nil, "license": nil, "updated": nil, "icon": nil, "cover": nil,
@@ -80,6 +87,7 @@ struct ExtensionCardTests {
             ["author": nil], ["author": "someone"], ["author": ["url": "https://x.y"]],
             ["created": nil], ["created": "yesterday"],
             ["document": nil], ["document": "README.mdx"], ["document": "docs/extension.mdx"],
+            ["document": "extension.markdown"], ["document": "Extension.md"], ["document": ""],
             ["documentBytes": nil], ["documentBytes": 0], ["documentBytes": ExtensionMediaGate.maxDocumentBytes + 1],
             ["documentBytes": "4821"], ["documentBytes": true],
             ["mediaBytes": nil], ["mediaBytes": -1], ["mediaBytes": ExtensionMediaGate.maxTotalBytes + 1],

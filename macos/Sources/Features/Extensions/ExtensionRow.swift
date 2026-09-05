@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ExtensionRow: View {
@@ -236,6 +237,66 @@ struct ExtensionContributionChips: View {
                         : ExtensionContributionChip.of(kind).title)
             }
         }
+    }
+}
+
+struct ExtensionTagView: View {
+    let text: String
+
+    var body: some View {
+        Text(verbatim: text)
+            .font(.caption2.weight(.semibold).monospacedDigit())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(
+                Capsule().fill(Color.secondary.opacity(0.15))
+            )
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+}
+
+struct ExtensionIconView: View {
+    let url: URL?
+    var size: CGFloat = 28
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                    .fill(Color.secondary.opacity(0.12))
+                    .overlay(
+                        Image(systemName: ExtensionDocument.symbol)
+                            .font(.system(size: size * 0.45, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    )
+            }
+        }
+        .frame(width: size, height: size)
+        .task(id: url) {
+            image = await Self.load(url)
+        }
+    }
+
+    static func load(_ url: URL?) async -> NSImage? {
+        guard let url else { return nil }
+        let data = await Task.detached(priority: .utility) { () -> Data? in
+            guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+                  size <= ExtensionMediaGate.maxImageBytes
+            else { return nil }
+            return try? Data(contentsOf: url)
+        }.value
+        guard let data, let image = NSImage(data: data), image.size.width > 0, image.size.height > 0 else {
+            return nil
+        }
+        return image
     }
 }
 

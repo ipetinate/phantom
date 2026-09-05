@@ -82,9 +82,10 @@ enum ExtensionMediaGate {
     }
 
     static func check(directory: URL, icon: String?) throws {
-        let document = directory.appendingPathComponent(ExtensionCard.documentFileName)
-        if let size = fileSize(document), size > maxDocumentBytes {
-            throw Violation.documentOversized(size)
+        for name in ExtensionCard.documentFileNames {
+            if let size = fileSize(directory.appendingPathComponent(name)), size > maxDocumentBytes {
+                throw Violation.documentOversized(size)
+            }
         }
 
         let mediaDirectory = directory.appendingPathComponent(mediaDirectoryName, isDirectory: true)

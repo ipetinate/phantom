@@ -5,6 +5,8 @@ struct InstalledExtension: Identifiable, Equatable, Sendable {
     let name: String
     let version: String
     let root: URL
+    var publisher: String = ""
+    var iconURL: URL?
 }
 
 enum ExtensionState: Equatable, Sendable {
@@ -150,7 +152,7 @@ final class ExtensionStore: ObservableObject {
             try await Task.detached(priority: .utility) {
                 try ExtensionMediaGate.check(directory: directory, icon: icon)
             }.value
-            previews[entry.id] = Self.previewState(directory: directory, root: root)
+            previews[entry.id] = Self.previewState(directory: directory, root: root, preferring: entry.card?.document)
         } catch {
             previews[entry.id] = .unavailable(Self.message(for: error))
         }
@@ -222,12 +224,15 @@ final class ExtensionStore: ObservableObject {
         return try await staging.value
     }
 
-    nonisolated static func previewState(directory: URL, root: URL) -> PreviewState {
-        let document = directory.appendingPathComponent(ExtensionCard.documentFileName)
-        guard FileManager.default.fileExists(atPath: document.path) else {
-            return .unavailable("The extension ships no document.")
+    nonisolated static func previewState(directory: URL, root: URL, preferring name: String? = nil) -> PreviewState {
+        let names = [name].compactMap { $0 } + ExtensionCard.documentFileNames
+        for candidate in names {
+            let document = directory.appendingPathComponent(candidate)
+            if FileManager.default.fileExists(atPath: document.path) {
+                return .ready(document: document, base: root)
+            }
         }
-        return .ready(document: document, base: root)
+        return .unavailable("The extension ships no document.")
     }
 
     // MARK: Registry
@@ -295,7 +300,11 @@ final class ExtensionStore: ObservableObject {
         var seen: Set<String> = []
         return manifests
             .filter { seen.insert($0.id).inserted }
-            .map { InstalledExtension(id: $0.id, name: $0.name, version: $0.version, root: $0.root) }
+            .map {
+                InstalledExtension(
+                    id: $0.id, name: $0.name, version: $0.version, root: $0.root,
+                    publisher: $0.publisher, iconURL: $0.languages.first?.iconURL)
+            }
             .sorted(by: displayOrder)
     }
 

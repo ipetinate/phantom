@@ -297,6 +297,10 @@ private struct EditorTabItem: View {
 
     private var accent: Color { palette.accent ?? .accentColor }
 
+    private var tabIcon: FileIcon {
+        tab.symbol.map { .symbol(name: $0, color: .secondary) } ?? icons.icon(forFile: tab.name)
+    }
+
     var body: some View {
         HStack(spacing: 5) {
             /// Everything but the close control, grouped so the gesture layer
@@ -304,7 +308,7 @@ private struct EditorTabItem: View {
             /// AppKit view and takes every click under it, so laid over the
             /// whole tab it would swallow the one button in here.
             HStack(spacing: 5) {
-                FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
+                FileIconView(icon: tabIcon, size: 13)
 
                 pinMark
 
@@ -404,7 +408,7 @@ private struct EditorTabItem: View {
     private var dragPreview: NSImage? {
         let renderer = ImageRenderer(
             content: HStack(spacing: 5) {
-                FileIconView(icon: icons.icon(forFile: tab.name), size: 13)
+                FileIconView(icon: tabIcon, size: 13)
 
                 /// The same mark the tab wears in the bar. What follows the
                 /// pointer has to *be* the tab, and a pinned tab that shed

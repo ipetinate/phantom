@@ -295,6 +295,13 @@ struct ExtensionPreviewCacheTests {
         try writeExtension(id: "tests.lua", version: "1.0.0", into: directory, document: false)
 
         #expect(ExtensionStore.previewState(directory: directory, root: root) == .unavailable("The extension ships no document."))
+
+        let markdown = directory.appendingPathComponent("extension.md")
+        try "# Lua\n".write(to: markdown, atomically: true, encoding: .utf8)
+        #expect(ExtensionStore.previewState(directory: directory, root: root) == .ready(document: markdown, base: root))
+        #expect(
+            ExtensionStore.previewState(directory: directory, root: root, preferring: "extension.mdx")
+                == .ready(document: markdown, base: root))
     }
 
     @Test func scanningReadsWhatEvictionNeeds() throws {

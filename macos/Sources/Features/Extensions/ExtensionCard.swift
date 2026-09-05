@@ -29,6 +29,7 @@ struct ExtensionCard: Equatable, Sendable {
 
 extension ExtensionCard {
     static let documentFileName = "extension.mdx"
+    static let documentFileNames = ["extension.mdx", "extension.md"]
 
     static let maxTags = 8
     static let maxScreenshots = 8
@@ -45,7 +46,8 @@ extension ExtensionCard {
               let authorJSON = json["author"] as? [String: Any],
               let authorName = text(authorJSON["name"], limit: maxTitleLength),
               let created = date(json["created"]),
-              LanguageManifest.string(json["document"]) == documentFileName,
+              let document = LanguageManifest.string(json["document"]),
+              documentFileNames.contains(document),
               let documentBytes = ExtensionIndex.integer(json["documentBytes"]),
               documentBytes > 0, documentBytes <= ExtensionMediaGate.maxDocumentBytes,
               let mediaBytes = ExtensionIndex.integer(json["mediaBytes"]),
@@ -74,7 +76,7 @@ extension ExtensionCard {
             cover: cover,
             tags: tagList(json["tags"]),
             screenshots: screenshots,
-            document: documentFileName,
+            document: document,
             documentBytes: documentBytes,
             media: media,
             mediaBytes: mediaBytes
