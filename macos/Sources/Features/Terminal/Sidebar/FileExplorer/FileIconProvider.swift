@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// What to draw next to a row in the file explorer.
@@ -14,10 +15,11 @@ enum FileIcon: Equatable {
 /// Resolves a filename to an icon, and owns the set of installed icon
 /// themes.
 ///
-/// Themes come from two places, mirroring how `ThemeCatalog` handles color
-/// themes: the one bundled with the app, and anything the user drops in
-/// `~/.config/phantom/icon-themes/<name>/`. Any SVG-based VS Code icon
-/// theme works — copy the extension's folder in, no install step.
+/// Themes come from three places, mirroring how `ThemeCatalog` handles color
+/// themes: the one bundled with the app, anything the user drops in
+/// `~/.config/phantom/icon-themes/<name>/`, and the directories installed
+/// extensions contribute. Any SVG-based VS Code icon theme works — copy the
+/// extension's folder in, no install step.
 ///
 /// With no theme selected the explorer still looks like an explorer: the
 /// `symbolFallback` table below maps the common extensions onto SF Symbols
@@ -41,8 +43,15 @@ final class FileIconProvider: ObservableObject {
     /// directory listing.
     private var imageCache: [String: NSImage] = [:]
 
+    private var catalogObservation: AnyCancellable?
+
     private init() {
         reload()
+        catalogObservation = LanguageResolver.shared.$catalog
+            .dropFirst()
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.reload() }
+            }
     }
 
     // MARK: Catalog
@@ -70,8 +79,28 @@ final class FileIconProvider: ObservableObject {
             }
         }
 
+        found += Self.contributedThemes(
+            LanguageResolver.shared.catalog.iconThemes,
+            excluding: Set(found.map(\.name))
+        )
+
         themes = found.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         applySelection()
+    }
+
+    nonisolated static func contributedThemes(
+        _ contributed: [LanguageCatalog.ContributedIconTheme],
+        excluding taken: Set<String>
+    ) -> [IconTheme] {
+        var seen = taken
+        return contributed.compactMap { entry in
+            guard seen.insert(entry.iconTheme.name).inserted else { return nil }
+            return IconTheme.load(
+                directory: entry.iconTheme.directoryURL,
+                name: entry.iconTheme.name,
+                contributedBy: entry.extensionName
+            )
+        }
     }
 
     /// Selects a theme by name, or `symbolsOnly` to fall back to SF Symbols.

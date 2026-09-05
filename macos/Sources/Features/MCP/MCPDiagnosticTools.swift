@@ -207,7 +207,8 @@ enum MCPDiagnosticTools {
             tool: MCPTool(
                 name: "list_language_servers",
                 description: """
-                    List the language servers this app knows: what each one is called, \
+                    List the language servers this app knows, built-in and contributed by \
+                    installed extensions: what each one is called, where it came from, \
                     whether it is running, and the reason if it is not — plus the command \
                     and arguments it launches with, whether the reader has overridden \
                     them, and the tail of its own error output. Use it when a file has no \
@@ -218,7 +219,7 @@ enum MCPDiagnosticTools {
                     """,
                 schema: MCPSchema.object([:]))
         ) { _, answer in
-            let servers = LSPServerRegistry.distinctServers.map { definition in
+            let servers = MCPLanguageServerTools.knownServers.map { definition in
                 let effective = LSPCenter.effectiveDefinition(definition)
                 let snapshot = LSPCenter.shared.status(for: definition)
                 let override = LSPServerOverrideStore.override(for: definition.command)
@@ -227,6 +228,7 @@ enum MCPDiagnosticTools {
                 return JSONValue.object([
                     "name": .string(definition.displayName),
                     "language": .string(definition.languageID),
+                    "origin": .string(MCPLanguageServerTools.origin(of: definition)),
                     "state": .string(state(snapshot.state)),
                     "reason": reason(snapshot.state),
                     "command": .string(effective.command),

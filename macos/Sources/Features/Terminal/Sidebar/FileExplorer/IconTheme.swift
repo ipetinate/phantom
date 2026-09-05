@@ -37,6 +37,8 @@ struct IconTheme: Equatable {
     let defaultFolderExpanded: String?
     let defaultRootFolder: String?
 
+    var contributedBy: String?
+
     /// Whether this theme resolved any SVG at all. A font-based theme
     /// parses cleanly but can't draw anything, and the picker needs to say
     /// so rather than silently showing blank rows.
@@ -150,7 +152,11 @@ struct IconTheme: Equatable {
     /// Reads `icon-theme.json` (or the first `*icon-theme.json`) out of a
     /// theme directory. Returns nil only when there's no readable theme
     /// file at all.
-    static func load(directory: URL) -> IconTheme? {
+    static func load(
+        directory: URL,
+        name: String? = nil,
+        contributedBy: String? = nil
+    ) -> IconTheme? {
         let fm = FileManager.default
         var jsonURL = directory.appendingPathComponent("icon-theme.json")
 
@@ -170,10 +176,20 @@ struct IconTheme: Equatable {
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return nil }
 
-        return parse(json: json, name: directory.lastPathComponent, root: directory)
+        return parse(
+            json: json,
+            name: name ?? directory.lastPathComponent,
+            root: directory,
+            contributedBy: contributedBy
+        )
     }
 
-    static func parse(json: [String: Any], name: String, root: URL) -> IconTheme {
+    static func parse(
+        json: [String: Any],
+        name: String,
+        root: URL,
+        contributedBy: String? = nil
+    ) -> IconTheme {
         var definitions: [String: String] = [:]
         if let raw = json["iconDefinitions"] as? [String: Any] {
             for (id, value) in raw {
@@ -197,7 +213,8 @@ struct IconTheme: Equatable {
             defaultFile: json["file"] as? String,
             defaultFolder: json["folder"] as? String,
             defaultFolderExpanded: json["folderExpanded"] as? String,
-            defaultRootFolder: json["rootFolder"] as? String
+            defaultRootFolder: json["rootFolder"] as? String,
+            contributedBy: contributedBy
         )
     }
 

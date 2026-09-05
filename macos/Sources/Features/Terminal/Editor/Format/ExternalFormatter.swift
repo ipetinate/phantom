@@ -47,6 +47,12 @@ struct ExternalFormatter: Identifiable, Hashable, Sendable {
     /// that simply format.
     let note: String?
 
+    var provenance: ExtensionProvenance?
+
+    var origin: LSPServerOrigin {
+        provenance.map(LSPServerOrigin.manifest) ?? .builtIn
+    }
+
     /// The arguments for one file: `$FILE` replaced, everything else as
     /// written.
     func arguments(for path: String) -> [String] {

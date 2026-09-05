@@ -91,11 +91,10 @@ struct FileExplorerSettingsSection: View {
     /// directory is deleted, and nothing on screen says why.
     private var iconThemeRows: [IconThemeRow] {
         var rows = icons.themes.map { theme in
-            IconThemeRow(
+            let title = theme.contributedBy.map { "\(theme.name) — \($0)" } ?? theme.name.capitalized
+            return IconThemeRow(
                 name: theme.name,
-                label: theme.isSupported
-                    ? theme.name.capitalized
-                    : theme.name.capitalized + " (No Artwork)"
+                label: theme.isSupported ? title : title + " (No Artwork)"
             )
         }
 

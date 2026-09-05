@@ -82,7 +82,8 @@ enum ExternalFormatterStore {
             arguments: arguments.isEmpty ? formatter.arguments : Self.split(arguments),
             extensions: formatter.extensions,
             installHint: formatter.installHint,
-            note: formatter.note)
+            note: formatter.note,
+            provenance: formatter.provenance)
     }
 
     /// A typed argument line, split the way a shell would split the simple

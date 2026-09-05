@@ -1,7 +1,7 @@
 import Foundation
 
-/// Where a server definition came from, and therefore how far it is allowed
-/// to go without being asked about.
+/// Where a server definition, or an external formatter, came from — and
+/// therefore how far it is allowed to go without being asked about.
 ///
 /// This travels *on the definition* rather than in a table beside it. A
 /// field that rides along cannot be forgotten; a side table looked up by
@@ -75,6 +75,17 @@ struct LanguageTrustRecord: Codable, Equatable, Sendable {
     var decision: Decision
 
     var decidedAt: Date
+
+    var programs: [ApprovedProgram]?
+
+    var approvedPrograms: [ApprovedProgram] {
+        [ApprovedProgram(command: command, resolvedPath: resolvedPath)] + (programs ?? [])
+    }
+}
+
+struct ApprovedProgram: Codable, Equatable, Sendable {
+    var command: String
+    var resolvedPath: String
 }
 
 /// Whether a server may be launched — the entire trust model, as one pure
@@ -195,14 +206,16 @@ enum LanguageTrust {
 
         case .allowed:
             if record.digest != subject.digest { return .ask(.manifestChanged) }
-            if record.command != subject.command {
+            guard let program = record.approvedPrograms.first(where: {
+                $0.command == subject.command
+            }) else {
                 return .ask(.commandChanged(previous: record.command))
             }
             if record.manifestPath != provenance.manifestPath {
                 return .ask(.manifestMoved(previous: record.manifestPath))
             }
-            if record.resolvedPath != subject.resolvedPath {
-                return .ask(.commandPathChanged(previous: record.resolvedPath))
+            if program.resolvedPath != subject.resolvedPath {
+                return .ask(.commandPathChanged(previous: program.resolvedPath))
             }
             return .allow
         }
@@ -212,19 +225,30 @@ enum LanguageTrust {
     static func record(
         for subject: Subject,
         decision: LanguageTrustRecord.Decision,
-        at date: Date = Date()
+        at date: Date = Date(),
+        extending existing: LanguageTrustRecord? = nil
     ) -> LanguageTrustRecord {
-        LanguageTrustRecord(
+        let manifestPath: String = {
+            guard case .manifest(let provenance) = subject.origin else { return "" }
+            return provenance.manifestPath
+        }()
+
+        var others: [ApprovedProgram]?
+        if decision == .allowed, let existing, existing.decision == .allowed,
+           existing.digest == subject.digest, existing.manifestPath == manifestPath {
+            let kept = existing.approvedPrograms.filter { $0.command != subject.command }
+            others = kept.isEmpty ? nil : kept
+        }
+
+        return LanguageTrustRecord(
             recordVersion: LanguageTrustStore.currentRecordVersion,
             digest: subject.digest,
             command: subject.command,
             resolvedPath: subject.resolvedPath,
-            manifestPath: {
-                guard case .manifest(let provenance) = subject.origin else { return "" }
-                return provenance.manifestPath
-            }(),
+            manifestPath: manifestPath,
             decision: decision,
-            decidedAt: date
+            decidedAt: date,
+            programs: others
         )
     }
 

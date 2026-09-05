@@ -12,8 +12,8 @@ enum TabRowAgentActions {
     /// `AgentTabRecord.liveAgent` is a file's word, and the file is written by
     /// the agent's own hook. Two of the six agents have no session-end event
     /// to hook at all — the OpenCode plugin reports `working`, `done` and
-    /// `awaiting` and nothing else, and `AntigravityHooksInstaller` says so
-    /// outright — and none of the other four gets to write its last word when
+    /// `awaiting` and nothing else, and Antigravity's descriptor registers
+    /// working and done alone — and none of the other four gets to write its last word when
     /// the process goes down without reaching its exit path. So a tab whose
     /// agent the reader killed keeps a file that says `working`, forever, and
     /// the row went on hiding every button on the strength of it. That is the

@@ -11,7 +11,8 @@ import Testing
 /// reimplementation of any of the three would prove nothing about the text that
 /// lands in the user's `~/.claude/hooks`. So the script body is written to a
 /// temp directory and invoked exactly as a registered hook invokes it: state as
-/// `$1`, JSON payload on stdin, `GHOSTTY_TAB_STATE_FILE` in the environment.
+/// `$1`, the descriptor's options after it, JSON payload on stdin,
+/// `GHOSTTY_TAB_STATE_FILE` in the environment.
 @MainActor
 struct HookScriptCaptureTests {
     /// The id a session actually has, and one belonging to something else that
@@ -19,8 +20,8 @@ struct HookScriptCaptureTests {
     private let real = "fe5e4f94-d3e0-4af7-b877-42073d603aff"
     private let nested = "deadbeef-0000-4000-8000-000000000000"
 
-    /// Which generated script is under test. Both share the defects, because
-    /// one was written from the other.
+    /// Which agent's registration is under test. One script serves both; what
+    /// differs is the arguments each descriptor registers it with.
     enum Script: String, Sendable, CaseIterable {
         case claude
         case codex
@@ -31,18 +32,19 @@ struct HookScriptCaptureTests {
             case .codex: return .codex
             }
         }
-    }
 
-    private func body(of script: Script) -> String {
-        switch script {
-        case .claude: return ClaudeHooksInstaller.scriptBody
-        case .codex: return CodexHooksInstaller.scriptBody
+        func arguments(state: String?) -> [String] {
+            TabStateScript.arguments(
+                agent: rawValue,
+                state: state ?? "",
+                options: TabStateScript.options(of: agent.descriptor))
         }
     }
 
     // MARK: - Harness
 
     private struct Installed {
+        let kind: Script
         let directory: URL
         let script: URL
         let stateFile: URL
@@ -60,10 +62,10 @@ struct HookScriptCaptureTests {
         let stateFile = directory.appendingPathComponent("state")
         try body { script in
             let url = directory.appendingPathComponent("\(script.rawValue)-tab-state.sh")
-            try self.body(of: script).write(to: url, atomically: true, encoding: .utf8)
+            try TabStateScript.body.write(to: url, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o755], ofItemAtPath: url.path)
-            return Installed(directory: directory, script: url, stateFile: stateFile)
+            return Installed(kind: script, directory: directory, script: url, stateFile: stateFile)
         }
     }
 
@@ -86,7 +88,7 @@ struct HookScriptCaptureTests {
     ) throws -> Fired {
         let process = Process()
         process.executableURL = installed.script
-        process.arguments = state.map { [$0] } ?? []
+        process.arguments = installed.kind.arguments(state: state)
         var environment = ProcessInfo.processInfo.environment
         environment["GHOSTTY_TAB_STATE_FILE"] = installed.stateFile.path
         process.environment = environment
@@ -341,7 +343,7 @@ struct HookScriptCaptureTests {
     ) throws -> (process: Process, errors: Pipe) {
         let process = Process()
         process.executableURL = installed.script
-        process.arguments = [state]
+        process.arguments = installed.kind.arguments(state: state)
         var environment = ProcessInfo.processInfo.environment
         environment["GHOSTTY_TAB_STATE_FILE"] = installed.stateFile.path
         process.environment = environment
@@ -363,11 +365,11 @@ struct HookScriptCaptureTests {
     /// two tabs in one directory are told apart — which no on-disk lookup can
     /// do, because nothing on disk distinguishes them.
     @Test func bothInstallersRegisterASessionStartThatReportsNoState() {
-        let claude = ClaudeHooksInstaller.eventStates
-        let codex = CodexHooksInstaller.eventStates
+        let claude = AgentRegistry.claude.hooks?.hookEvents ?? []
+        let codex = AgentRegistry.codex.hooks?.hookEvents ?? []
 
-        #expect(claude.contains { $0.event == "SessionStart" && $0.state.isEmpty })
-        #expect(codex.contains { $0.event == "SessionStart" && $0.state.isEmpty })
+        #expect(claude.contains { $0.name == "SessionStart" && $0.state.isEmpty })
+        #expect(codex.contains { $0.name == "SessionStart" && $0.state.isEmpty })
 
         // Exactly one event may be stateless. Anything else reporting an empty
         // word would silently erase a live indicator.
@@ -379,22 +381,29 @@ struct HookScriptCaptureTests {
     /// Codex's internal normalization and appear only as bookkeeping keys under
     /// `[hooks.state]` in `config.toml`; writing those would register nothing.
     @Test func codexEventNamesArePascalCase() {
-        for (event, _) in CodexHooksInstaller.eventStates {
+        for event in AgentRegistry.codex.hooks?.events ?? [] {
             #expect(!event.contains("_"), "\(event) is not the spelling hooks.json takes")
             #expect(event.first?.isUppercase == true, "\(event) is not PascalCase")
         }
     }
 
-    /// A stateless event passes no argument at all rather than an empty one, so
-    /// the registered line cannot end in a stray space or a literal `''` whose
-    /// meaning depends on whether a shell is in the way.
-    @Test func aStatelessEventRegistersWithNoTrailingArgument() {
-        let stateless = ClaudeHooksInstaller.command(for: "")
+    /// A stateless event passes no state word at all rather than an empty one,
+    /// so the registered line cannot carry a literal `''` whose meaning depends
+    /// on whether a shell is in the way. The descriptor's options follow the
+    /// script either way, and the agent is always named.
+    @Test func aStatelessEventRegistersWithNoStateWord() throws {
+        let claude = try #require(JSONHooksInstaller(descriptor: AgentRegistry.claude))
+        let codex = try #require(JSONHooksInstaller(descriptor: AgentRegistry.codex))
+        let start = HooksIntegration.Event("SessionStart", "")
+        let stateless = claude.command(for: start)
+
         #expect(!stateless.hasSuffix(" "))
         #expect(!stateless.contains("''"))
-        #expect(stateless.hasSuffix("'"))
-        #expect(ClaudeHooksInstaller.command(for: "done").hasSuffix("' done"))
-        #expect(!CodexHooksInstaller.command(for: "").hasSuffix(" "))
+        #expect(stateless.hasPrefix("'\(claude.scriptURL.path)' --agent claude"))
+        #expect(claude.command(for: .init("Stop", "done"))
+            .hasPrefix("'\(claude.scriptURL.path)' done --agent claude"))
+        #expect(codex.command(for: start).hasPrefix("'\(codex.scriptURL.path)' --agent codex"))
+        #expect(!codex.command(for: start).hasSuffix(" "))
     }
 
     /// Invoked the way that registration invokes it — no argument — the script

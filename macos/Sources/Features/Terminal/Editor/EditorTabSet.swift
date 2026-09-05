@@ -30,9 +30,13 @@ struct EditorTab: Identifiable, Equatable {
     /// nothing else.
     var isPinned: Bool = false
 
+    var title: String?
+
+    var symbol: String?
+
     var id: String { path }
 
-    var name: String { (path as NSString).lastPathComponent }
+    var name: String { title ?? (path as NSString).lastPathComponent }
 
     /// The containing directory, shown only to tell apart two tabs that
     /// share a name — `index.ts` twice is the ordinary case, not the edge.
@@ -153,10 +157,17 @@ struct EditorTabSet: Equatable {
     /// leaves it alone — opening a file is not a request to disturb the tabs
     /// the reader chose to keep at hand.
     mutating func open(_ path: String) {
-        if !tabs.contains(where: { $0.path == path }) {
-            tabs.append(EditorTab(path: path))
+        open(EditorTab(path: path))
+    }
+
+    mutating func open(_ tab: EditorTab) {
+        if let index = tabs.firstIndex(where: { $0.path == tab.path }) {
+            if tab.title != nil { tabs[index].title = tab.title }
+            if tab.symbol != nil { tabs[index].symbol = tab.symbol }
+        } else {
+            tabs.append(tab)
         }
-        selection = .file(path)
+        selection = .file(tab.path)
     }
 
     /// Closes a tab and picks what to show next.
@@ -360,7 +371,9 @@ struct EditorTabSet: Equatable {
         tabs[index] = EditorTab(
             path: newPath,
             isDirty: tabs[index].isDirty,
-            isPinned: tabs[index].isPinned)
+            isPinned: tabs[index].isPinned,
+            title: tabs[index].title,
+            symbol: tabs[index].symbol)
         if selection == .file(oldPath) { selection = .file(newPath) }
     }
 

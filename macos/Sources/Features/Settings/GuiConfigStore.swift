@@ -17,6 +17,7 @@ final class GuiConfigStore: ObservableObject {
     @Published private(set) var values: [String: String] = [:]
 
     private let configDir: URL
+    private let cachesDirOverride: URL?
 
     var guiFileURL: URL { configDir.appendingPathComponent(Self.fileName) }
     var mainConfigURL: URL { configDir.appendingPathComponent("config") }
@@ -55,8 +56,23 @@ final class GuiConfigStore: ObservableObject {
     /// alongside would be one the manifest's author could grant itself.
     var extensionsDirURL: URL { configDir.appendingPathComponent("extensions", isDirectory: true) }
 
-    init(configDir: URL? = nil) {
+    var cachesDirURL: URL { cachesDirOverride ?? Self.defaultCachesDir() }
+
+    nonisolated static func cachesDir(bundleID: String, base: URL) -> URL {
+        base.appendingPathComponent(bundleID, isDirectory: true)
+    }
+
+    nonisolated private static func defaultCachesDir() -> URL {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Caches", isDirectory: true)
+        return cachesDir(bundleID: Bundle.main.bundleIdentifier ?? PhantomBuild.releaseBundleID, base: base)
+    }
+
+    init(configDir: URL? = nil, cachesDir: URL? = nil) {
         self.configDir = configDir ?? Self.defaultConfigDir()
+        self.cachesDirOverride = cachesDir
         load()
         var changed = Self.applyForkDefaults(to: &values)
         changed = Self.applyFactoryTheme(to: &values, in: self.configDir) || changed
@@ -309,8 +325,19 @@ final class GuiConfigStore: ObservableObject {
     /// it loads directly.
     func setTheme(_ theme: TerminalTheme) {
         switch theme.source {
-        case .user: set("theme", theme.url.path)
+        case .user, .contributed: set("theme", theme.url.path)
         case .builtin: set("theme", theme.name)
+        }
+    }
+
+    func isCurrentTheme(_ theme: TerminalTheme) -> Bool {
+        switch theme.source {
+        case .builtin, .user:
+            return currentThemeName == theme.name
+        case .contributed:
+            guard let value = string("theme"), value.hasPrefix("/") else { return false }
+            return URL(fileURLWithPath: value).standardizedFileURL.path
+                == theme.url.standardizedFileURL.path
         }
     }
 

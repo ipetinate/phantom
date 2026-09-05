@@ -254,11 +254,15 @@ extension EditorGroupTree {
     ///   points focus at.
     @discardableResult
     mutating func open(_ path: String, in id: EditorGroup.ID) -> EditorGroup.ID {
-        if let existing = groupHolding(path) {
-            apply(existing) { $0.tabs.select(path) }
+        open(EditorTab(path: path), in: id)
+    }
+
+    mutating func open(_ tab: EditorTab, in id: EditorGroup.ID) -> EditorGroup.ID {
+        if let existing = groupHolding(tab.path) {
+            apply(existing) { $0.tabs.open(tab) }
             return existing
         }
-        apply(id) { $0.tabs.open(path) }
+        apply(id) { $0.tabs.open(tab) }
         return id
     }
 

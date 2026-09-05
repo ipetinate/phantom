@@ -1,6 +1,18 @@
 import Foundation
 
-/// The six agents' hooks, and the one place that knows all of them.
+@MainActor
+protocol HooksEngine: AnyObject {
+    var descriptor: AgentDescriptor { get }
+    var isInstalled: Bool { get }
+    var isStale: Bool { get }
+    var lastError: String? { get }
+
+    @discardableResult func install() -> Bool
+    @discardableResult func uninstall() -> Bool
+    @discardableResult func repairIfStale() -> Bool
+}
+
+/// The agents' hooks, and the one place that knows all of them.
 ///
 /// The MCP side has had `MCPServerRegistration` since it grew a second caller,
 /// and for the reason stated there: two hand-written lists of six agents is how
@@ -11,9 +23,9 @@ import Foundation
 /// updated from inside Antigravity's install closure, so a hook installed in
 /// another window showed as missing here until the pane was reopened.
 ///
-/// Closures rather than a protocol, mirroring `MCPServerRegistration` exactly:
-/// each installer is a value that lives beside the file it writes, and adding a
-/// seventh agent should be one entry here.
+/// Closures rather than a protocol on the row, mirroring `MCPServerRegistration`
+/// exactly. Each closure reaches an engine built from the agent's descriptor,
+/// so an agent the registry gains is listed here without another entry.
 @MainActor
 enum AgentHooksRegistration {
     struct Agent: Identifiable {
@@ -23,81 +35,90 @@ enum AgentHooksRegistration {
         /// menu takes it.
         var name: String { id.displayName }
 
-        let isInstalled: () -> Bool
+        let isInstalled: @MainActor () -> Bool
 
         /// Installed, but not the script this build ships. Absent from
         /// `MCPServerRegistration.Agent`, and present here because the hooks
         /// are generated files that go out of date with the app while an MCP
         /// entry only goes out of date when the app moves.
-        let isStale: () -> Bool
+        let isStale: @MainActor () -> Bool
 
-        let install: () -> Bool
-        let uninstall: () -> Bool
-        let repairIfStale: () -> Bool
-        let lastError: () -> String?
+        let install: @MainActor () -> Bool
+        let uninstall: @MainActor () -> Bool
+        let repairIfStale: @MainActor () -> Bool
+        let lastError: @MainActor () -> String?
+
+        init(id: CodingAgent, engine: HooksEngine) {
+            self.id = id
+            self.isInstalled = { engine.isInstalled }
+            self.isStale = { engine.isStale }
+            self.install = { engine.install() }
+            self.uninstall = { engine.uninstall() }
+            self.repairIfStale = { engine.repairIfStale() }
+            self.lastError = { engine.lastError }
+        }
+    }
+
+    static func engine(for agent: CodingAgent) -> HooksEngine? {
+        engine(for: agent.descriptor)
+    }
+
+    static func engine(for descriptor: AgentDescriptor) -> HooksEngine? {
+        switch descriptor.hooks {
+        case .json(let hooks)?:
+            return JSONHooksInstaller(descriptor: descriptor, hooks: hooks)
+        case .toml(let hooks)?:
+            return TOMLHooksInstaller(descriptor: descriptor, hooks: hooks)
+        case .file(let plugin)?:
+            return PluginFileInstaller(descriptor: descriptor, plugin: plugin)
+        case nil:
+            return nil
+        }
+    }
+
+    static func pluginFile(for agent: CodingAgent) -> PluginFileInstaller? {
+        engine(for: agent) as? PluginFileInstaller
+    }
+
+    nonisolated static func installsAnExtensionTemplate(_ descriptor: AgentDescriptor) -> Bool {
+        guard case .file? = descriptor.hooks else { return false }
+        return !AgentRegistry.builtInIDs.contains(descriptor.id)
+    }
+
+    nonisolated static func templateFooter(
+        agentName: String,
+        extensionName: String?,
+        fileName: String,
+        events: [String]
+    ) -> String {
+        let source = extensionName.map { "the \($0) extension" } ?? "an extension"
+        var sentences = [
+            "\(fileName) is a plugin \(source) ships, written to the folder above where \(agentName) loads it.",
+            "Phantom writes the file when you press Install and runs none of it; \(agentName) does.",
+        ]
+        if !events.isEmpty {
+            sentences.append("It subscribes to \(events.joined(separator: ", ")).")
+        }
+        return sentences.joined(separator: " ")
     }
 
     static var agents: [Agent] {
-        [
-            Agent(
-                id: .claude,
-                isInstalled: { ClaudeHooksInstaller.isInstalled },
-                isStale: { ClaudeHooksInstaller.isStale },
-                install: { ClaudeHooksInstaller.install() },
-                uninstall: { ClaudeHooksInstaller.uninstall() },
-                repairIfStale: { ClaudeHooksInstaller.repairIfStale() },
-                lastError: { ClaudeHooksInstaller.lastError }),
-            Agent(
-                id: .codex,
-                isInstalled: { CodexHooksInstaller.isInstalled },
-                isStale: { CodexHooksInstaller.isStale },
-                install: { CodexHooksInstaller.install() },
-                uninstall: { CodexHooksInstaller.uninstall() },
-                repairIfStale: { CodexHooksInstaller.repairIfStale() },
-                lastError: { CodexHooksInstaller.lastError }),
-            Agent(
-                id: .opencode,
-                isInstalled: { OpenCodeHooksInstaller.isInstalled },
-                isStale: { OpenCodeHooksInstaller.isStale },
-                install: { OpenCodeHooksInstaller.install() },
-                uninstall: { OpenCodeHooksInstaller.uninstall() },
-                repairIfStale: { OpenCodeHooksInstaller.repairIfStale() },
-                lastError: { OpenCodeHooksInstaller.lastError }),
-            Agent(
-                id: .antigravity,
-                isInstalled: { AntigravityHooksInstaller.isInstalled },
-                isStale: { AntigravityHooksInstaller.isStale },
-                install: { AntigravityHooksInstaller.install() },
-                uninstall: { AntigravityHooksInstaller.uninstall() },
-                repairIfStale: { AntigravityHooksInstaller.repairIfStale() },
-                lastError: { AntigravityHooksInstaller.lastError }),
-            Agent(
-                id: .kimi,
-                isInstalled: { KimiHooksInstaller.isInstalled },
-                isStale: { KimiHooksInstaller.isStale },
-                install: { KimiHooksInstaller.install() },
-                uninstall: { KimiHooksInstaller.uninstall() },
-                repairIfStale: { KimiHooksInstaller.repairIfStale() },
-                lastError: { KimiHooksInstaller.lastError }),
-            Agent(
-                id: .pi,
-                isInstalled: { PiHooksInstaller.isInstalled },
-                isStale: { PiHooksInstaller.isStale },
-                install: { PiHooksInstaller.install() },
-                uninstall: { PiHooksInstaller.uninstall() },
-                repairIfStale: { PiHooksInstaller.repairIfStale() },
-                lastError: { PiHooksInstaller.lastError }),
-        ]
+        CodingAgent.allCases.compactMap { agent in
+            engine(for: agent).map { Agent(id: agent, engine: $0) }
+        }
     }
 
-    /// Agents this app knows but installs no hooks for, and why.
+    /// Agents this app knows but installs no hooks for: the ones whose
+    /// descriptor carries no hooks integration.
     ///
     /// Declared rather than implied by omission, for the reason
     /// `MCPServerRegistration.withoutInstaller` gives: omission is how an agent
     /// gets forgotten, and a test asserts that this set and ``agents`` together
     /// account for every `CodingAgent`. Empty today — every agent this app
     /// launches has somewhere to put a hook.
-    static let withoutInstaller: Set<CodingAgent> = []
+    static var withoutInstaller: Set<CodingAgent> {
+        Set(CodingAgent.allCases.filter { $0.descriptor.hooks == nil })
+    }
 
     /// Who has hooks installed right now, read off disk each time.
     ///
@@ -120,5 +141,11 @@ enum AgentHooksRegistration {
     /// that way.
     static func repairAll() {
         for agent in agents { _ = agent.repairIfStale() }
+    }
+
+    static func logStatus() {
+        for agent in CodingAgent.allCases {
+            (engine(for: agent) as? JSONHooksInstaller)?.logStatus()
+        }
     }
 }

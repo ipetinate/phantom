@@ -16,6 +16,7 @@ struct SettingsRootView: View {
         case files
         case keyboardShortcuts
         case languageServers
+        case extensions
         case agents
         case mcp
         case worktrees
@@ -31,6 +32,7 @@ struct SettingsRootView: View {
             case .files: return "Editor"
             case .keyboardShortcuts: return "Keyboard Shortcuts"
             case .languageServers: return "Languages"
+            case .extensions: return "Extensions"
             case .agents: return "Agents"
             case .mcp: return "MCP"
             case .worktrees: return "Worktrees"
@@ -50,6 +52,7 @@ struct SettingsRootView: View {
             case .files: return "doc.text"
             case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
+            case .extensions: return "puzzlepiece"
             case .agents: return "sparkles"
             case .mcp: return "point.3.connected.trianglepath.dotted"
             }
@@ -97,6 +100,8 @@ struct SettingsRootView: View {
                 KeyboardShortcutsSettingsView()
             case .languageServers:
                 LanguageServersSettingsView()
+            case .extensions:
+                ExtensionsSettingsView()
             case .agents:
                 AgentsSettingsView()
             case .mcp:
@@ -215,9 +220,9 @@ struct SidebarSettingsView: View {
 
     @State private var sidebarEnabled: Bool = false
 
-    @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
-    @AppStorage("SidebarShowGitPane") private var showGitPane = true
-    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
+    @ObservedObject private var visibility: SidebarPaneVisibility = .shared
+    @AppStorage(SidebarTabBarPlacement.defaultsKey)
+    private var tabBarPlacementRaw = SidebarTabBarPlacement.top.rawValue
 
     @AppStorage("SidebarShowDirectory") private var showDirectory = true
     @AppStorage("SidebarShowGitBranch") private var showGitBranch = true
@@ -274,16 +279,23 @@ struct SidebarSettingsView: View {
             }
 
             Section {
-                Toggle("File Explorer", isOn: $showFilesPane)
-                    .toggleStyle(.switch)
-                Toggle("Git", isOn: $showGitPane)
-                    .toggleStyle(.switch)
-                Toggle("Worktrees", isOn: $showWorktreesPane)
-                    .toggleStyle(.switch)
+                SettingsMultiSelect(
+                    title: "Show",
+                    options: SidebarPane.allCases.filter(\.canBeHidden).map { pane in
+                        .init(id: pane.rawValue, title: pane.title, isOn: visibility.binding(for: pane))
+                    },
+                    emptyLabel: "Terminals only")
+
+                Picker("Tab Bar", selection: $tabBarPlacementRaw) {
+                    ForEach(SidebarTabBarPlacement.allCases) { placement in
+                        Text(placement.title).tag(placement.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
             } header: {
                 Text("Panes")
             } footer: {
-                Text("Terminals is always available. With everything else off there is nothing to switch between, so the tabs disappear and the sidebar is just the terminal list.")
+                Text("Terminals is always available. With everything else off there is nothing to switch between, so the tabs disappear and the sidebar is just the terminal list. Extensions lists the registry and lets you install from the sidebar. Side puts one icon per pane in a column along the sidebar's edge.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -438,7 +450,15 @@ struct AgentsSettingsView: View {
     /// Pi is drawn in its own section below, because what it installs is an
     /// extension rather than a hook and the sentence under it says so.
     private var hookAgents: [AgentHooksRegistration.Agent] {
-        AgentHooksRegistration.agents.filter { $0.id != .pi }
+        AgentHooksRegistration.agents.filter {
+            $0.id != .pi && !AgentHooksRegistration.installsAnExtensionTemplate($0.id.descriptor)
+        }
+    }
+
+    private var templateAgents: [AgentHooksRegistration.Agent] {
+        AgentHooksRegistration.agents.filter {
+            AgentHooksRegistration.installsAnExtensionTemplate($0.id.descriptor)
+        }
     }
 
     var body: some View {
@@ -464,13 +484,19 @@ struct AgentsSettingsView: View {
                 if let pi = AgentHooksRegistration.agents.first(where: { $0.id == .pi }) {
                     agentHookRow(pi, noun: "Extension")
                 }
-                CopyableValueRow(title: "Installed at", value: PiHooksInstaller.extensionURL.path)
+                CopyableValueRow(
+                    title: "Installed at",
+                    value: AgentHooksRegistration.pluginFile(for: .pi)?.fileURL.path ?? "")
             } header: {
                 Text("Pi Extension")
             } footer: {
-                Text("Pi has no hooks file to add to. It loads TypeScript extensions, so Phantom ships one and writes it to the folder above, where Pi discovers it on its own — there is no package to install and nothing of yours to merge into. It subscribes to \(PiHooksInstaller.events.joined(separator: ", ")). Like Antigravity it reports working and done but never waiting, and for a different reason: Pi has no permission event to subscribe to at all. Its core does not prompt \u{2014} a confirmation comes from an extension that asks for one itself, so there is nothing here to observe.")
+                Text("Pi has no hooks file to add to. It loads TypeScript extensions, so Phantom ships one and writes it to the folder above, where Pi discovers it on its own — there is no package to install and nothing of yours to merge into. It subscribes to \((CodingAgent.pi.descriptor.hooks?.events ?? []).joined(separator: ", ")). Like Antigravity it reports working and done but never waiting, and for a different reason: Pi has no permission event to subscribe to at all. Its core does not prompt \u{2014} a confirmation comes from an extension that asks for one itself, so there is nothing here to observe.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            ForEach(templateAgents) { agent in
+                templateSection(agent)
             }
 
             Section {
@@ -487,7 +513,7 @@ struct AgentsSettingsView: View {
         .formStyle(.grouped)
         .navigationTitle("Agents")
         .onAppear {
-            ClaudeHooksInstaller.logStatus()
+            AgentHooksRegistration.logStatus()
             refresh()
         }
         // Claude Code owns this settings file too and rewrites it when its
@@ -502,6 +528,26 @@ struct AgentsSettingsView: View {
 
     private func refresh() {
         installed = AgentHooksRegistration.status()
+    }
+
+    private func templateSection(_ agent: AgentHooksRegistration.Agent) -> some View {
+        let installer = AgentHooksRegistration.pluginFile(for: agent.id)
+        let contributed = LanguageResolver.shared.catalog.agent(forID: agent.id.rawValue)
+
+        return Section {
+            agentHookRow(agent, noun: "Plugin")
+            CopyableValueRow(title: "Installed at", value: installer?.fileURL.path ?? "")
+        } header: {
+            Text(verbatim: "\(agent.name) Plugin")
+        } footer: {
+            Text(verbatim: AgentHooksRegistration.templateFooter(
+                agentName: agent.name,
+                extensionName: contributed?.extensionName,
+                fileName: installer?.fileName ?? "",
+                events: installer?.events ?? []))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func agentHookRow(

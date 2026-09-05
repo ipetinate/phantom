@@ -536,6 +536,7 @@ final class SidebarTabManager: ObservableObject {
     ) {
         guard let view = notification.object as? Ghostty.SurfaceView,
               let model = models.first(where: { $0.surfaceId == view.id })
+                ?? models.first(where: { $0.window != nil && $0.window === view.window })
         else { return }
         applyCommandRun(model, signal: signal)
     }

@@ -38,6 +38,7 @@ final class LanguageResolver: ObservableObject {
             user: GuiConfigStore.shared.extensionsDirURL,
             promotions: LanguagePromotionStore.all
         )
+        AgentRegistry.shared.setExtensionAgents(catalog.activeAgentDescriptors)
     }
 
     // MARK: Resolution
@@ -118,6 +119,18 @@ final class LanguageResolver: ObservableObject {
         }
         if catalog.contribution(forLanguageID: languageID) != nil { return nil }
         return LSPServerRegistry.server(forLanguage: languageID)
+    }
+
+    func formatter(forFileNamed name: String) -> ExternalFormatter? {
+        Self.formatter(forFileNamed: name, catalog: catalog)
+    }
+
+    nonisolated static func formatter(
+        forFileNamed name: String,
+        catalog: LanguageCatalog
+    ) -> ExternalFormatter? {
+        if let compiled = ExternalFormatterRegistry.formatter(forFileNamed: name) { return compiled }
+        return catalog.formatter(forFileName: name)?.externalFormatter
     }
 
     /// `initializationOptions` a contribution supplied, as JSON text — the

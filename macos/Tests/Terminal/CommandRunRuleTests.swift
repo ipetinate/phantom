@@ -79,8 +79,8 @@ struct CommandRunRuleTests {
             facts(.shell),
             at: start
         )
-        #expect(run?.phase == .failed(exitCode: 1))
-        #expect(run?.mark == .failed(exitCode: 1))
+        #expect(run?.phase == .failed(exitCode: 1, duration: 12))
+        #expect(run?.mark == .failed(exitCode: 1, duration: 12))
 
         /// A failure ignores the minimum duration: a command that fell over
         /// in a fifth of a second is the one worth marking.
@@ -90,7 +90,69 @@ struct CommandRunRuleTests {
             facts(.shell),
             at: start
         )
-        #expect(quick?.mark == .failed(exitCode: 130))
+        #expect(quick?.mark == .failed(exitCode: 130, duration: 0.2))
+    }
+
+    @Test func theFailureTooltipSaysTheCodeAndHowLong() {
+        #expect(
+            CommandRunMark.failed(exitCode: 1, duration: 206).tooltip
+                == "Exited with code 1 after 3m26s"
+        )
+        #expect(CommandRunMark.durationText(0.2) == "0.2s")
+        #expect(CommandRunMark.durationText(59) == "59s")
+        #expect(CommandRunMark.durationText(60) == "1m00s")
+        #expect(CommandRunMark.durationText(3661) == "1h01m")
+        #expect(CommandRunMark.finished.tooltip == "A command finished here")
+        #expect(CommandRunMark.running.tooltip == "Running a command")
+    }
+
+    @Test @MainActor func theFinishSignalIsReadOffTheNotificationThatCarriesIt() {
+        let full = Notification(name: .ghosttyCommandDidFinish, object: nil, userInfo: [
+            Notification.Name.CommandExitCodeKey: 1,
+            Notification.Name.CommandDurationKey: UInt64(206_000_000_000),
+        ])
+        #expect(
+            SidebarTabManager.finishSignal(from: full)
+                == .shellFinished(exitCode: 1, duration: 206)
+        )
+
+        let unreported = Notification(name: .ghosttyCommandDidFinish, object: nil, userInfo: [
+            Notification.Name.CommandDurationKey: UInt64(2_000_000_000),
+        ])
+        #expect(
+            SidebarTabManager.finishSignal(from: unreported)
+                == .shellFinished(exitCode: nil, duration: 2)
+        )
+
+        let bare = Notification(name: .ghosttyCommandDidFinish, object: nil, userInfo: nil)
+        #expect(
+            SidebarTabManager.finishSignal(from: bare)
+                == .shellFinished(exitCode: nil, duration: 0)
+        )
+    }
+
+    @Test func aFinishWithNoStartIsBelieved() {
+        let restored = next(
+            nil, .shellFinished(exitCode: 1, duration: 5), facts(.shell), at: start
+        )
+        #expect(restored?.mark == .failed(exitCode: 1, duration: 5))
+
+        let rested = CommandRun(phase: .idle, isShellReported: true)
+        let again = next(
+            rested, .shellFinished(exitCode: 0, duration: 5), facts(.shell), at: start
+        )
+        #expect(again?.mark == .finished)
+    }
+
+    @Test func aFinishInsideTheWaitIsThisCommandsOwn() {
+        let started = next(nil, .shellStarted, facts(), at: start)
+        let run = next(
+            started,
+            .shellFinished(exitCode: 1, duration: 0.3),
+            facts(.shell),
+            at: start + 0.3
+        )
+        #expect(run?.mark == .failed(exitCode: 1, duration: 0.3))
     }
 
     /// A shell that reports no exit code is not a shell reporting zero. The
@@ -255,7 +317,8 @@ struct CommandRunRuleTests {
     @Test func anAgentTabIsLeftAlone() {
         let foregrounds: [CommandRunRule.Foreground] = [.command, .shell, .unknown]
         let phases: [CommandRun.Phase] = [
-            .running, .finished, .failed(exitCode: 1), .pending(since: start), .interactive,
+            .running, .finished, .failed(exitCode: 1, duration: 30), .pending(since: start),
+            .interactive,
         ]
         let signals: [CommandRunRule.Signal] = [
             .tick, .shellStarted, .shellFinished(exitCode: 1, duration: 30),
@@ -341,7 +404,7 @@ struct CommandRunRuleTests {
         #expect(run?.phase == .pending(since: start))
         #expect(run?.mark == nil)
 
-        let failed = CommandRun(phase: .failed(exitCode: 1), isShellReported: false)
+        let failed = CommandRun(phase: .failed(exitCode: 1, duration: 1), isShellReported: false)
         #expect(next(failed, .tick, facts(.command), at: start)?.mark == nil)
     }
 

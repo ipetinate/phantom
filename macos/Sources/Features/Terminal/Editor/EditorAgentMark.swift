@@ -26,8 +26,9 @@ struct EditorAgentMark: Equatable {
 /// flattened to the secondary label colour are four grey shapes that look
 /// alike.
 ///
-/// Claude's, Antigravity's and Kimi's artwork is template-only, so those carry
-/// the one swatch their icon declares; Codex and OpenCode carry the colours in
+/// Which colour each mark takes is the descriptor's `brandColour`. Claude's,
+/// Antigravity's and Kimi's artwork is template-only, so those carry the one
+/// swatch their descriptor declares; Codex and OpenCode carry the colours in
 /// their own assets, which for Codex is the whole blue-violet gradient rather
 /// than a flat stop taken out of it.
 ///
@@ -40,44 +41,38 @@ struct AgentBrandMark: View {
     var size: CGFloat = 12
 
     var body: some View {
-        switch agent {
-        case .claude: ClaudeIcon(size: size, tint: .original)
-        case .codex: CodexIcon(size: size, originalColors: true)
-        case .opencode: OpenCodeIcon(size: size, originalColors: true)
-        case .antigravity: AntigravityIcon(size: size, tint: .original)
-        case .kimi: KimiIcon(size: size, tint: .original)
-        case .pi: PiIcon(size: size, tint: .original)
-        }
+        AgentIconView(agent.descriptor, size: size, tint: .brand)
     }
 }
 
 extension AgentBrandMark {
     /// The asset behind the mark, for the places that need an image *name*
-    /// rather than a view.
+    /// rather than a view — or nil for a mark that is not a catalogue asset.
     ///
     /// A menu is the case this exists for. AppKit flattens a menu item to a
     /// title and one image, so a `Label` there can carry an asset name but not
     /// a view — which is why a group's six agent items all shared one SF
     /// Symbol, and why none of them said which agent it stood for.
     ///
-    /// Written out rather than derived from the agent's display name or from
-    /// its defaults key. `OpenCode` is one word in the catalogue and two in
-    /// its name, and `AgentButtonDefaults` states plainly that its own
-    /// spelling is a key and nothing else. Six lines that are each a fact
-    /// beats one line that is a coincidence holding for five of them.
+    /// Read off the descriptor rather than derived from the agent's display
+    /// name or from its defaults key. `OpenCode` is one word in the catalogue
+    /// and two in its name, and `AgentButtonDefaults` states plainly that its
+    /// own spelling is a key and nothing else.
     ///
     /// The template variant, always: a menu tints its own images, and the
     /// coloured Antigravity artwork would come out inverted on a highlighted
     /// row while its neighbours followed the highlight.
-    static func asset(for agent: CodingAgent) -> String {
-        switch agent {
-        case .claude: return "ClaudeIcon"
-        case .codex: return "CodexIcon"
-        case .opencode: return "OpenCodeIcon"
-        case .antigravity: return "AntigravityIcon"
-        case .kimi: return "KimiIcon"
-        case .pi: return "PiIcon"
-        }
+    static func asset(for agent: CodingAgent) -> String? {
+        asset(of: agent.descriptor)
+    }
+
+    static func asset(of descriptor: AgentDescriptor) -> String? {
+        guard case .asset(let name) = descriptor.icon else { return nil }
+        return name
+    }
+
+    static func image(for icon: AgentIcon) -> NSImage? {
+        AgentIconFiles.load(icon)
     }
 }
 
@@ -94,10 +89,14 @@ extension AgentBrandMark {
     /// does not have to inherit it and a coloured mark on a highlighted row is
     /// the other half of the same problem.
     static func menuIcon(for agent: CodingAgent) -> NSImage? {
-        guard let source = NSImage(named: asset(for: agent)) else { return nil }
+        menuIcon(for: agent.descriptor)
+    }
+
+    static func menuIcon(for descriptor: AgentDescriptor) -> NSImage? {
+        guard let source = image(for: descriptor.icon) else { return nil }
         let icon = source.copy() as? NSImage ?? source
         icon.size = menuIconSize(for: source.size)
-        icon.isTemplate = !keepsOriginalColours(for: agent)
+        icon.isTemplate = !descriptor.keepsOriginalColours
         return icon
     }
 
@@ -113,9 +112,10 @@ extension AgentBrandMark {
     /// the alpha channel *is* the canvas, and the tint filled it in. What the
     /// reader got was a solid white block where a logo should be. The
     /// catalogue declares every one of these template, which is why this is a
-    /// fact about the artwork kept here rather than a setting read from there.
+    /// fact about the artwork kept on the descriptor rather than a setting
+    /// read from there.
     static func keepsOriginalColours(for agent: CodingAgent) -> Bool {
-        agent == .opencode
+        agent.descriptor.keepsOriginalColours
     }
 
     /// What AppKit expects of a menu item's image, and what the SF Symbols in
