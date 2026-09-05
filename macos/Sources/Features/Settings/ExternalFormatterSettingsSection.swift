@@ -79,7 +79,7 @@ struct ExternalFormatterSettingsSection: View {
                         Text(verbatim: formatter.displayName)
                             .foregroundStyle(.secondary)
                         if let provenance = formatter.provenance {
-                            Image(systemName: "puzzlepiece.extension")
+                            Image(systemName: "puzzlepiece")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .help("Contributed by the extension \(provenance.extensionID)")

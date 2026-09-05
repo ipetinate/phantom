@@ -779,7 +779,7 @@ private struct ThemeCard: View {
                             .font(.system(size: 8))
                             .foregroundStyle(.secondary)
                     } else if case .contributed(let extensionName) = theme.source {
-                        Image(systemName: "puzzlepiece.extension")
+                        Image(systemName: "puzzlepiece")
                             .font(.system(size: 8))
                             .foregroundStyle(.secondary)
                             .help("From the extension \(extensionName)")

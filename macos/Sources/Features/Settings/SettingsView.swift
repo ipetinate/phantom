@@ -52,7 +52,7 @@ struct SettingsRootView: View {
             case .files: return "doc.text"
             case .keyboardShortcuts: return "keyboard"
             case .languageServers: return "chevron.left.forwardslash.chevron.right"
-            case .extensions: return "puzzlepiece.extension"
+            case .extensions: return "puzzlepiece"
             case .agents: return "sparkles"
             case .mcp: return "point.3.connected.trianglepath.dotted"
             }
