@@ -168,7 +168,7 @@ struct ExtensionPaneView: View {
                         onRemove: { Task { await store.remove(id: id) } }
                     )
                 } else if installed != nil {
-                    Button("Remove") {
+                    Button("Uninstall") {
                         Task { await store.remove(id: id) }
                     }
                 }

@@ -111,27 +111,27 @@ struct ExtensionRow: View {
     // MARK: Compact
 
     private var compactBody: some View {
-        HStack(spacing: 8) {
-            ExtensionIconView(url: iconURL, size: 22)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
+        HStack(spacing: 12) {
+            ExtensionIconView(url: iconURL, size: 40)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(verbatim: subject.title)
-                        .font(palette.font(size: 11, weight: .medium))
+                        .font(palette.font(size: 13, weight: .semibold))
                         .lineLimit(1)
                     ExtensionTagView(text: subject.versionText)
                 }
                 Text(verbatim: subject.author)
-                    .font(palette.font(size: 10))
+                    .font(palette.font(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 8)
 
-            trailing(controlSize: .small)
+            trailing(controlSize: .regular)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(compactBackground)
@@ -177,7 +177,7 @@ struct ExtensionActionButton: View {
         case .notInstalled:
             Button("Install", action: onInstall)
         case .installed:
-            Button("Remove", action: onRemove)
+            Button("Uninstall", action: onRemove)
         case .updateAvailable:
             Button("Update", action: onInstall)
         }

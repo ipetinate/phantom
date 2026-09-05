@@ -52,7 +52,11 @@ enum ExtensionViewerBundle {
     static func copy(from source: URL, version: String, into cacheRoot: URL) throws -> URL {
         let fileManager = FileManager.default
         let destination = ExtensionPreviewCache.viewerDirectory(version: version, root: cacheRoot)
-        if fileNames.allSatisfy({ fileManager.fileExists(atPath: destination.appendingPathComponent($0).path) }) {
+        if fileNames.allSatisfy({ name in
+            fileManager.contentsEqual(
+                atPath: source.appendingPathComponent(name).path,
+                andPath: destination.appendingPathComponent(name).path)
+        }) {
             return destination
         }
 
