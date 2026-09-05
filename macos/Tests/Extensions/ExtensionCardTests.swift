@@ -117,15 +117,20 @@ struct ExtensionCardTests {
         #expect(ExtensionCard.relativePath(String(repeating: "a", count: 300)) == nil)
     }
 
-    @Test func anSVGIsOnlyEverTheIcon() {
-        #expect(ExtensionCard.parse(Self.card(["cover": "media/cover.svg"])) == nil)
-        #expect(ExtensionCard.parse(Self.card(["screenshots": ["media/shot.svg"]])) == nil)
+    @Test func anSVGCountsAsAnImageAnywhereUnderMedia() {
+        #expect(ExtensionCard.parse(Self.card(["cover": "media/cover.svg"]))?.cover == "media/cover.svg")
+        #expect(ExtensionCard.parse(Self.card(["screenshots": ["media/shot.svg"]]))?.screenshots == ["media/shot.svg"])
 
         let stray: [[String: Any]] = [["path": "media/logo.svg", "bytes": 100]]
-        #expect(ExtensionCard.parse(Self.card(["media": stray])) == nil)
+        #expect(ExtensionCard.parse(Self.card(["media": stray]))?.media.count == 1)
+    }
 
-        let iconOnly: [[String: Any]] = [["path": "media/icon.svg", "bytes": 100]]
-        #expect(ExtensionCard.parse(Self.card(["media": iconOnly])) != nil)
+    @Test func nullStandsForAnAbsentOptional() throws {
+        let nulls = Self.card(["icon": NSNull(), "cover": NSNull(), "author": ["name": "Someone", "url": NSNull()]])
+        let card = try #require(ExtensionCard.parse(nulls))
+        #expect(card.icon == nil)
+        #expect(card.cover == nil)
+        #expect(card.author.url == nil)
     }
 
     @Test func anUnknownMediaTypeIsNoCard() {

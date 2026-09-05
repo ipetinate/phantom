@@ -15,7 +15,7 @@ struct ExtensionMediaGateTests {
         #expect(ExtensionMediaGate.kind(ofPath: "media/a.gif") == .animation)
         #expect(ExtensionMediaGate.kind(ofPath: "media/a.mp4") == .video)
         #expect(ExtensionMediaGate.kind(ofPath: "media/a.webm") == .video)
-        #expect(ExtensionMediaGate.kind(ofPath: "media/icon.svg") == .vector)
+        #expect(ExtensionMediaGate.kind(ofPath: "media/icon.svg") == .image)
         #expect(ExtensionMediaGate.kind(ofPath: "media/a.pdf") == nil)
         #expect(ExtensionMediaGate.kind(ofPath: "media/a") == nil)
         #expect(ExtensionMediaGate.kind(ofPath: "media/a.png.exe") == nil)
@@ -23,7 +23,6 @@ struct ExtensionMediaGateTests {
 
     @Test func eachKindHasItsOwnCeiling() {
         #expect(ExtensionMediaGate.limit(for: .image) == 2 * 1024 * 1024)
-        #expect(ExtensionMediaGate.limit(for: .vector) == 2 * 1024 * 1024)
         #expect(ExtensionMediaGate.limit(for: .animation) == 5 * 1024 * 1024)
         #expect(ExtensionMediaGate.limit(for: .video) == 12 * 1024 * 1024)
         #expect(ExtensionMediaGate.maxTotalBytes == 24 * 1024 * 1024)
@@ -38,38 +37,38 @@ struct ExtensionMediaGateTests {
             media("media/demo.gif", ExtensionMediaGate.maxAnimationBytes),
             media("media/demo.mp4", ExtensionMediaGate.maxVideoBytes),
         ]
-        #expect(ExtensionMediaGate.violation(media: list, icon: "media/icon.svg") == nil)
-        #expect(ExtensionMediaGate.violation(media: [], icon: nil) == nil)
+        #expect(ExtensionMediaGate.violation(media: list) == nil)
+        #expect(ExtensionMediaGate.violation(media: []) == nil)
     }
 
     @Test func namesTheFirstFileOverItsCeiling() {
         let list = [media("media/a.png", 10), media("media/b.gif", ExtensionMediaGate.maxAnimationBytes + 1)]
         #expect(
-            ExtensionMediaGate.violation(media: list, icon: nil)
+            ExtensionMediaGate.violation(media: list)
                 == .oversized("media/b.gif", bytes: ExtensionMediaGate.maxAnimationBytes + 1, limit: ExtensionMediaGate.maxAnimationBytes))
         #expect(
-            ExtensionMediaGate.violation(media: [media("media/a.png", -1)], icon: nil)
+            ExtensionMediaGate.violation(media: [media("media/a.png", -1)])
                 == .oversized("media/a.png", bytes: -1, limit: ExtensionMediaGate.maxImageBytes))
     }
 
-    @Test func anSVGPassesOnlyAsTheIcon() {
-        let list = [media("media/icon.svg", 100)]
-        #expect(ExtensionMediaGate.violation(media: list, icon: "media/icon.svg") == nil)
-        #expect(ExtensionMediaGate.violation(media: list, icon: "media/other.svg") == .vectorOutsideIcon("media/icon.svg"))
-        #expect(ExtensionMediaGate.violation(media: list, icon: nil) == .vectorOutsideIcon("media/icon.svg"))
+    @Test func anSVGIsAnImageWithTheImageCeiling() {
+        #expect(ExtensionMediaGate.violation(media: [media("media/icon.svg", 100), media("media/logo.svg", 10)]) == nil)
+        #expect(
+            ExtensionMediaGate.violation(media: [media("media/icon.svg", ExtensionMediaGate.maxImageBytes + 1)])
+                == .oversized("media/icon.svg", bytes: ExtensionMediaGate.maxImageBytes + 1, limit: ExtensionMediaGate.maxImageBytes))
     }
 
     @Test func anUnknownSuffixIsRefused() {
         let list = [media("media/a.png", 10), media("media/notes.txt", 10)]
-        #expect(ExtensionMediaGate.violation(media: list, icon: nil) == .unknownKind("media/notes.txt"))
+        #expect(ExtensionMediaGate.violation(media: list) == .unknownKind("media/notes.txt"))
     }
 
     @Test func theCountAndTheTotalAreBounded() {
         let many = (0...ExtensionMediaGate.maxFiles).map { media("media/\($0).png", 1) }
-        #expect(ExtensionMediaGate.violation(media: many, icon: nil) == .tooManyFiles(ExtensionMediaGate.maxFiles + 1))
+        #expect(ExtensionMediaGate.violation(media: many) == .tooManyFiles(ExtensionMediaGate.maxFiles + 1))
 
         let heavy = (0..<13).map { media("media/\($0).png", ExtensionMediaGate.maxImageBytes) }
-        #expect(ExtensionMediaGate.violation(media: heavy, icon: nil) == .totalOversized(13 * ExtensionMediaGate.maxImageBytes))
+        #expect(ExtensionMediaGate.violation(media: heavy) == .totalOversized(13 * ExtensionMediaGate.maxImageBytes))
     }
 
     @Test func messagesEscapeAndBoundThePath() {
@@ -97,7 +96,7 @@ struct ExtensionMediaGateTests {
         let root = try makeExtension(files: ["extension.json": 40, "extension.mdx": 400, "icons/lua.svg": 300])
         defer { try? FileManager.default.removeItem(at: root) }
 
-        try ExtensionMediaGate.check(directory: root, icon: nil)
+        try ExtensionMediaGate.check(directory: root)
     }
 
     @Test func listsTheMediaFolderRelativeToTheExtension() throws {
@@ -112,10 +111,7 @@ struct ExtensionMediaGateTests {
             ExtensionCard.Media(path: "media/icon.svg", bytes: 5),
             ExtensionCard.Media(path: "media/nested/shot.webp", bytes: 20),
         ])
-        try ExtensionMediaGate.check(directory: root, icon: "media/icon.svg")
-        #expect(throws: ExtensionMediaGate.Violation.vectorOutsideIcon("media/icon.svg")) {
-            try ExtensionMediaGate.check(directory: root, icon: nil)
-        }
+        try ExtensionMediaGate.check(directory: root)
     }
 
     @Test func anOversizedFileOnDiskIsCaught() throws {
@@ -125,7 +121,7 @@ struct ExtensionMediaGateTests {
         #expect(throws: ExtensionMediaGate.Violation.oversized(
             "media/cover.png", bytes: ExtensionMediaGate.maxImageBytes + 1, limit: ExtensionMediaGate.maxImageBytes)
         ) {
-            try ExtensionMediaGate.check(directory: root, icon: nil)
+            try ExtensionMediaGate.check(directory: root)
         }
     }
 
@@ -134,7 +130,7 @@ struct ExtensionMediaGateTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         #expect(throws: ExtensionMediaGate.Violation.unknownKind("media/notes.bin")) {
-            try ExtensionMediaGate.check(directory: root, icon: nil)
+            try ExtensionMediaGate.check(directory: root)
         }
     }
 
@@ -143,7 +139,7 @@ struct ExtensionMediaGateTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         #expect(throws: ExtensionMediaGate.Violation.documentOversized(ExtensionMediaGate.maxDocumentBytes + 1)) {
-            try ExtensionMediaGate.check(directory: root, icon: nil)
+            try ExtensionMediaGate.check(directory: root)
         }
     }
 }

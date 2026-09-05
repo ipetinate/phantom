@@ -18,10 +18,17 @@ struct ExtensionRow: View {
             }
         }
 
-        var name: String {
+        var title: String {
             switch self {
-            case .entry(let entry, _): return entry.name
+            case .entry(let entry, _): return entry.card?.title ?? entry.name
             case .orphan(let installed): return installed.name
+            }
+        }
+
+        var author: String {
+            switch self {
+            case .entry(let entry, _): return entry.card?.author.name ?? entry.publisher
+            case .orphan(let installed): return installed.publisher.isEmpty ? installed.id : installed.publisher
             }
         }
 
@@ -32,18 +39,26 @@ struct ExtensionRow: View {
             }
         }
 
-        var state: ExtensionState? {
-            if case .entry(_, let state) = self { return state }
-            return nil
+        var state: ExtensionState {
+            switch self {
+            case .entry(_, let state): return state
+            case .orphan(let installed): return .installed(version: installed.version)
+            }
         }
     }
 
     let subject: Subject
     let style: Style
+    let iconURL: URL?
     let activity: ExtensionActivity?
     let error: String?
+    var isSelected = false
+    let onOpen: () -> Void
     let onInstall: () -> Void
     let onRemove: () -> Void
+
+    @ObservedObject private var palette: ThemePalette = .shared
+    @State private var isHovered = false
 
     var body: some View {
         switch style {
@@ -63,92 +78,91 @@ struct ExtensionRow: View {
 
     // MARK: Form
 
-    @ViewBuilder
     private var formBody: some View {
-        switch subject {
-        case .entry(let entry, let state):
-            LabeledContent {
-                HStack(spacing: 10) {
-                    ExtensionStateBadge(state: state)
-                    trailing
-                }
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    titleLine
-                    Text(verbatim: entry.publisher)
+        LabeledContent {
+            trailing(controlSize: .regular)
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                ExtensionIconView(url: iconURL, size: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(verbatim: subject.title)
+                            .lineLimit(1)
+                        ExtensionTagView(text: subject.versionText)
+                    }
+                    Text(verbatim: subject.author)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if !entry.summary.isEmpty {
-                        Text(verbatim: entry.summary)
+                        .lineLimit(1)
+                    if let error {
+                        Text(verbatim: error)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if !entry.contributes.isEmpty {
-                        ExtensionContributionChips(entry: entry)
-                    }
-                    errorLine
-                }
-                .help(entry.id)
-            }
-
-        case .orphan(let installed):
-            LabeledContent {
-                trailing
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    titleLine
-                    Text(verbatim: installed.id)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    errorLine
                 }
             }
+            .help(subject.id)
         }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
     }
 
     // MARK: Compact
 
     private var compactBody: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            titleLine
-            if let state = subject.state {
-                ExtensionStateBadge(state: state)
+        HStack(spacing: 8) {
+            ExtensionIconView(url: iconURL, size: 22)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(verbatim: subject.title)
+                        .font(palette.font(size: 11, weight: .medium))
+                        .lineLimit(1)
+                    ExtensionTagView(text: subject.versionText)
+                }
+                Text(verbatim: subject.author)
+                    .font(palette.font(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            Spacer(minLength: 8)
-            trailing
+
+            Spacer(minLength: 4)
+
+            trailing(controlSize: .small)
         }
-        .help(subject.id)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(compactBackground)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .onHover { isHovered = $0 }
+        .help(error ?? subject.id)
+    }
+
+    private var compactBackground: Color {
+        if isSelected { return (palette.accent ?? .accentColor).opacity(0.18) }
+        return isHovered ? Color.primary.opacity(0.06) : .clear
     }
 
     // MARK: Shared
 
-    private var titleLine: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(verbatim: subject.name)
-                .lineLimit(1)
-            Text(verbatim: subject.versionText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-    }
-
     @ViewBuilder
-    private var errorLine: some View {
-        if let error {
-            Text(verbatim: error)
-                .font(.caption)
-                .foregroundStyle(.red)
-        }
-    }
-
-    @ViewBuilder
-    private var trailing: some View {
+    private func trailing(controlSize: ControlSize) -> some View {
         if let activity {
-            ExtensionActivityView(activity: activity)
+            ExtensionActivityView(activity: activity, compact: controlSize == .small)
         } else {
-            ExtensionActionButton(state: subject.state ?? .installed(version: ""), onInstall: onInstall, onRemove: onRemove)
+            HStack(spacing: 6) {
+                if error != nil, controlSize == .small {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.red)
+                }
+                ExtensionActionButton(state: subject.state, onInstall: onInstall, onRemove: onRemove)
+                    .controlSize(controlSize)
+            }
         }
     }
 }
@@ -198,21 +212,27 @@ struct ExtensionStateBadge: View {
 
 struct ExtensionActivityView: View {
     let activity: ExtensionActivity
+    var compact = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            if case .downloading(let fraction?) = activity {
+        HStack(spacing: compact ? 5 : 8) {
+            if case .downloading(let fraction?) = activity, !compact {
                 ProgressView(value: fraction)
                     .progressViewStyle(.linear)
                     .frame(width: 100)
             } else {
                 ProgressView()
                     .controlSize(.small)
+                    .scaleEffect(compact ? 0.6 : 1)
+                    .frame(width: compact ? 12 : nil, height: compact ? 12 : nil)
             }
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if !compact {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .help(label)
     }
 
     private var label: LocalizedStringKey {
@@ -221,21 +241,6 @@ struct ExtensionActivityView: View {
         case .verifying: return "Verifying…"
         case .installing: return "Installing…"
         case .removing: return "Removing…"
-        }
-    }
-}
-
-struct ExtensionContributionChips: View {
-    let entry: ExtensionIndex.Entry
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(entry.contributes, id: \.self) { kind in
-                ExtensionChipView(chip: ExtensionContributionChip.of(kind))
-                    .help(kind == "languages" && !entry.languages.isEmpty
-                        ? entry.languages.joined(separator: ", ")
-                        : ExtensionContributionChip.of(kind).title)
-            }
         }
     }
 }
@@ -297,6 +302,21 @@ struct ExtensionIconView: View {
             return nil
         }
         return image
+    }
+}
+
+struct ExtensionContributionChips: View {
+    let entry: ExtensionIndex.Entry
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(entry.contributes, id: \.self) { kind in
+                ExtensionChipView(chip: ExtensionContributionChip.of(kind))
+                    .help(kind == "languages" && !entry.languages.isEmpty
+                        ? entry.languages.joined(separator: ", ")
+                        : ExtensionContributionChip.of(kind).title)
+            }
+        }
     }
 }
 

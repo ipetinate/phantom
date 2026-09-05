@@ -5,12 +5,10 @@ enum ExtensionMediaGate {
         case image
         case animation
         case video
-        case vector
     }
 
     enum Violation: Error, Equatable, Sendable {
         case unknownKind(String)
-        case vectorOutsideIcon(String)
         case oversized(String, bytes: Int, limit: Int)
         case tooManyFiles(Int)
         case totalOversized(Int)
@@ -21,8 +19,6 @@ enum ExtensionMediaGate {
             switch self {
             case .unknownKind(let path):
                 return "The extension's media has a file type this app will not show: \(ExtensionArchive.shown(path))."
-            case .vectorOutsideIcon(let path):
-                return "The extension's media has an SVG that is not its icon: \(ExtensionArchive.shown(path))."
             case .oversized(let path, let bytes, let limit):
                 return "\(ExtensionArchive.shown(path)) is \(bytes) bytes; the limit for its type is \(limit)."
             case .tooManyFiles(let count):
@@ -48,29 +44,27 @@ enum ExtensionMediaGate {
 
     static func kind(ofPath path: String) -> Kind? {
         switch (path as NSString).pathExtension.lowercased() {
-        case "png", "jpg", "jpeg", "webp": return .image
+        case "png", "jpg", "jpeg", "webp", "svg": return .image
         case "gif": return .animation
         case "mp4", "webm": return .video
-        case "svg": return .vector
         default: return nil
         }
     }
 
     static func limit(for kind: Kind) -> Int {
         switch kind {
-        case .image, .vector: return maxImageBytes
+        case .image: return maxImageBytes
         case .animation: return maxAnimationBytes
         case .video: return maxVideoBytes
         }
     }
 
-    static func violation(media: [ExtensionCard.Media], icon: String?) -> Violation? {
+    static func violation(media: [ExtensionCard.Media]) -> Violation? {
         guard media.count <= maxFiles else { return .tooManyFiles(media.count) }
 
         var total = 0
         for item in media {
             guard let kind = kind(ofPath: item.path) else { return .unknownKind(item.path) }
-            if kind == .vector, item.path != icon { return .vectorOutsideIcon(item.path) }
             let limit = limit(for: kind)
             guard item.bytes >= 0, item.bytes <= limit else {
                 return .oversized(item.path, bytes: item.bytes, limit: limit)
@@ -81,7 +75,7 @@ enum ExtensionMediaGate {
         return nil
     }
 
-    static func check(directory: URL, icon: String?) throws {
+    static func check(directory: URL) throws {
         for name in ExtensionCard.documentFileNames {
             if let size = fileSize(directory.appendingPathComponent(name)), size > maxDocumentBytes {
                 throw Violation.documentOversized(size)
@@ -91,7 +85,7 @@ enum ExtensionMediaGate {
         let mediaDirectory = directory.appendingPathComponent(mediaDirectoryName, isDirectory: true)
         guard FileManager.default.fileExists(atPath: mediaDirectory.path) else { return }
 
-        if let violation = violation(media: try listing(of: mediaDirectory), icon: icon) {
+        if let violation = violation(media: try listing(of: mediaDirectory)) {
             throw violation
         }
     }

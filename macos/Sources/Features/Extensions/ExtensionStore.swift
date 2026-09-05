@@ -148,9 +148,8 @@ final class ExtensionStore: ObservableObject {
         do {
             try await prepareViewer(in: root)
             let directory = try await stagedDirectory(for: entry)
-            let icon = entry.card?.icon
             try await Task.detached(priority: .utility) {
-                try ExtensionMediaGate.check(directory: directory, icon: icon)
+                try ExtensionMediaGate.check(directory: directory)
             }.value
             previews[entry.id] = Self.previewState(directory: directory, root: root, preferring: entry.card?.document)
         } catch {
@@ -183,6 +182,19 @@ final class ExtensionStore: ObservableObject {
 
     func forgetPreview(id: String) {
         previews[id] = nil
+    }
+
+    func iconURL(for entry: ExtensionIndex.Entry) -> URL? {
+        let onDisk = installed.first { $0.id == entry.id }
+        guard let icon = entry.card?.icon else { return onDisk?.iconURL }
+        if case .ready(let document, _)? = previews[entry.id],
+           let url = LanguageContribution.containedURL(icon, root: document.deletingLastPathComponent()) {
+            return url
+        }
+        if let root = onDisk?.root, let url = LanguageContribution.containedURL(icon, root: root) {
+            return url
+        }
+        return onDisk?.iconURL
     }
 
     private func shouldPreview(id: String, expecting directory: URL) -> Bool {

@@ -230,8 +230,10 @@ struct ExtensionsSettingsView: View {
         ExtensionRow(
             subject: .entry(entry, state: store.state(for: entry)),
             style: .form,
+            iconURL: store.iconURL(for: entry),
             activity: store.activity[entry.id],
             error: store.errors[entry.id],
+            onOpen: { ExtensionDocumentTabs.open(entry) },
             onInstall: { Task { await store.install(entry) } },
             onRemove: { Task { await store.remove(id: entry.id) } }
         )
@@ -241,8 +243,10 @@ struct ExtensionsSettingsView: View {
         ExtensionRow(
             subject: .orphan(installed),
             style: .form,
+            iconURL: installed.iconURL,
             activity: store.activity[installed.id],
             error: store.errors[installed.id],
+            onOpen: { ExtensionDocumentTabs.open(installed: installed) },
             onInstall: {},
             onRemove: { Task { await store.remove(id: installed.id) } }
         )

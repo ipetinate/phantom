@@ -13,7 +13,7 @@ struct ExtensionDocumentView: NSViewRepresentable {
         let viewerHTML: URL
         let document: URL
         let base: URL
-        let cover: URL?
+        let cover: String?
     }
 
     let request: Request
@@ -28,6 +28,7 @@ struct ExtensionDocumentView: NSViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         configuration.userContentController.add(context.coordinator, name: Coordinator.handlerName)
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
@@ -67,7 +68,7 @@ struct ExtensionDocumentView: NSViewRepresentable {
         let object: [String: Any] = [
             "source": source,
             "baseURL": request.document.deletingLastPathComponent().absoluteString,
-            "cover": request.cover?.absoluteString ?? NSNull(),
+            "cover": request.cover ?? NSNull(),
         ]
         guard let json = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
               let text = String(data: json, encoding: .utf8),

@@ -10,27 +10,10 @@ struct ExtensionsPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let subject = selectedSubject {
-                ExtensionsPanelDetail(subject: subject, store: store) {
-                    selectedID = nil
-                }
-            } else {
-                search
-                registryContent
-            }
+            search
+            registryContent
         }
         .onAppear(perform: loadOnce)
-    }
-
-    private var selectedSubject: ExtensionsPanelSubject? {
-        guard let selectedID else { return nil }
-        if let entry = store.index?.extensions.first(where: { $0.id == selectedID }) {
-            return .listed(entry)
-        }
-        if let installed = store.installed.first(where: { $0.id == selectedID }) {
-            return .orphan(installed)
-        }
-        return nil
     }
 
     private func loadOnce() {
@@ -151,29 +134,44 @@ struct ExtensionsPanelView: View {
     }
 
     private func row(for entry: ExtensionIndex.Entry) -> some View {
-        let state = store.state(for: entry)
-        return ExtensionsPanelRow(
-            name: entry.name,
-            version: ExtensionsPanelText.version(entry.version, state: state),
-            detail: entry.publisher,
-            state: state,
-            isBusy: store.activity[entry.id] != nil,
-            hasError: store.errors[entry.id] != nil
-        ) {
-            selectedID = entry.id
-        }
+        ExtensionRow(
+            subject: .entry(entry, state: store.state(for: entry)),
+            style: .compact,
+            iconURL: store.iconURL(for: entry),
+            activity: store.activity[entry.id],
+            error: store.errors[entry.id],
+            isSelected: selectedID == entry.id,
+            onOpen: {
+                selectedID = entry.id
+                ExtensionDocumentTabs.open(entry)
+            },
+            onInstall: { Task { await store.install(entry) } },
+            onRemove: { Task { await store.remove(id: entry.id) } }
+        )
+        .contextMenu { openInSettings(id: entry.id) }
     }
 
     private func row(for installed: InstalledExtension) -> some View {
-        ExtensionsPanelRow(
-            name: installed.name,
-            version: installed.version,
-            detail: installed.id,
-            state: .installed(version: installed.version),
-            isBusy: store.activity[installed.id] != nil,
-            hasError: store.errors[installed.id] != nil
-        ) {
-            selectedID = installed.id
+        ExtensionRow(
+            subject: .orphan(installed),
+            style: .compact,
+            iconURL: installed.iconURL,
+            activity: store.activity[installed.id],
+            error: store.errors[installed.id],
+            isSelected: selectedID == installed.id,
+            onOpen: {
+                selectedID = installed.id
+                ExtensionDocumentTabs.open(installed: installed)
+            },
+            onInstall: {},
+            onRemove: { Task { await store.remove(id: installed.id) } }
+        )
+        .contextMenu { openInSettings(id: installed.id) }
+    }
+
+    private func openInSettings(id: String) -> some View {
+        Button("Open in Settings") {
+            ExtensionDocumentTabs.openInSettings(id: id)
         }
     }
 

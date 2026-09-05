@@ -60,9 +60,8 @@ extension ExtensionCard {
               let media = mediaList(json["media"])
         else { return nil }
 
-        guard icon.map({ ExtensionMediaGate.kind(ofPath: $0) != nil }) ?? true,
-              ([cover].compactMap { $0 } + screenshots).allSatisfy(isShowable),
-              ExtensionMediaGate.violation(media: media, icon: icon) == nil
+        guard ([icon, cover].compactMap { $0 } + screenshots).allSatisfy({ ExtensionMediaGate.kind(ofPath: $0) != nil }),
+              ExtensionMediaGate.violation(media: media) == nil
         else { return nil }
 
         return ExtensionCard(
@@ -99,11 +98,6 @@ extension ExtensionCard {
         let dayOnly = ISO8601DateFormatter()
         dayOnly.formatOptions = [.withFullDate]
         return dayOnly.date(from: text)
-    }
-
-    private static func isShowable(_ path: String) -> Bool {
-        guard let kind = ExtensionMediaGate.kind(ofPath: path) else { return false }
-        return kind != .vector
     }
 
     private static func text(_ value: Any?, limit: Int) -> String? {

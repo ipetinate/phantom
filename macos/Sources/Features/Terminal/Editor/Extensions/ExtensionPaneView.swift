@@ -184,15 +184,7 @@ struct ExtensionPaneView: View {
     }
 
     private var iconURL: URL? {
-        if let icon = card?.icon {
-            if case .ready(let documentURL, _)? = store.previews[id],
-               let url = LanguageContribution.containedURL(icon, root: documentURL.deletingLastPathComponent()) {
-                return url
-            }
-            if let root = installed?.root, let url = LanguageContribution.containedURL(icon, root: root) {
-                return url
-            }
-        }
+        if let entry { return store.iconURL(for: entry) }
         return installed?.iconURL
     }
 
@@ -227,7 +219,7 @@ struct ExtensionPaneView: View {
                         viewerHTML: viewer,
                         document: documentURL,
                         base: base,
-                        cover: coverURL(beside: documentURL)),
+                        cover: card?.cover),
                     theme: ExtensionViewerTheme.current(),
                     onStatus: { status = $0 }
                 )
@@ -251,11 +243,6 @@ struct ExtensionPaneView: View {
     private var isRendered: Bool {
         if case .rendered = status { return true }
         return false
-    }
-
-    private func coverURL(beside documentURL: URL) -> URL? {
-        guard let cover = card?.cover else { return nil }
-        return LanguageContribution.containedURL(cover, root: documentURL.deletingLastPathComponent())
     }
 
     static func failureText(_ message: String, line: Int?, column: Int?) -> String {

@@ -198,7 +198,7 @@ enum ExtensionPreviewCache {
         }
 
         try ExtensionInstaller.inspect(installed.root)
-        try ExtensionMediaGate.check(directory: installed.root, icon: nil)
+        try ExtensionMediaGate.check(directory: installed.root)
 
         let fileManager = FileManager.default
         let local = localDirectory(root: root)
