@@ -76,19 +76,45 @@ enum ExtensionInstaller {
         defer { try? FileManager.default.removeItem(at: scratch) }
 
         let archive = scratch.appendingPathComponent("\(entry.id)-\(entry.version).zip")
-        try await download(entry, to: archive, progress: progress)
+        try await fetch(entry, to: archive, progress: progress)
 
         await progress(.verifying)
-        try verify(archive, against: entry)
+        let staged = scratch.appendingPathComponent("extracted", isDirectory: true)
+        try await stage(archive: archive, expecting: entry, into: staged)
 
         await progress(.installing)
-        let staged = scratch.appendingPathComponent("extracted", isDirectory: true)
-        try await extract(archive, into: staged, expecting: entry)
-        try replace(
-            extensionsDir.appendingPathComponent(entry.id, isDirectory: true),
-            with: staged,
-            in: extensionsDir
-        )
+        try install(from: staged, as: entry, into: extensionsDir)
+    }
+
+    static func stage(archive: URL, expecting entry: ExtensionIndex.Entry, into destination: URL) async throws {
+        try verify(archive, against: entry)
+        try await extract(archive, into: destination, expecting: entry)
+    }
+
+    static func install(from staged: URL, as entry: ExtensionIndex.Entry, into extensionsDir: URL) throws {
+        guard LanguageManifest.validID(entry.id) == entry.id else { throw Failure.invalidIdentifier }
+
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(at: extensionsDir, withIntermediateDirectories: true)
+        } catch {
+            throw Failure.replace(error.localizedDescription)
+        }
+
+        let copy = extensionsDir.appendingPathComponent(".\(entry.id).staging-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fileManager.copyItem(at: staged, to: copy)
+        } catch {
+            try? fileManager.removeItem(at: copy)
+            throw Failure.replace(error.localizedDescription)
+        }
+
+        do {
+            try replace(extensionsDir.appendingPathComponent(entry.id, isDirectory: true), with: copy, in: extensionsDir)
+        } catch {
+            try? fileManager.removeItem(at: copy)
+            throw error
+        }
     }
 
     static func remove(at candidate: URL, in extensionsDir: URL) throws {
@@ -107,7 +133,7 @@ enum ExtensionInstaller {
 
     // MARK: Download
 
-    private static func download(
+    static func fetch(
         _ entry: ExtensionIndex.Entry,
         to file: URL,
         progress: @escaping @MainActor @Sendable (ExtensionActivity) -> Void
@@ -233,7 +259,7 @@ enum ExtensionInstaller {
         }.value
     }
 
-    private static func inspect(_ root: URL) throws {
+    static func inspect(_ root: URL) throws {
         let keys: Set<URLResourceKey> = [.isSymbolicLinkKey, .isRegularFileKey, .isDirectoryKey]
         guard let enumerator = FileManager.default.enumerator(
             at: root,
