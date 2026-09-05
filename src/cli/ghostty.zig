@@ -22,6 +22,7 @@ const show_face = @import("show_face.zig");
 const boo = @import("boo.zig");
 const mcp_server = @import("mcp_server.zig");
 const new_window = @import("new_window.zig");
+const new_tab = @import("new_tab.zig");
 const toggle_quick_terminal = @import("toggle_quick_terminal.zig");
 const global = @import("../global.zig");
 
@@ -80,6 +81,9 @@ pub const Action = enum {
 
     // Use IPC to tell the running Ghostty to open a new window.
     @"new-window",
+
+    // Use IPC to tell the running Ghostty to open a new tab.
+    @"new-tab",
 
     // Use IPC to tell the running Ghostty to toggle the quick terminal.
     @"toggle-quick-terminal",
@@ -168,6 +172,7 @@ pub const Action = enum {
             .boo => try boo.run(alloc),
             .@"mcp-server" => try mcp_server.run(alloc),
             .@"new-window" => try new_window.run(alloc),
+            .@"new-tab" => try new_tab.run(alloc),
             .@"toggle-quick-terminal" => try toggle_quick_terminal.run(alloc),
         };
     }
@@ -211,6 +216,7 @@ pub const Action = enum {
                 .boo => boo.Options,
                 .@"mcp-server" => mcp_server.Options,
                 .@"new-window" => new_window.Options,
+                .@"new-tab" => new_tab.Options,
                 .@"toggle-quick-terminal" => toggle_quick_terminal.Options,
             };
         }

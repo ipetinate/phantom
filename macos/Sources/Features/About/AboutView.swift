@@ -8,38 +8,6 @@ struct AboutView: View {
     private var commit: String? { Bundle.main.infoDictionary?["GhosttyCommit"] as? String }
     private var version: String? { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String }
 
-    private enum VersionConfig {
-        case stable(version: String)
-        case tip(commit: String?)
-        case other(String)
-        case none
-
-        init(version: String?) {
-            guard let version else { self = .none; return }
-            if version.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil {
-                self = .stable(version: version)
-                return
-            }
-            if version.range(of: #"^[0-9a-f]{7,40}$"#, options: .regularExpression) != nil {
-                self = .tip(commit: version)
-                return
-            }
-            self = .other(version)
-        }
-
-        var url: URL? {
-            switch self {
-            case .stable(let version):
-                let slug = version.replacingOccurrences(of: ".", with: "-")
-                return URL(string: "https://ghostty.org/docs/install/release-notes/\(slug)")
-            default:
-                return nil
-            }
-        }
-    }
-
-    private var versionConfig: VersionConfig { VersionConfig(version: version) }
-
     private var copyright: String? { Bundle.main.infoDictionary?["NSHumanReadableCopyright"] as? String }
 
     /// `Ghostty` and `Mitchell Hashimoto` as real links rather than
@@ -52,7 +20,6 @@ struct AboutView: View {
         )) ?? AttributedString(Phantom.upstreamCredit)
     }
 
-    #if os(macOS)
     // This creates a background style similar to the Apple "About My Mac" Window
     private struct VisualEffectBackground: NSViewRepresentable {
         let material: NSVisualEffectView.Material
@@ -79,7 +46,6 @@ struct AboutView: View {
             return visualEffect
         }
     }
-    #endif
 
     /// The window's fixed content width. Height is deliberately not fixed
     /// here: `AboutController` measures this view's natural height at this
@@ -154,9 +120,7 @@ struct AboutView: View {
         }
         .padding(Self.margin)
         .frame(width: Self.windowWidth)
-        #if os(macOS)
         .background(VisualEffectBackground(material: .underWindowBackground).ignoresSafeArea())
-        #endif
     }
 
     private struct PropertyRow: View {

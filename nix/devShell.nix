@@ -24,7 +24,11 @@
   #, vulkan-loader # unused
   vttest,
   wabt,
+  wasm-tools,
   wasmtime,
+  binaryen,
+  twiggy,
+  wizer,
   wraptest,
   zig,
   zip,
@@ -87,8 +91,10 @@
     inherit pkgs lib stdenv;
   };
   python = python3.withPackages (python-pkgs: [
+    python-pkgs.jsonschema
     python-pkgs.kaitaistruct
     python-pkgs.ucs-detect
+    python-pkgs.wasmtime
   ]);
 in
   mkShell {
@@ -127,8 +133,12 @@ in
         kaitai-struct-compiler
 
         # wasm
+        binaryen
+        twiggy
         wabt
+        wasm-tools
         wasmtime
+        wizer
 
         # Localization
         gettext
@@ -222,8 +232,7 @@ in
       '')
       + (lib.optionalString stdenv.hostPlatform.isDarwin ''
         # On macOS, we unset the macOS SDK env vars that Nix sets up because
-        # we rely on a system installation. Nix only provides a macOS SDK
-        # and we need iOS too.
+        # we rely on a system installation. Nix only provides a macOS SDK.
         unset SDKROOT
         unset DEVELOPER_DIR
 

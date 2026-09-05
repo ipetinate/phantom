@@ -1,10 +1,12 @@
 name: Phantom Release
 
-# Phantom-only release pipeline — separate from release-tag.yml (Ghostty's
-# own, untouched, using infrastructure this fork has no access to: paid
-# Namespace runners, Nix, a real Developer ID cert, Sparkle/appcast, R2).
+# The fork's release pipeline. Ghostty's release-tag.yml is gone from this
+# repo: it used infrastructure this fork has no access to (paid Namespace
+# runners, Nix, a real Developer ID cert, R2).
 # This builds, ad-hoc signs, packages and publishes a Phantom.dmg to this
-# repo's own Releases page on every push to main.
+# repo's own Releases page on every push to main — together with the Sparkle
+# appcast the app updates itself from, so the Releases page is the whole of
+# the update infrastructure.
 on:
   push:
     branches: [main]
@@ -93,6 +95,57 @@ jobs:
           mv Phantom*.dmg Phantom.dmg
           test -f Phantom.dmg
 
+      # The tools come from Sparkle's own release, pinned and checksummed like
+      # every action in this file: the signature they produce is the one the
+      # Sparkle framework inside the app verifies, and a tool that is not the
+      # framework's own is a second implementation of the same contract.
+      #
+      # This version is the one the app links (Package.resolved). Raising it
+      # here without raising it there is the drift this comment exists to
+      # stop.
+      - name: Sparkle tools
+        env:
+          SPARKLE_VERSION: "2.9.6"
+          SPARKLE_SHA256: "52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192"
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/sparkle.tar.xz \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          echo "${SPARKLE_SHA256}  /tmp/sparkle.tar.xz" | shasum -a 256 -c -
+          mkdir -p /tmp/sparkle
+          tar -xJf /tmp/sparkle.tar.xz -C /tmp/sparkle
+          echo "/tmp/sparkle/bin" >> "$GITHUB_PATH"
+
+      # The private key never touches the checkout: it is read from the secret
+      # on standard input, which is the form sign_update documents for CI. An
+      # unsigned DMG is refused before it can be published, because an item
+      # the app cannot verify is worse than no item — every reader would see a
+      # bad-signature error instead of an update.
+      #
+      # The previous feed is fetched so history survives: a reader several
+      # versions behind still finds an entry. A missing feed (the first
+      # release) starts a new one, and only that case is allowed to fail.
+      - name: Sign and generate appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          PHANTOM_VERSION: ${{ steps.version.outputs.short_version }}
+          PHANTOM_BUILD: ${{ steps.version.outputs.build }}
+          PHANTOM_TAG: ${{ steps.version.outputs.tag }}
+          PHANTOM_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SPARKLE_PRIVATE_KEY}" ]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is not set — the DMG cannot be signed, so no update can be published" >&2
+            exit 1
+          fi
+          echo "${SPARKLE_PRIVATE_KEY}" | sign_update --ed-key-file - Phantom.dmg > sign_update.txt
+          cat sign_update.txt
+          curl -sSfL -o appcast.xml \
+            "https://github.com/ipetinate/phantom/releases/latest/download/appcast.xml" \
+            || { echo "no previous appcast — starting a new feed"; : > appcast.xml; }
+          PHANTOM_COMMIT="${PHANTOM_COMMIT:0:9}" python3 ./dist/macos/phantom_appcast.py
+          xmllint --noout appcast.xml
+
       - name: Tag
         run: |
           git tag ${{ steps.version.outputs.tag }}
@@ -105,5 +158,5 @@ jobs:
           gh release create ${{ steps.version.outputs.tag }} \
             --title "${{ steps.version.outputs.title }}" \
             --generate-notes \
-            --notes 'Ad-hoc signed, not notarized — on first launch, right-click the app and choose **Open** (or run `xattr -cr Phantom.app` after unzipping) instead of double-clicking, or Gatekeeper will refuse it as from an unidentified developer.' \
-            Phantom.dmg
+            --notes 'Ad-hoc signed, not notarized — on first launch, right-click the app and choose **Open** (or run `xattr -cr Phantom.app` after unzipping) instead of double-clicking, or Gatekeeper will refuse it as from an unidentified developer. Later versions arrive through Phantom > Check for Updates.' \
+            Phantom.dmg appcast.xml

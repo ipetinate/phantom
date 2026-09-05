@@ -88,7 +88,7 @@ struct WelcomeView: View {
             ghosttyIconImage()
                 .resizable()
                 .interpolation(.high)
-                .aspectRatio(contentMode: .fit)
+                .scaledToFit()
                 .frame(height: 128)
                 .matchedGeometryEffect(id: "mark", in: hero)
 
@@ -120,7 +120,7 @@ struct WelcomeView: View {
             ghosttyIconImage()
                 .resizable()
                 .interpolation(.high)
-                .aspectRatio(contentMode: .fit)
+                .scaledToFit()
                 .frame(height: 28)
                 .matchedGeometryEffect(id: "mark", in: hero)
 

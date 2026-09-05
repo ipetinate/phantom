@@ -206,7 +206,10 @@ extension GhosttyConfigShortcutCatalog {
     }
 
     /// The same thing against the app's live configuration.
-    static func resolved(
+    ///
+    /// Main-actor only, because resolving a physical trigger reads the
+    /// current keyboard layout.
+    @MainActor static func resolved(
         in config: Ghostty.Config,
         include: (GhosttyConfigShortcut) -> Bool = { _ in true }
     ) -> [GhosttyConfigBindingGroup] {

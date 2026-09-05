@@ -993,7 +993,7 @@ final class PhantomSessionStore {
                 /// all the ghost fix needs — but it keeps the construction
                 /// invisible: shown opaque, the anchor sat on screen for the
                 /// better part of a second while the other tabs spawned
-                /// their shells, wearing the default "👻 Ghostty" title and
+                /// their shells, wearing the default "👻 Phantom" title and
                 /// a one-row sidebar — the startup flash the reader filmed.
                 if !isStandalone {
                     WindowBreadcrumbs.note(

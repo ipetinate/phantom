@@ -1,12 +1,11 @@
 name: Phantom Test
 
-# Phantom-only CI — separate from test.yml (Ghostty's own, untouched aside
-# from one runner-label fix on its "required" gate job). test.yml's real
-# work already skips itself on forks (most jobs gate on
-# `github.repository == 'ghostty-org/ghostty'`), so it's harmless noise here,
-# not something to replicate. This runs the checks that actually matter for
-# this fork, on runners this fork actually has: the Zig core test suite,
-# the macOS build, the Swift regression suite, and formatting.
+# The fork's only CI. Ghostty's own workflows are gone from this repo: most
+# of their jobs gated on `github.repository == 'ghostty-org/ghostty'` and
+# the rest needed runners this fork does not have, so every PR showed a
+# hundred skipped checks around the four that ran. These are the four: the
+# Zig core test suite, the macOS build, the Swift regression suite, and
+# formatting.
 on:
   pull_request: {}
   push:
@@ -17,6 +16,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # build.zig.zon declares the version and phantom-release.yml derives the tag,
+  # the release title and the Info.plist from it. The Xcode project declares it
+  # a second time, and that copy is what a build made outside the release
+  # workflow reports — including to Sparkle, which compares it against the
+  # appcast to decide whether an update is newer. Two declarations that can
+  # disagree in silence are one too many, so this makes them disagree loudly.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: build.zig.zon and MARKETING_VERSION agree
+        run: |
+          set -euo pipefail
+          DECLARED=$(grep -m1 '\.version' build.zig.zon | sed -E 's/.*"([^"]+)".*/\1/')
+          NUMBER=${DECLARED%%-*}
+          MARKETING=$(grep -m1 'MARKETING_VERSION = ' macos/Ghostty.xcodeproj/project.pbxproj \
+            | sed -E 's/.*MARKETING_VERSION = ([^;]+);.*/\1/')
+          echo "build.zig.zon=$DECLARED  number=$NUMBER  MARKETING_VERSION=$MARKETING"
+          if [ "$NUMBER" != "$MARKETING" ]; then
+            echo "::error::build.zig.zon declares $DECLARED but MARKETING_VERSION is $MARKETING" >&2
+            exit 1
+          fi
+
   zig-fmt:
     runs-on: ubuntu-latest
     steps:
@@ -47,10 +69,26 @@ jobs:
         with:
           version: "0.16.0"
 
+      # Pinned, and verified, for the same reason every action above is pinned
+      # by SHA: `brew install swiftlint` takes whatever is newest that morning,
+      # so a release of the linter can turn this branch red with nobody having
+      # touched the code. It did, the day 0.14.0 shipped — a new rule found
+      # nine call sites that predated it, on a green main.
+      #
+      # Raising the version is now somebody's decision, and it comes with the
+      # violations attached.
       - name: SwiftLint
+        env:
+          SWIFTLINT_VERSION: "0.65.1"
+          SWIFTLINT_SHA256: "c1e429b0599cf1b516f369a2d9ec04eaf0e436f3c12b637df8851fa52ff694d0"
         run: |
-          command -v swiftlint || brew install swiftlint
-          swiftlint lint --strict macos/Sources
+          set -euo pipefail
+          curl -sSfL -o /tmp/swiftlint.zip \
+            "https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/portable_swiftlint.zip"
+          echo "${SWIFTLINT_SHA256}  /tmp/swiftlint.zip" | shasum -a 256 -c -
+          unzip -q -o /tmp/swiftlint.zip -d /tmp/swiftlint
+          /tmp/swiftlint/swiftlint version
+          /tmp/swiftlint/swiftlint lint --strict macos/Sources
 
       - name: Build
         run: zig build -Doptimize=ReleaseFast

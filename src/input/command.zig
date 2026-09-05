@@ -465,6 +465,12 @@ fn actionCommands(action: Action.Key) []const Command {
             .description = i18n.N_("Prompt for a new title for the current tab."),
         }},
 
+        .prompt_window_title => comptime &.{.{
+            .action = .prompt_window_title,
+            .title = "Change Window Title…",
+            .description = "Prompt for a new title for the current window.",
+        }},
+
         .new_split => comptime &.{
             .{
                 .action = .{ .new_split = .left },
@@ -576,11 +582,18 @@ fn actionCommands(action: Action.Key) []const Command {
             .description = i18n.N_("Show the on-screen keyboard if present."),
         }},
 
-        .open_config => comptime &.{.{
-            .action = .open_config,
-            .title = i18n.N_("Open Config"),
-            .description = i18n.N_("Open the config file."),
-        }},
+        .open_config => comptime &.{
+            .{
+                .action = .{ .open_config = .os_open },
+                .title = i18n.N_("Open Config Using OS editor"),
+                .description = i18n.N_("Open the config file with the OS's default editor."),
+            },
+            .{
+                .action = .{ .open_config = .new_window },
+                .title = i18n.N_("Open Config in New Terminal Window"),
+                .description = i18n.N_("Open the config file in a new window using $EDITOR or $VISUAL."),
+            },
+        },
 
         .reload_config => comptime &.{.{
             .action = .reload_config,
@@ -692,8 +705,8 @@ fn actionCommands(action: Action.Key) []const Command {
 
         .text => comptime &.{.{
             .action = .{ .text = "👻" },
-            .title = i18n.N_("Ghostty"),
-            .description = i18n.N_("Put a little Ghostty in your terminal."),
+            .title = i18n.N_("Phantom"),
+            .description = i18n.N_("Put a little Phantom in your terminal."),
         }},
 
         // No commands because they're parameterized and there
@@ -706,6 +719,7 @@ fn actionCommands(action: Action.Key) []const Command {
         .set_font_size,
         .set_surface_title,
         .set_tab_title,
+        .set_window_title,
         .search,
         .scroll_to_row,
         .scroll_page_fractional,

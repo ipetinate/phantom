@@ -48,6 +48,7 @@ extension Ghostty {
                     // needle is less than 3 chars, we debounce it for a few hundred ms to
                     // avoid kicking off expensive searches.
                     searchNeedleCancellable = searchState.$needle
+                        .map(\.text)
                         .removeDuplicates()
                         .map { needle -> AnyPublisher<String, Never> in
                             if needle.isEmpty || needle.count >= 3 {
@@ -107,6 +108,13 @@ extension Ghostty {
 
         /// True when the bell is active. This is set inactive on focus or event.
         @Published private(set) var bell: Bool = false
+
+        /// A clipboard confirmation waiting to be handled by its controller.
+        @Published var pendingClipboardConfirmation: ClipboardConfirmationRequest? {
+            didSet {
+                pendingClipboardConfirmationDidChange(from: oldValue)
+            }
+        }
 
         // An initial size to request for a window. This will only affect
         // then the view is moved to a new window.
@@ -190,6 +198,8 @@ extension Ghostty {
 
         // This is set to non-null during keyDown to accumulate insertText contents
         private var keyTextAccumulator: [String]?
+        /// Temporary lead surrogate that's waiting for the trail
+        private var leadSurrogate: LeadSurrogate?
 
         // True when we've consumed a left mouse-down only to move focus and
         // should suppress the matching mouse-up from being reported.
@@ -396,6 +406,11 @@ extension Ghostty {
         }
 
         deinit {
+            // Resolve clipboard callback state while surfaceModel is still
+            // alive. The request's weak SurfaceView reference is already nil
+            // during deinit, so didSet passes this instance explicitly.
+            pendingClipboardConfirmation = nil
+
             // Remove all of our notificationcenter subscriptions
             let center = NotificationCenter.default
             center.removeObserver(self)
@@ -1202,7 +1217,7 @@ extension Ghostty {
                         continue
                     }
 
-                    _ = committedPreeditTextAction(action, text: text)
+                    _ = committedTextAction(action, text: text)
                 }
 
                 if shouldReplayCommittedPreeditKey(translationEvent) {
@@ -1474,11 +1489,7 @@ extension Ghostty {
             var key_ev = event.ghosttyKeyEvent(action, translationMods: translationEvent?.modifierFlags)
             key_ev.composing = composing
 
-            // For text, we only encode UTF8 if we don't have a single control
-            // character. Control characters are encoded by Ghostty itself.
-            // Without this, `ctrl+enter` does the wrong thing.
-            if let text, text.count > 0,
-               let codepoint = text.utf8.first, codepoint >= 0x20 {
+            if let text = text?.keyEventText {
                 return text.withCString { ptr in
                     key_ev.text = ptr
                     return ghostty_surface_key(surface, key_ev)
@@ -1502,7 +1513,7 @@ extension Ghostty {
             }
         }
 
-        private func committedPreeditTextAction(
+        private func committedTextAction(
             _ action: ghostty_input_action_e,
             text: String
         ) -> Bool {
@@ -1777,26 +1788,36 @@ extension Ghostty {
 
             // Note the callback may be executed on a background thread as documented
             // so we need @MainActor since we're reading/writing view state.
-            UNUserNotificationCenter.current().add(request) { @MainActor error in
-                if let error = error {
-                    AppDelegate.logger.error("Error scheduling user notification: \(error, privacy: .public)")
-                    return
-                }
+            // We use [weak self] here because we don't want to extend the surface's
+            // lifetime when a notification is triggered right before the surface closes.
+            Task { @MainActor [weak self] in
+                do {
+                    try await UNUserNotificationCenter.current().add(request)
 
-                // We need to keep track of this notification so we can remove it
-                // under certain circumstances
-                self.notificationIdentifiers.insert(uuid)
+                    guard let focused = self?.focused else {
+                        // We remove the notification if the surface is deallocated.
+                        UNUserNotificationCenter.current()
+                            .removeDeliveredNotifications(withIdentifiers: [uuid])
+                        return
+                    }
 
-                // If we're focused then we schedule to remove the notification
-                // after a few seconds. If we gain focus we automatically remove it
-                // in focusDidChange.
-                if self.focused {
-                    Task { @MainActor [weak self] in
-                        try await Task.sleep(for: .seconds(3))
+                    // We need to keep track of this notification so we can remove it
+                    // under certain circumstances
+                    self?.notificationIdentifiers.insert(uuid)
+
+                    // If we're focused then we schedule to remove the notification
+                    // after a few seconds. If we gain focus we automatically remove it
+                    // in focusDidChange.
+                    if focused {
+                        // If the suspension is failed, we remove the notification anyway.
+                        try? await Task.sleep(for: .seconds(3))
                         self?.notificationIdentifiers.remove(uuid)
+                        // We remove the notification if the surface is deallocated while we wait.
                         UNUserNotificationCenter.current()
                             .removeDeliveredNotifications(withIdentifiers: [uuid])
                     }
+                } catch {
+                    AppDelegate.logger.error("Error scheduling user notification: \(error, privacy: .public)")
                 }
             }
         }
@@ -1938,6 +1959,18 @@ extension Ghostty {
     }
 }
 
+// MARK: Clipboard Confirmation
+
+extension Ghostty.SurfaceView {
+    /// Cancel the request that a new published value replaces or clears.
+    private func pendingClipboardConfirmationDidChange(
+        from previous: Ghostty.ClipboardConfirmationRequest?
+    ) {
+        guard previous !== pendingClipboardConfirmation else { return }
+        previous?.cancel(from: self)
+    }
+}
+
 // MARK: - NSTextInputClient
 
 extension Ghostty.SurfaceView: NSTextInputClient {
@@ -2072,7 +2105,7 @@ extension Ghostty.SurfaceView: NSTextInputClient {
             x += cellSize.width * Double(range.location + range.length)
         }
         // Ghostty coordinates are in top-left (0, 0) so we have to convert to
-        // bottom-left since that is what UIKit expects
+        // bottom-left since that is what AppKit expects
         // when there's is no characters selected,
         // width should be 0 so that dictation indicator
         // can start in the right place
@@ -2093,20 +2126,30 @@ extension Ghostty.SurfaceView: NSTextInputClient {
     func insertText(_ string: Any, replacementRange: NSRange) {
         // We must have an associated event
         guard NSApp.currentEvent != nil else { return }
-        guard let surfaceModel else { return }
 
         // We want the string view of the any value
         var chars = ""
         switch string {
         case let v as NSAttributedString:
             chars = v.string
-        case let v as String:
-            chars = v
+        case let v as NSString:
+            if let leadSurrogate = LeadSurrogate(v) {
+                self.leadSurrogate = leadSurrogate
+                chars = ""
+            } else if let trail = TrailSurrogate(v) {
+                // We ignore trail surrogate without a lead like Terminal.app.
+                chars = leadSurrogate?.encode(trail: trail) ?? ""
+                leadSurrogate = nil
+            } else {
+                chars = v as String
+                // Clear whenever other text got inserted.
+                // Ideally we should encode any adjacent lead and trail surrogate into one,
+                // but getting the cursor position and reading could be rather expensive to do.
+                leadSurrogate = nil
+            }
         default:
             return
         }
-
-        let hadMarkedText = hasMarkedText()
 
         // If insertText is called, our preedit must be over.
         unmarkText()
@@ -2119,14 +2162,11 @@ extension Ghostty.SurfaceView: NSTextInputClient {
             return
         }
 
-        if hadMarkedText, !chars.isEmpty {
-            // Send preedit commits as key events instead of raw text for
-            // keybind interpretation by programs.
-            _ = committedPreeditTextAction(GHOSTTY_ACTION_PRESS, text: chars)
-            return
+        // All committed text (IME, dictation, etc.) must be sent as key
+        // events so programs treat it as typed input, never as a paste.
+        if !chars.isEmpty {
+            _ = committedTextAction(GHOSTTY_ACTION_PRESS, text: chars)
         }
-
-        surfaceModel.sendText(chars)
     }
 
     /// This function needs to exist for two reasons:
@@ -2316,10 +2356,7 @@ extension Ghostty.SurfaceView {
 
         if let content {
             DispatchQueue.main.async {
-                self.insertText(
-                    content,
-                    replacementRange: NSRange(location: 0, length: 0)
-                )
+                self.surfaceModel?.sendText(content)
             }
             return true
         }
@@ -2484,5 +2521,43 @@ class CachedValue<T> {
 
         value = nil
         expiryTask = nil
+    }
+}
+
+/// Check if a UTF16 text is a single lead surrogate character
+struct LeadSurrogate {
+    let char: UTF16Char
+
+    init?(_ text: NSString) {
+        guard text.length == 1 else {
+            return nil
+        }
+        let char = text.character(at: 0)
+        if UTF16.isLeadSurrogate(char) {
+            self.char = char
+        } else {
+            return nil
+        }
+    }
+
+    func encode(trail: TrailSurrogate) -> String {
+        String(decoding: [char, trail.char], as: UTF16.self)
+    }
+}
+
+/// Check if a UTF16 text is a single trail surrogate character
+struct TrailSurrogate {
+    let char: UTF16Char
+
+    init?(_ text: NSString) {
+        guard text.length == 1 else {
+            return nil
+        }
+        let char = text.character(at: 0)
+        if UTF16.isTrailSurrogate(char) {
+            self.char = char
+        } else {
+            return nil
+        }
     }
 }

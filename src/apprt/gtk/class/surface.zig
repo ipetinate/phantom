@@ -691,6 +691,7 @@ pub const Surface = extern struct {
         // True if the current surface is a split, this is used to apply
         // unfocused-split-* options
         is_split: bool = false,
+        is_split_binding: ?*gobject.Binding = null,
 
         action_group: ?*gio.SimpleActionGroup = null,
 
@@ -735,6 +736,7 @@ pub const Surface = extern struct {
 
         overrides: struct {
             command: ?configpkg.Command = null,
+            shell_integration: ?configpkg.Config.ShellIntegration = null,
             working_directory: ?[:0]const u8 = null,
 
             pub const none: @This() = .{};
@@ -745,6 +747,7 @@ pub const Surface = extern struct {
 
     pub fn new(overrides: struct {
         command: ?configpkg.Command = null,
+        shell_integration: ?configpkg.Config.ShellIntegration = null,
         working_directory: ?[:0]const u8 = null,
         title: ?[:0]const u8 = null,
 
@@ -757,6 +760,7 @@ pub const Surface = extern struct {
         const priv: *Private = self.private();
         priv.overrides = .{
             .command = if (overrides.command) |c| c.clone(alloc) catch null else null,
+            .shell_integration = overrides.shell_integration,
             .working_directory = if (overrides.working_directory) |wd| alloc.dupeZ(u8, wd) catch null else null,
         };
         return self;
@@ -845,6 +849,28 @@ pub const Surface = extern struct {
         };
 
         return @intFromBool(config.@"bell-features".border);
+    }
+
+    pub fn bindIsSplit(self: *Self, tree: *SplitTree) void {
+        const priv = self.private();
+        if (priv.is_split_binding) |binding| {
+            binding.unbind();
+            binding.unref();
+            priv.is_split_binding = null;
+        }
+
+        const binding = tree.as(gobject.Object).bindProperty(
+            "is-split",
+            self.as(gobject.Object),
+            "is-split",
+            .{ .sync_create = true },
+        );
+        // The ref created by bindProperty is owned by the binding itself.
+        // We need another ref to prevent the binding object from being
+        // freed if the source object (SplitTree) is finalized. Otherwise
+        // our pointer to the binding could become stale.
+        binding.ref();
+        priv.is_split_binding = binding;
     }
 
     /// Callback used to determine whether unfocused-split-fill / unfocused-split-opacity
@@ -1362,19 +1388,11 @@ pub const Surface = extern struct {
                 if (entry.native == keycode) break :w3c entry.key;
             } else .unidentified;
 
-            // Consult the pre-remapped XKB keyval/keysym to get the (possibly)
-            // remapped key. If the W3C key or the remapped key
-            // is eligible for remapping, we use it.
-            //
-            // See the docs for `shouldBeRemappable` for why we even have to
-            // do this in the first place.
-            if (gtk_key.keyFromKeyval(keyval)) |remapped| {
-                if (w3c_key.shouldBeRemappable() or remapped.shouldBeRemappable())
-                    break :keycode remapped;
-            }
-
-            // Return the original physical key
-            break :keycode w3c_key;
+            break :keycode gtk_key.remapKey(
+                w3c_key,
+                keyval,
+                key_event.isModifier() != 0,
+            );
         };
 
         // Get our modifier for the event
@@ -1559,7 +1577,11 @@ pub const Surface = extern struct {
             // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/a7738a4d269bfdf4d8d5429ca73ccdd9b2450421
             // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/9759d3fd81129608dd78116001928f2aed974ead
             if (gtk_xft_dpi <= 0) {
-                log.warn("gtk-xft-dpi has invalid value ({}), using default", .{gtk_xft_dpi});
+                // -1 is a valid value which specifies default scale.
+                // https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html
+                if (gtk_xft_dpi != -1) {
+                    log.warn("gtk-xft-dpi has invalid value ({}), using default", .{gtk_xft_dpi});
+                }
                 break :xft_scale 1.0;
             }
 
@@ -1717,7 +1739,7 @@ pub const Surface = extern struct {
         self: *Self,
         clipboard_type: apprt.Clipboard,
         state: apprt.ClipboardRequest,
-    ) !bool {
+    ) !apprt.ClipboardReadResult {
         return try Clipboard.request(
             self,
             clipboard_type,
@@ -1871,6 +1893,12 @@ pub const Surface = extern struct {
         if (priv.config) |v| {
             v.unref();
             priv.config = null;
+        }
+
+        if (priv.is_split_binding) |binding| {
+            binding.unbind();
+            binding.unref();
+            priv.is_split_binding = null;
         }
 
         if (priv.vadj_signal_group) |group| {
@@ -3514,9 +3542,11 @@ pub const Surface = extern struct {
         );
         defer config.deinit();
 
-        if (priv.overrides.command) |c| {
-            config.command = try c.clone(config._arena.?.allocator());
-        }
+        try applyCommandOverrides(
+            &config,
+            priv.overrides.command,
+            priv.overrides.shell_integration,
+        );
         if (priv.overrides.working_directory) |wd| {
             const config_alloc = config.arenaAlloc();
             var wd_val: configpkg.WorkingDirectory = .{ .path = try config_alloc.dupe(u8, wd) };
@@ -3650,6 +3680,21 @@ pub const Surface = extern struct {
         };
     }
 
+    fn closureShouldDragHandleBeShown(
+        _: *Self,
+        config_: ?*Config,
+        is_split: c_int,
+    ) callconv(.c) c_int {
+        const config = config_ orelse return @intFromBool(false);
+
+        const shown = switch (config.get().@"drag-handle") {
+            .always => true,
+            .auto => is_split != 0,
+            .never => false,
+        };
+        return @intFromBool(shown);
+    }
+
     fn surfaceDragPrepare(
         src: *gtk.DragSource,
         x: f64,
@@ -3722,7 +3767,6 @@ pub const Surface = extern struct {
         const dropped = self.core().?.app.findSurfaceByID(dropped_id) orelse return;
         const from = dropped.rt_surface.gobj();
 
-        // TODO: Find a better way to access the split tree from here
         const st = ext.getAncestor(
             SplitTree,
             self.as(gtk.Widget),
@@ -3892,6 +3936,7 @@ pub const Surface = extern struct {
             class.bindTemplateCallback("search_changed", &searchChanged);
             class.bindTemplateCallback("search_next_match", &searchNextMatch);
             class.bindTemplateCallback("search_previous_match", &searchPreviousMatch);
+            class.bindTemplateCallback("should_drag_handle_be_shown", &closureShouldDragHandleBeShown);
             class.bindTemplateCallback("surface_drag_prepare", &surfaceDragPrepare);
             class.bindTemplateCallback("surface_drag_begin", &surfaceDragBegin);
             class.bindTemplateCallback("surface_drop", &surfaceDrop);
@@ -4086,22 +4131,25 @@ const Clipboard = struct {
         );
     }
 
-    /// Request data from the clipboard (read the clipboard). This
-    /// completes asynchronously and will call the `completeClipboardRequest`
-    /// core surface API when done.
-    ///
-    /// Returns true if the request was started, false if the clipboard
-    /// doesn't contain text (allowing performable keybinds to pass through).
+    /// Request data from the clipboard (read the clipboard). A started
+    /// request completes asynchronously and will call the
+    /// `completeClipboardRequest` core surface API when done.
     pub fn request(
         self: *Surface,
         clipboard_type: apprt.Clipboard,
         state: apprt.ClipboardRequest,
-    ) Allocator.Error!bool {
+    ) Allocator.Error!apprt.ClipboardReadResult {
+        // The GTK apprt doesn't support the Kitty clipboard protocol
+        // yet.
+        if (state == .kitty_read or
+            state == .kitty_write or
+            state == .list) return .unsupported;
+
         // Get our requested clipboard
         const clipboard = get(
             self.private().gl_area.as(gtk.Widget),
             clipboard_type,
-        ) orelse return false;
+        ) orelse return .unsupported;
 
         // For paste requests, check if clipboard has text format available.
         // This is a synchronous check that allows performable keybinds to
@@ -4110,7 +4158,7 @@ const Clipboard = struct {
             const formats = clipboard.getFormats();
             if (formats.containGtype(gobject.ext.types.string) == 0) {
                 log.debug("clipboard has no text format, not starting paste request", .{});
-                return false;
+                return .unavailable;
             }
         }
 
@@ -4133,7 +4181,7 @@ const Clipboard = struct {
             ud,
         );
 
-        return true;
+        return .started;
     }
 
     /// Paste explicit text directly into the surface, regardless of the
@@ -4146,16 +4194,15 @@ const Clipboard = struct {
 
         const surface = self.private().core_surface orelse return;
         surface.completeClipboardRequest(
-            .paste,
-            text,
-            false,
+            .{ .paste = .standard },
+            .{ .contents = &.{.{ .mime = "text/plain", .data = text }} },
         ) catch |err| switch (err) {
             error.UnsafePaste,
             error.UnauthorizedPaste,
             => {
                 showClipboardConfirmation(
                     self,
-                    .paste,
+                    .{ .paste = .standard },
                     text,
                 );
                 return;
@@ -4199,7 +4246,7 @@ const Clipboard = struct {
                 .request = &req,
                 .@"can-remember" = switch (req) {
                     .osc_52_read, .osc_52_write => true,
-                    .paste => false,
+                    .paste, .list, .kitty_read, .kitty_write => false,
                 },
                 .@"clipboard-contents" = contents_buf,
             },
@@ -4236,7 +4283,7 @@ const Clipboard = struct {
         if (remember) switch (req.*) {
             .osc_52_read => surface.config.clipboard_read = .allow,
             .osc_52_write => surface.config.clipboard_write = .allow,
-            .paste => {},
+            .paste, .list, .kitty_read, .kitty_write => {},
         };
 
         // Get our text
@@ -4253,11 +4300,10 @@ const Clipboard = struct {
             ?[:0]const u8,
         ) orelse return;
 
-        surface.completeClipboardRequest(
-            req.*,
-            text,
-            true,
-        ) catch |err| {
+        surface.completeClipboardRequest(req.*, .{
+            .contents = &.{.{ .mime = "text/plain", .data = text }},
+            .confirmed = true,
+        }) catch |err| {
             log.warn("failed to complete clipboard request: {}", .{err});
         };
     }
@@ -4275,7 +4321,7 @@ const Clipboard = struct {
         if (remember) switch (req.*) {
             .osc_52_read => surface.config.clipboard_read = .deny,
             .osc_52_write => surface.config.clipboard_write = .deny,
-            .paste => @panic("paste should not be able to be remembered"),
+            .paste, .list, .kitty_read, .kitty_write => @panic("request should not be able to be remembered"),
         };
     }
 
@@ -4313,8 +4359,7 @@ const Clipboard = struct {
         const surface = self.private().core_surface orelse return;
         surface.completeClipboardRequest(
             req.state,
-            str,
-            false,
+            .{ .contents = &.{.{ .mime = "text/plain", .data = str }} },
         ) catch |err| switch (err) {
             error.UnsafePaste,
             error.UnauthorizedPaste,
@@ -4364,4 +4409,58 @@ test "computeFraction" {
     try std.testing.expectEqual(1.0, computeFraction(255));
     try std.testing.expectEqual(0.0, computeFraction(0));
     try std.testing.expectEqual(0.5, computeFraction(50));
+}
+
+/// Apply command and shell integration overrides received from the CLI.
+/// Explicit commands should only receive shell integration when their
+/// executable can be detected as a supported shell. An explicit shell
+/// integration override is also valid without a command.
+fn applyCommandOverrides(
+    config: *configpkg.Config,
+    command: ?configpkg.Command,
+    shell_integration: ?configpkg.Config.ShellIntegration,
+) Allocator.Error!void {
+    if (command) |value| {
+        config.command = try value.clone(config.arenaAlloc());
+
+        if (shell_integration) |integration| {
+            config.@"shell-integration" = integration;
+        } else if (config.@"shell-integration" != .none) {
+            config.@"shell-integration" = .detect;
+        }
+    } else if (shell_integration) |value| {
+        config.@"shell-integration" = value;
+    }
+}
+
+test "command and shell integration overrides" {
+    const testing = std.testing;
+
+    var config = try configpkg.Config.default(testing.allocator);
+    defer config.deinit();
+
+    config.@"shell-integration" = .nushell;
+    try applyCommandOverrides(&config, .{ .shell = "vim" }, null);
+    try testing.expectEqual(.detect, config.@"shell-integration");
+
+    config.@"shell-integration" = .none;
+    try applyCommandOverrides(&config, .{ .shell = "vim" }, null);
+    try testing.expectEqual(.none, config.@"shell-integration");
+
+    try applyCommandOverrides(&config, .{ .shell = "nu" }, .nushell);
+    try testing.expectEqual(.nushell, config.@"shell-integration");
+
+    try applyCommandOverrides(&config, .{ .shell = "vim" }, .none);
+    try testing.expectEqual(.none, config.@"shell-integration");
+
+    config.@"shell-integration" = .nushell;
+    try applyCommandOverrides(&config, null, null);
+    try testing.expectEqual(.nushell, config.@"shell-integration");
+
+    config.@"shell-integration" = .none;
+    try applyCommandOverrides(&config, null, .nushell);
+    try testing.expectEqual(.nushell, config.@"shell-integration");
+
+    try applyCommandOverrides(&config, null, .none);
+    try testing.expectEqual(.none, config.@"shell-integration");
 }

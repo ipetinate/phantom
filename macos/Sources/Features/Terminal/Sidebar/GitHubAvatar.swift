@@ -93,7 +93,7 @@ struct GitHubAvatarView: View {
             if let image = store.image(for: login) {
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .scaledToFill()
             } else {
                 Circle()
                     .fill((palette.accent ?? .accentColor).opacity(0.22))

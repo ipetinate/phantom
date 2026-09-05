@@ -145,7 +145,7 @@ private struct IconOption: View {
                         Image(nsImage: image)
                             .resizable()
                             .interpolation(.high)
-                            .aspectRatio(contentMode: .fit)
+                            .scaledToFit()
                     } else {
                         // A missing asset is a build mistake, and saying so
                         // beats an empty square that looks like a design.
