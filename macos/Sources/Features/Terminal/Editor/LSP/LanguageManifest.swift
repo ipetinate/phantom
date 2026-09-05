@@ -182,6 +182,7 @@ struct LanguageManifest: Equatable, Sendable {
     /// the file this build ignored.
     private static let knownTopLevelKeys: Set<String> = [
         "schemaVersion", "id", "name", "version", "publisher", "contributes",
+        "description", "homepage", "phantom",
     ]
     private static let knownContributesKeys: Set<String> = [
         "languages", "formatters", "themes", "iconThemes", "agents",
