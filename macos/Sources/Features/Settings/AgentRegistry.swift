@@ -80,7 +80,7 @@ final class AgentRegistry: @unchecked Sendable {
                 .init("Notification", "notify"),
                 .init("SessionEnd", "ended"),
             ],
-            script: HooksIntegration.TabStateScript(
+            script: HooksIntegration.ScriptOptions(
                 subdirectory: "hooks",
                 sessionKeys: ["session_id"],
                 stateFromPayload: HooksIntegration.PayloadStateRule(
@@ -127,7 +127,7 @@ final class AgentRegistry: @unchecked Sendable {
                 .init("Stop", "done"),
                 .init("SessionEnd", "ended"),
             ],
-            script: HooksIntegration.TabStateScript(
+            script: HooksIntegration.ScriptOptions(
                 subdirectory: "",
                 sessionKeys: [
                     "session_id", "sessionId", "conversation_id", "conversationId", "thread_id",
@@ -205,7 +205,7 @@ final class AgentRegistry: @unchecked Sendable {
                 .init("PreInvocation", "working", reply: "{}"),
                 .init("Stop", "done", reply: #"{"decision":"stop"}"#),
             ],
-            script: HooksIntegration.TabStateScript(
+            script: HooksIntegration.ScriptOptions(
                 subdirectory: "",
                 sessionKeys: ["conversationId", "conversation_id", "sessionId", "session_id"]))),
         mcp: .json(MCPIntegration.JSONMCP(
@@ -250,7 +250,7 @@ final class AgentRegistry: @unchecked Sendable {
                 .init("Stop", "done"),
                 .init("SessionEnd", "ended"),
             ],
-            script: HooksIntegration.TabStateScript(
+            script: HooksIntegration.ScriptOptions(
                 subdirectory: "",
                 sessionKeys: ["session_id"]),
             timeout: 5)),

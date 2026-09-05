@@ -102,7 +102,7 @@ enum HooksIntegration: Equatable, Sendable {
         let state: String
     }
 
-    struct TabStateScript: Equatable, Sendable {
+    struct ScriptOptions: Equatable, Sendable {
         let subdirectory: String
         let sessionKeys: [String]
         var stateFromPayload: PayloadStateRule?
@@ -125,7 +125,7 @@ enum HooksIntegration: Equatable, Sendable {
         let entryShape: EntryShape
         let ownership: KeyOwnership
         let events: [Event]
-        let script: TabStateScript
+        let script: ScriptOptions
         var legacyScriptNames: [String] = []
     }
 
@@ -134,7 +134,7 @@ enum HooksIntegration: Equatable, Sendable {
         let fileName: String
         let table: String
         let events: [Event]
-        let script: TabStateScript
+        let script: ScriptOptions
         let timeout: Int
     }
 

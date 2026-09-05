@@ -5,7 +5,7 @@ import Foundation
 /// used by the sidebar's Claude integration.
 @MainActor
 enum CodexHooksInstaller {
-    static let scriptName = PhantomBuild.fileName("phantom-tab-state.sh")
+    static let scriptName = TabStateScript.fileName
     /// Codex can be configured with CODEX_HOME (and this installation uses
     /// ~/.codex-cli). Resolve it at use time so the settings screen and the
     /// installer always target the same home as the running Codex binary.
@@ -62,98 +62,15 @@ enum CodexHooksInstaller {
     }
 
     static func command(for state: String, scriptPath: String) -> String {
-        state.isEmpty ? "'\(scriptPath)'" : "'\(scriptPath)' \(state)"
+        TabStateScript.commandLine(
+            scriptPath: scriptPath,
+            arguments: TabStateScript.arguments(
+                agent: AgentRegistry.codex.id,
+                state: state,
+                options: TabStateScript.options(of: AgentRegistry.codex)))
     }
 
-    /// The id extraction here has since been run against a real Codex: the
-    /// payload does carry the session id, of the same UUID shape Claude Code
-    /// uses, and the loop below finds it. The extra key names stay because
-    /// they cost a `sed` each and the payload is Codex's to change.
-    ///
-    /// What the events registered above cannot cover is a session nobody has
-    /// spoken to yet. Every one of them needs the user to have said something,
-    /// so a tab where the agent is up but unprompted reaches no hook at all and
-    /// its file holds no id — the gap `AgentSessionStore` closes by reading the
-    /// rollout Codex itself wrote at startup. Codex does have a `SessionStart`
-    /// event and adding it here would report the id sooner, but only for
-    /// somebody who reinstalls the hooks afterwards, so it is an improvement on
-    /// top of the store rather than instead of it. All of this failing is still
-    /// a supported outcome: the script reports the state alone and the tab
-    /// resumes with `codex resume --last`.
-    static let scriptBody = #"""
-    #!/bin/bash
-    # Reports Codex session state to the Phantom sidebar.
-    [ -n "$GHOSTTY_TAB_STATE_FILE" ] || exit 0
-    # Absent on purpose for SessionStart, which reports identity rather than
-    # activity: no argument means an empty first line, and no indicator.
-    STATE="$1"
-
-    PAYLOAD=""
-    if [ ! -t 0 ]; then
-      PAYLOAD=$(cat 2>/dev/null)
-    fi
-    FLAT=$(printf '%s' "$PAYLOAD" | tr -d '\n')
-
-    # A dash-leading id is a flag, not an id, once it reaches `codex resume`.
-    #
-    # A function because every source of an id goes through it: each candidate
-    # key, and the value carried forward out of the file. Filtering only the
-    # payload left a corrupt carried value to be copied forward on every later
-    # event, so one bad write stuck to the tab permanently — the file still
-    # looked like it held an id, and the resume stayed quietly imprecise.
-    sanitize_session() {
-      case "$1" in
-        ""|-*|*[!A-Za-z0-9._-]*) return 0 ;;
-        *) printf '%s' "$1" ;;
-      esac
-    }
-
-    # The FIRST match per key, not the last. A `sed` opening with `.*` is
-    # greedy and lands on the LAST occurrence in the payload — and tool events
-    # nest a session id inside `tool_input`/`tool_response`, where a subagent
-    # call or an MCP tool reports one of its own. That nested id is a valid
-    # UUID, so the filter passes it and nothing downstream objects; the tab then
-    # resumes a conversation it never held. The session's own id is a top-level
-    # field in every payload these CLIs emit, so it precedes anything nested.
-    #
-    # Filtering inside the loop rather than after it, so that a key which
-    # matches something unusable does not shadow the keys still untried.
-    SESSION=""
-    for KEY in session_id sessionId conversation_id conversationId thread_id; do
-      [ -n "$SESSION" ] && break
-      SESSION=$(sanitize_session "$(printf '%s' "$FLAT" \
-        | grep -o "\"$KEY\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
-        | head -n 1 \
-        | sed 's/.*"\([^"]*\)"$/\1/')")
-    done
-
-    if [ -z "$SESSION" ] && [ -f "$GHOSTTY_TAB_STATE_FILE" ]; then
-      SESSION=$(sanitize_session "$(sed -n 's/^session=//p' \
-        "$GHOSTTY_TAB_STATE_FILE" | head -n 1)")
-    fi
-
-    # A temp name private to this invocation. A fixed `.tmp` is one path shared
-    # by everything writing this tab — parallel tool calls, a second agent in
-    # the same terminal, another integration on the same events — and two of
-    # them truncating that one file interleaves their bytes. The rename that
-    # wins carries the mixture, which is how a `session=` line arrives cut in
-    # half; the one that loses renames a file the winner already took, so its
-    # error is dropped rather than surfaced, and its fragment is removed.
-    #
-    # The name still cannot be mistaken for a state file: TabStateCenter reads
-    # only entries whose whole name parses as a UUID, and this one does not.
-    TMP="$GHOSTTY_TAB_STATE_FILE.$$.tmp"
-
-    {
-      printf '%s\nagent=codex\n' "$STATE"
-      if [ -n "$SESSION" ]; then
-        printf 'session=%s\n' "$SESSION"
-      fi
-    } > "$TMP" \
-      && mv "$TMP" "$GHOSTTY_TAB_STATE_FILE" 2>/dev/null \
-      || rm -f "$TMP"
-    exit 0
-    """#
+    static let scriptBody = TabStateScript.body
 
     static private(set) var lastError: String?
 

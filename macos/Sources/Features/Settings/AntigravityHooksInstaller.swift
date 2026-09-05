@@ -37,7 +37,7 @@ import Foundation
 /// documented. Where the docs and that post disagree, the post wins.
 @MainActor
 enum AntigravityHooksInstaller {
-    static let scriptName = PhantomBuild.fileName("phantom-tab-state.sh")
+    static let scriptName = TabStateScript.fileName
 
     /// The one top-level key Phantom owns in `hooks.json`. Everything the
     /// merge does is scoped to it.
@@ -123,120 +123,21 @@ enum AntigravityHooksInstaller {
     }
 
     static func command(for state: String, event: String, scriptPath: String) -> String {
-        "'\(scriptPath)' \(state) \(event)"
+        TabStateScript.commandLine(
+            scriptPath: scriptPath,
+            arguments: TabStateScript.arguments(
+                agent: AgentRegistry.antigravity.id,
+                state: state,
+                options: TabStateScript.options(of: AgentRegistry.antigravity),
+                reply: reply(for: event)))
     }
 
-    /// Not private, so a test can run the real script against a real payload.
-    /// The reply and the id extraction are both shell, and the only honest way
-    /// to check shell is to execute it.
-    static let scriptBody = #"""
-    #!/bin/bash
-    # Reports Antigravity session state to the Phantom sidebar.
-    STATE="$1"
-    EVENT="$2"
-
-    # Antigravity expects a JSON object back from every hook, and the shape is
-    # per-event: Stop takes a `decision`, everything else takes an empty
-    # object. Printed first, before any of the work below, so that no missing
-    # state file and no failed write can cost the agent its reply — a hook
-    # that answers nothing is a hook whose runner has to guess.
-    #
-    # `stop` rather than `continue`: `continue` is the documented value that
-    # *prevents* the agent from stopping, which is the opposite of what a
-    # reporting hook wants. `stop` is what a working script in the wild sends
-    # to mean "stop normally".
-    case "$EVENT" in
-      Stop) printf '{"decision":"stop"}\n' ;;
-      *) printf '{}\n' ;;
-    esac
-
-    # No-op outside Phantom: the env var only exists in Phantom terminals. The
-    # reply above has already been sent, so `agy` is unaffected either way.
-    [ -n "$GHOSTTY_TAB_STATE_FILE" ] || exit 0
-
-    PAYLOAD=""
-    if [ ! -t 0 ]; then
-      PAYLOAD=$(cat 2>/dev/null)
-    fi
-    FLAT=$(printf '%s' "$PAYLOAD" | tr -d '\n')
-
-    # This value is eventually typed at a prompt after `agy --conversation`,
-    # so anything a shell would read as more than one word is refused, and so
-    # is a leading dash, which would arrive there as a flag.
-    #
-    # A function because every source of an id goes through it: each candidate
-    # key, and the value carried forward out of the file. Filtering only the
-    # payload leaves a corrupt carried value to be copied forward on every
-    # later event, so one bad write sticks to the tab permanently.
-    sanitize_session() {
-      case "$1" in
-        ""|-*|*[!A-Za-z0-9._-]*) return 0 ;;
-        *) printf '%s' "$1" ;;
-      esac
+    static func reply(for event: String) -> String? {
+        guard case .json(let hooks)? = AgentRegistry.antigravity.hooks else { return nil }
+        return hooks.events.first { $0.name == event }?.reply
     }
 
-    # `conversationId` is the documented field, and Antigravity calls it a
-    # conversation where the others call it a session. The remaining spellings
-    # cost a `grep` each and are there because the payload is Antigravity's to
-    # change, not Phantom's.
-    #
-    # The FIRST match per key, not the last. A `sed` opening with `.*` is
-    # greedy and lands on the LAST occurrence — and a tool payload nests
-    # arguments that can carry an id of their own, which is a well-formed
-    # value that passes the filter and resumes a conversation the tab never
-    # held. The real id is top-level and so precedes anything nested.
-    #
-    # Filtering inside the loop rather than after it, so a key that matches
-    # something unusable does not shadow the keys still untried.
-    SESSION=""
-    for KEY in conversationId conversation_id sessionId session_id; do
-      [ -n "$SESSION" ] && break
-      SESSION=$(sanitize_session "$(printf '%s' "$FLAT" \
-        | grep -o "\"$KEY\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
-        | head -n 1 \
-        | sed 's/.*"\([^"]*\)"$/\1/')")
-    done
-
-    # An event arriving without an id must not erase the one on record: the
-    # last write before a quit is the one a restore reads, and nothing says
-    # that write will be the event that carried the id.
-    if [ -z "$SESSION" ] && [ -f "$GHOSTTY_TAB_STATE_FILE" ]; then
-      SESSION=$(sanitize_session "$(sed -n 's/^session=//p' \
-        "$GHOSTTY_TAB_STATE_FILE" | head -n 1)")
-    fi
-
-    # A temp name private to this invocation. A fixed `.tmp` is one path
-    # shared by everything writing this tab — a second agent in the same
-    # terminal, another integration on the same events — and two of them
-    # truncating that one file interleaves their bytes. The rename that wins
-    # carries the mixture, which is how a `session=` line arrives cut in half.
-    #
-    # The name still cannot be mistaken for a state file: TabStateCenter reads
-    # only entries whose whole name parses as a UUID, and this one does not.
-    TMP="$GHOSTTY_TAB_STATE_FILE.$$.tmp"
-
-    # State stays alone on the first line: a Phantom old enough to read only
-    # that line keeps reading this file correctly.
-    #
-    # `2>/dev/null` comes BEFORE `> "$TMP"`, and the order is the whole point.
-    # Bash applies redirections left to right, so a stderr redirect written
-    # after the one that fails is installed too late to catch its own
-    # complaint: opening an unwritable path prints "No such file or directory"
-    # to whatever stderr was at that moment. Silencing stderr first is what
-    # keeps that message out of the reader's transcript, and `agy` is a hook
-    # runner that can put it there. Measured, not assumed — a test fires this
-    # script at a path inside a directory that does not exist and asserts
-    # stderr stays empty.
-    {
-      printf '%s\nagent=antigravity\n' "$STATE"
-      if [ -n "$SESSION" ]; then
-        printf 'session=%s\n' "$SESSION"
-      fi
-    } 2>/dev/null > "$TMP" \
-      && mv "$TMP" "$GHOSTTY_TAB_STATE_FILE" 2>/dev/null \
-      || rm -f "$TMP" 2>/dev/null
-    exit 0
-    """#
+    static let scriptBody = TabStateScript.body
 
     static private(set) var lastError: String?
 

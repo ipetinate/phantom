@@ -31,6 +31,11 @@ struct AgentInstallerFixtureTests {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    static let claudeArguments =
+        " --agent claude --session-key session_id --state-from source=compact:compacting"
+    static let codexArguments = " --agent codex --session-key session_id --session-key sessionId"
+        + " --session-key conversation_id --session-key conversationId --session-key thread_id"
+
     // MARK: Claude Code
 
     static let claudeSettingsBefore = #"""
@@ -42,19 +47,19 @@ struct AgentInstallerFixtureTests {
 
     static let claudeSettingsAfter = #"""
     {"theme":"dark","hooks":{
-      "SessionStart":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh'"}]}],
-      "PreCompact":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' compacting"}]}],
-      "PostCompact":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' working"}]}],
-      "UserPromptSubmit":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' working"}]}],
-      "PreToolUse":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' working"}]}],
-      "PostToolUse":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' working"}]}],
-      "PermissionRequest":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' awaiting"}]}],
+      "SessionStart":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "PreCompact":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' compacting --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "PostCompact":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' working --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "UserPromptSubmit":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' working --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "PreToolUse":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' working --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "PostToolUse":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' working --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "PermissionRequest":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' awaiting --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
       "Stop":[{"hooks":[{"type":"command","command":"/other.sh"}]},
-              {"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' done"}]}],
-      "StopFailure":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' failed"}]}],
-      "PermissionDenied":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' denied"}]}],
-      "Notification":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' notify"}]}],
-      "SessionEnd":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' ended"}]}]}}
+              {"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' done --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "StopFailure":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' failed --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "PermissionDenied":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' denied --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "Notification":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' notify --agent claude --session-key session_id --state-from source=compact:compacting"}]}],
+      "SessionEnd":[{"hooks":[{"type":"command","command":"'/h/.claude/hooks/phantom-tab-state.sh' ended --agent claude --session-key session_id --state-from source=compact:compacting"}]}]}}
     """#
 
     static let claudeSettingsRemoved = #"""
@@ -85,8 +90,8 @@ struct AgentInstallerFixtureTests {
     @Test func claudeCommandLines() {
         let path = "/h/.claude/hooks/phantom-tab-state.sh"
 
-        #expect(ClaudeHooksInstaller.command(for: "", scriptPath: path) == "'/h/.claude/hooks/phantom-tab-state.sh'")
-        #expect(ClaudeHooksInstaller.command(for: "done", scriptPath: path) == "'/h/.claude/hooks/phantom-tab-state.sh' done")
+        #expect(ClaudeHooksInstaller.command(for: "", scriptPath: path) == "'/h/.claude/hooks/phantom-tab-state.sh' --agent claude --session-key session_id --state-from source=compact:compacting")
+        #expect(ClaudeHooksInstaller.command(for: "done", scriptPath: path) == "'/h/.claude/hooks/phantom-tab-state.sh' done --agent claude --session-key session_id --state-from source=compact:compacting")
     }
 
     @Test func claudeMCPEntry() throws {
@@ -108,14 +113,14 @@ struct AgentInstallerFixtureTests {
 
     static let codexHooksAfter = #"""
     {"model":"gpt-5","hooks":{
-      "SessionStart":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh'"}]}],
-      "UserPromptSubmit":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' working"}]}],
-      "PreToolUse":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' working"}]}],
-      "PostToolUse":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' working"}]}],
-      "PermissionRequest":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' awaiting"}]}],
+      "SessionStart":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id"}]}],
+      "UserPromptSubmit":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' working --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id"}]}],
+      "PreToolUse":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' working --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id"}]}],
+      "PostToolUse":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' working --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id"}]}],
+      "PermissionRequest":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' awaiting --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id"}]}],
       "Stop":[{"hooks":[{"type":"command","command":"/other.sh"}]},
-              {"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' done"}]}],
-      "SessionEnd":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' ended"}]}]}}
+              {"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' done --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id"}]}],
+      "SessionEnd":[{"hooks":[{"type":"command","command":"'/h/.codex/phantom-tab-state.sh' ended --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id"}]}]}}
     """#
 
     static let codexHooksRemoved = #"""
@@ -142,8 +147,8 @@ struct AgentInstallerFixtureTests {
     @Test func codexCommandLines() {
         let path = "/h/.codex/phantom-tab-state.sh"
 
-        #expect(CodexHooksInstaller.command(for: "", scriptPath: path) == "'/h/.codex/phantom-tab-state.sh'")
-        #expect(CodexHooksInstaller.command(for: "working", scriptPath: path) == "'/h/.codex/phantom-tab-state.sh' working")
+        #expect(CodexHooksInstaller.command(for: "", scriptPath: path) == "'/h/.codex/phantom-tab-state.sh' --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id")
+        #expect(CodexHooksInstaller.command(for: "working", scriptPath: path) == "'/h/.codex/phantom-tab-state.sh' working --agent codex --session-key session_id --session-key sessionId --session-key conversation_id --session-key conversationId --session-key thread_id")
     }
 
     static let codexMCPTable = """
@@ -179,8 +184,8 @@ struct AgentInstallerFixtureTests {
     // MARK: Antigravity
 
     static let antigravityRegistration = #"""
-    {"PreInvocation":[{"type":"command","command":"'/h/.gemini/config/phantom-tab-state.sh' working PreInvocation"}],
-     "Stop":[{"type":"command","command":"'/h/.gemini/config/phantom-tab-state.sh' done Stop"}]}
+    {"PreInvocation":[{"type":"command","command":"'/h/.gemini/config/phantom-tab-state.sh' working --agent antigravity --session-key conversationId --session-key conversation_id --session-key sessionId --session-key session_id --reply '{}'"}],
+     "Stop":[{"type":"command","command":"'/h/.gemini/config/phantom-tab-state.sh' done --agent antigravity --session-key conversationId --session-key conversation_id --session-key sessionId --session-key session_id --reply '{\"decision\":\"stop\"}'"}]}
     """#
 
     @Test func antigravityHooksRegistration() throws {
@@ -219,37 +224,37 @@ struct AgentInstallerFixtureTests {
 
     [[hooks]]
     event = "SessionStart"
-    command = "'/h/.kimi-code/phantom-tab-state.sh'"
+    command = "'/h/.kimi-code/phantom-tab-state.sh' --agent kimi --session-key session_id"
     timeout = 5
 
     [[hooks]]
     event = "UserPromptSubmit"
-    command = "'/h/.kimi-code/phantom-tab-state.sh' working"
+    command = "'/h/.kimi-code/phantom-tab-state.sh' working --agent kimi --session-key session_id"
     timeout = 5
 
     [[hooks]]
     event = "PreToolUse"
-    command = "'/h/.kimi-code/phantom-tab-state.sh' working"
+    command = "'/h/.kimi-code/phantom-tab-state.sh' working --agent kimi --session-key session_id"
     timeout = 5
 
     [[hooks]]
     event = "PostToolUse"
-    command = "'/h/.kimi-code/phantom-tab-state.sh' working"
+    command = "'/h/.kimi-code/phantom-tab-state.sh' working --agent kimi --session-key session_id"
     timeout = 5
 
     [[hooks]]
     event = "PermissionRequest"
-    command = "'/h/.kimi-code/phantom-tab-state.sh' awaiting"
+    command = "'/h/.kimi-code/phantom-tab-state.sh' awaiting --agent kimi --session-key session_id"
     timeout = 5
 
     [[hooks]]
     event = "Stop"
-    command = "'/h/.kimi-code/phantom-tab-state.sh' done"
+    command = "'/h/.kimi-code/phantom-tab-state.sh' done --agent kimi --session-key session_id"
     timeout = 5
 
     [[hooks]]
     event = "SessionEnd"
-    command = "'/h/.kimi-code/phantom-tab-state.sh' ended"
+    command = "'/h/.kimi-code/phantom-tab-state.sh' ended --agent kimi --session-key session_id"
     timeout = 5
     """
 
@@ -294,15 +299,12 @@ struct AgentInstallerFixtureTests {
 
     // MARK: The shell scripts
 
-    @Test func theShellScriptsAreTheOnesShippedToday() {
-        #expect(sha256(ClaudeHooksInstaller.scriptBody)
-            == "0fcde162ce1677a248a3597e9e138358e9db7d91e7c2b505863b56e96f50c6da")
-        #expect(sha256(CodexHooksInstaller.scriptBody)
-            == "594beb2380620171d581646aaa6c7b22723b92aea18a8ff1854db1c371999677")
-        #expect(sha256(AntigravityHooksInstaller.scriptBody)
-            == "bb0f6236fffac3592b63e865c0537f93f38a09093cf63d811b197c8f976103a4")
-        #expect(sha256(KimiHooksInstaller.scriptBody)
-            == "1b3c053f7f1520a19e2de49c95d133f9311e680f7aa534afc3255a5261eab797")
+    @Test func everyShellHookIsTheOneSharedScript() {
+        #expect(ClaudeHooksInstaller.scriptBody == TabStateScript.body)
+        #expect(CodexHooksInstaller.scriptBody == TabStateScript.body)
+        #expect(AntigravityHooksInstaller.scriptBody == TabStateScript.body)
+        #expect(KimiHooksInstaller.scriptBody == TabStateScript.body)
+        #expect(TabStateScript.body.hasPrefix("#!/bin/bash\n"))
     }
 
     private static func filled(_ template: String, agent: String) -> String {

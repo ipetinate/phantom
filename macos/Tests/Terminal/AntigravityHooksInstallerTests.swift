@@ -49,7 +49,7 @@ struct AntigravityHooksInstallerTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let script = directory.appendingPathComponent("phantom-tab-state.sh")
-        try AntigravityHooksInstaller.scriptBody
+        try TabStateScript.body
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: script.path)
@@ -60,9 +60,10 @@ struct AntigravityHooksInstallerTests {
             stateFile: directory.appendingPathComponent("state")))
     }
 
-    /// Invoked exactly as a registration invokes it: state as `$1`, event name
-    /// as `$2`, the payload on stdin, `GHOSTTY_TAB_STATE_FILE` in the
-    /// environment unless `inPhantom` says otherwise.
+    /// Invoked exactly as a registration invokes it: state as `$1`, then the
+    /// descriptor's options and the reply this event owes, the payload on
+    /// stdin, `GHOSTTY_TAB_STATE_FILE` in the environment unless `inPhantom`
+    /// says otherwise.
     @discardableResult
     private func fire(
         _ installed: Installed,
@@ -73,7 +74,11 @@ struct AntigravityHooksInstallerTests {
     ) throws -> Fired {
         let process = Process()
         process.executableURL = installed.script
-        process.arguments = [state, event]
+        process.arguments = TabStateScript.arguments(
+            agent: AgentRegistry.antigravity.id,
+            state: state,
+            options: TabStateScript.options(of: AgentRegistry.antigravity),
+            reply: AntigravityHooksInstaller.reply(for: event))
 
         var environment = ProcessInfo.processInfo.environment
         if inPhantom {
@@ -142,19 +147,25 @@ struct AntigravityHooksInstallerTests {
     }
 
     /// Everything that is not `Stop` replies with an empty object, which is the
-    /// documented shape for `PreInvocation` and `PostToolUse` alike. The
-    /// unregistered event name is deliberate: the script is told which event
-    /// invoked it, and one it does not recognize must still answer something
-    /// valid rather than nothing.
-    @Test(arguments: ["PreInvocation", "PostToolUse", "SomeFutureEvent"])
-    func everyOtherEventRepliesWithAnEmptyObject(_ event: String) throws {
+    /// documented shape for `PreInvocation`. The reply is the registration's:
+    /// each event's command line carries the JSON its runner reads back.
+    @Test func aPreInvocationRepliesWithAnEmptyObject() throws {
         try withInstalledScript { installed in
             let fired = try fire(
-                installed, state: "working", event: event, payload: "{}")
+                installed, state: "working", event: "PreInvocation", payload: "{}")
 
             #expect(try reply(fired).isEmpty)
             #expect(fired.standardError.isEmpty)
         }
+    }
+
+    @Test func everyRegisteredEventCarriesAReply() {
+        for (event, _) in AntigravityHooksInstaller.eventStates {
+            #expect(AntigravityHooksInstaller.reply(for: event) != nil, event)
+        }
+        #expect(AntigravityHooksInstaller.reply(for: "Stop") == #"{"decision":"stop"}"#)
+        #expect(AntigravityHooksInstaller.reply(for: "PreInvocation") == "{}")
+        #expect(AntigravityHooksInstaller.reply(for: "SomeFutureEvent") == nil)
     }
 
     /// The reply is printed before the state work, so nothing about the state
@@ -327,16 +338,20 @@ struct AntigravityHooksInstallerTests {
         }
     }
 
-    /// Both arguments are bare words. A quoted argument in a registered command
-    /// line reads differently depending on whether a shell is in the way — see
-    /// `ClaudeHooksInstaller.command`.
-    @Test func theRegisteredCommandPassesBareWords() {
-        let command = AntigravityHooksInstaller.command(
-            for: "working", event: "PreInvocation")
+    /// The state and the options are bare words; only the JSON reply is
+    /// quoted, because it holds quotes of its own. A quoted argument in a
+    /// registered command line reads differently depending on whether a shell
+    /// is in the way — see `ClaudeHooksInstaller.command`.
+    @Test func theRegisteredCommandPassesBareWordsAndAQuotedReply() {
+        let path = AntigravityHooksInstaller.scriptURL.path
+        let working = AntigravityHooksInstaller.command(for: "working", event: "PreInvocation")
+        let done = AntigravityHooksInstaller.command(for: "done", event: "Stop")
 
-        #expect(command.hasSuffix("' working PreInvocation"))
-        #expect(!command.contains("''"))
-        #expect(!command.hasSuffix(" "))
+        #expect(working.hasPrefix("'\(path)' working --agent antigravity --session-key conversationId"))
+        #expect(working.hasSuffix(" --reply '{}'"))
+        #expect(done.hasSuffix(#" --reply '{"decision":"stop"}'"#))
+        #expect(!working.contains("''"))
+        #expect(!working.hasSuffix(" "))
     }
 
     /// The registration has to survive its own serializer. `install()` writes

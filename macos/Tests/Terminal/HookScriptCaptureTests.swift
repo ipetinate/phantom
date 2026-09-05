@@ -11,7 +11,8 @@ import Testing
 /// reimplementation of any of the three would prove nothing about the text that
 /// lands in the user's `~/.claude/hooks`. So the script body is written to a
 /// temp directory and invoked exactly as a registered hook invokes it: state as
-/// `$1`, JSON payload on stdin, `GHOSTTY_TAB_STATE_FILE` in the environment.
+/// `$1`, the descriptor's options after it, JSON payload on stdin,
+/// `GHOSTTY_TAB_STATE_FILE` in the environment.
 @MainActor
 struct HookScriptCaptureTests {
     /// The id a session actually has, and one belonging to something else that
@@ -19,8 +20,8 @@ struct HookScriptCaptureTests {
     private let real = "fe5e4f94-d3e0-4af7-b877-42073d603aff"
     private let nested = "deadbeef-0000-4000-8000-000000000000"
 
-    /// Which generated script is under test. Both share the defects, because
-    /// one was written from the other.
+    /// Which agent's registration is under test. One script serves both; what
+    /// differs is the arguments each descriptor registers it with.
     enum Script: String, Sendable, CaseIterable {
         case claude
         case codex
@@ -31,18 +32,19 @@ struct HookScriptCaptureTests {
             case .codex: return .codex
             }
         }
-    }
 
-    private func body(of script: Script) -> String {
-        switch script {
-        case .claude: return ClaudeHooksInstaller.scriptBody
-        case .codex: return CodexHooksInstaller.scriptBody
+        func arguments(state: String?) -> [String] {
+            TabStateScript.arguments(
+                agent: rawValue,
+                state: state ?? "",
+                options: TabStateScript.options(of: agent.descriptor))
         }
     }
 
     // MARK: - Harness
 
     private struct Installed {
+        let kind: Script
         let directory: URL
         let script: URL
         let stateFile: URL
@@ -60,10 +62,10 @@ struct HookScriptCaptureTests {
         let stateFile = directory.appendingPathComponent("state")
         try body { script in
             let url = directory.appendingPathComponent("\(script.rawValue)-tab-state.sh")
-            try self.body(of: script).write(to: url, atomically: true, encoding: .utf8)
+            try TabStateScript.body.write(to: url, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o755], ofItemAtPath: url.path)
-            return Installed(directory: directory, script: url, stateFile: stateFile)
+            return Installed(kind: script, directory: directory, script: url, stateFile: stateFile)
         }
     }
 
@@ -86,7 +88,7 @@ struct HookScriptCaptureTests {
     ) throws -> Fired {
         let process = Process()
         process.executableURL = installed.script
-        process.arguments = state.map { [$0] } ?? []
+        process.arguments = installed.kind.arguments(state: state)
         var environment = ProcessInfo.processInfo.environment
         environment["GHOSTTY_TAB_STATE_FILE"] = installed.stateFile.path
         process.environment = environment
@@ -341,7 +343,7 @@ struct HookScriptCaptureTests {
     ) throws -> (process: Process, errors: Pipe) {
         let process = Process()
         process.executableURL = installed.script
-        process.arguments = [state]
+        process.arguments = installed.kind.arguments(state: state)
         var environment = ProcessInfo.processInfo.environment
         environment["GHOSTTY_TAB_STATE_FILE"] = installed.stateFile.path
         process.environment = environment
@@ -385,15 +387,20 @@ struct HookScriptCaptureTests {
         }
     }
 
-    /// A stateless event passes no argument at all rather than an empty one, so
-    /// the registered line cannot end in a stray space or a literal `''` whose
-    /// meaning depends on whether a shell is in the way.
-    @Test func aStatelessEventRegistersWithNoTrailingArgument() {
+    /// A stateless event passes no state word at all rather than an empty one,
+    /// so the registered line cannot carry a literal `''` whose meaning depends
+    /// on whether a shell is in the way. The descriptor's options follow the
+    /// script either way, and the agent is always named.
+    @Test func aStatelessEventRegistersWithNoStateWord() {
+        let path = ClaudeHooksInstaller.scriptURL.path
         let stateless = ClaudeHooksInstaller.command(for: "")
+
         #expect(!stateless.hasSuffix(" "))
         #expect(!stateless.contains("''"))
-        #expect(stateless.hasSuffix("'"))
-        #expect(ClaudeHooksInstaller.command(for: "done").hasSuffix("' done"))
+        #expect(stateless.hasPrefix("'\(path)' --agent claude"))
+        #expect(ClaudeHooksInstaller.command(for: "done").hasPrefix("'\(path)' done --agent claude"))
+        #expect(CodexHooksInstaller.command(for: "")
+            .hasPrefix("'\(CodexHooksInstaller.scriptURL.path)' --agent codex"))
         #expect(!CodexHooksInstaller.command(for: "").hasSuffix(" "))
     }
 

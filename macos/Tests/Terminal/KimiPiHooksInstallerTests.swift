@@ -29,9 +29,12 @@ struct KimiPiHooksInstallerTests {
     /// argument, and the distinction is what keeps a tab with an idle agent
     /// from drawing an indicator.
     @Test func sessionStartPassesNoStateArgument() {
-        #expect(KimiHooksInstaller.command(for: "") == "'\(KimiHooksInstaller.scriptURL.path)'")
+        let path = KimiHooksInstaller.scriptURL.path
+
+        #expect(KimiHooksInstaller.command(for: "")
+            == "'\(path)' --agent kimi --session-key session_id")
         #expect(KimiHooksInstaller.command(for: "working")
-            == "'\(KimiHooksInstaller.scriptURL.path)' working")
+            == "'\(path)' working --agent kimi --session-key session_id")
     }
 
     /// A home directory with a quote or a backslash in it makes the whole file

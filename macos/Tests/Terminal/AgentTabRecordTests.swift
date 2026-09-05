@@ -324,15 +324,23 @@ struct ClaudeHookScriptTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let script = dir.appendingPathComponent(ClaudeHooksInstaller.scriptName)
-        try ClaudeHooksInstaller.scriptBody.write(to: script, atomically: true, encoding: .utf8)
+        try TabStateScript.body.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: script.path)
 
         try body(script, dir.appendingPathComponent("state"))
     }
 
-    /// Invokes the script the way a registered hook does — state as `$1`,
-    /// payload on stdin — and returns whatever it left in the state file.
+    private func arguments(state: String) -> [String] {
+        TabStateScript.arguments(
+            agent: AgentRegistry.claude.id,
+            state: state,
+            options: TabStateScript.options(of: AgentRegistry.claude))
+    }
+
+    /// Invokes the script the way a registered hook does — state as `$1`, the
+    /// descriptor's options after it, payload on stdin — and returns whatever
+    /// it left in the state file.
     @discardableResult
     private func fire(
         _ script: URL,
@@ -342,7 +350,7 @@ struct ClaudeHookScriptTests {
     ) throws -> String? {
         let process = Process()
         process.executableURL = script
-        process.arguments = [state]
+        process.arguments = arguments(state: state)
         var environment = ProcessInfo.processInfo.environment
         environment["GHOSTTY_TAB_STATE_FILE"] = stateFile.path
         process.environment = environment
@@ -457,7 +465,7 @@ struct ClaudeHookScriptTests {
         try withInstalledScript { script, stateFile in
             let process = Process()
             process.executableURL = script
-            process.arguments = ["working"]
+            process.arguments = arguments(state: "working")
             process.environment = ["PATH": "/usr/bin:/bin"]
             process.standardInput = FileHandle.nullDevice
             try process.run()
@@ -504,7 +512,7 @@ struct UninstallableAgentHookTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let script = dir.appendingPathComponent("codex-tab-state.sh")
-        try CodexHooksInstaller.scriptBody.write(to: script, atomically: true, encoding: .utf8)
+        try TabStateScript.body.write(to: script, atomically: true, encoding: .utf8)
 
         let check = Process()
         check.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -525,14 +533,17 @@ struct UninstallableAgentHookTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let script = dir.appendingPathComponent("codex-tab-state.sh")
-        try CodexHooksInstaller.scriptBody.write(to: script, atomically: true, encoding: .utf8)
+        try TabStateScript.body.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: script.path)
         let stateFile = dir.appendingPathComponent("state")
 
         let process = Process()
         process.executableURL = script
-        process.arguments = ["working"]
+        process.arguments = TabStateScript.arguments(
+            agent: AgentRegistry.codex.id,
+            state: "working",
+            options: TabStateScript.options(of: AgentRegistry.codex))
         var environment = ProcessInfo.processInfo.environment
         environment["GHOSTTY_TAB_STATE_FILE"] = stateFile.path
         process.environment = environment

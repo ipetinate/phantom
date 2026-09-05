@@ -10,7 +10,7 @@ import Foundation
 /// ghostty-named script) are migrated on install.
 @MainActor
 enum ClaudeHooksInstaller {
-    static let scriptName = PhantomBuild.fileName("phantom-tab-state.sh")
+    static let scriptName = TabStateScript.fileName
     /// The name this app wrote before the fork was renamed, matched so an
     /// upgrade's leftover registration can be recognised and removed.
     ///
@@ -126,123 +126,15 @@ enum ClaudeHooksInstaller {
     }
 
     static func command(for state: String, scriptPath: String) -> String {
-        state.isEmpty ? "'\(scriptPath)'" : "'\(scriptPath)' \(state)"
+        TabStateScript.commandLine(
+            scriptPath: scriptPath,
+            arguments: TabStateScript.arguments(
+                agent: AgentRegistry.claude.id,
+                state: state,
+                options: TabStateScript.options(of: AgentRegistry.claude)))
     }
 
-    /// Not private, so that a test can run the real script against a real
-    /// payload. The id extraction is shell, and the only honest way to check
-    /// shell is to execute it.
-    ///
-    /// A raw literal: the script is dense with backslashes that mean
-    /// something to `sed` and to the shell, and nothing to Swift.
-    static let scriptBody = #"""
-    #!/bin/bash
-    # Reports the Claude Code session state to the Phantom sidebar.
-    # No-op outside Phantom (env var only exists in Phantom terminals).
-    # The atomic write-then-rename is what triggers the directory watch.
-    [ -n "$GHOSTTY_TAB_STATE_FILE" ] || exit 0
-
-    # Absent on purpose for SessionStart, which reports identity rather than
-    # activity: no argument means an empty first line, which the sidebar reads
-    # as "an agent lives here and is doing nothing in particular". Every other
-    # event passes a word.
-    STATE="$1"
-
-    # Claude Code hands each hook its payload as JSON on stdin, and the
-    # session id lives there and nowhere else the hook can see. Read it only
-    # when stdin is not a terminal, so running this script by hand cannot sit
-    # waiting for input that will never arrive.
-    PAYLOAD=""
-    if [ ! -t 0 ]; then
-      PAYLOAD=$(cat 2>/dev/null)
-    fi
-
-    # A SessionStart fired by a compaction is not a session starting: the agent
-    # is mid-turn and about to carry on. Blanking the mark there is what left a
-    # three-minute compaction looking like nothing at all — or, until the next
-    # event, like the API error that triggered it.
-    #
-    # Only consulted for the event that passes no word of its own, so no other
-    # payload's "source" can reach this. `startup`, `resume` and `clear` all
-    # fall through to the empty word they had.
-    if [ -z "$STATE" ]; then
-      case "$(printf '%s' "$PAYLOAD" | tr -d '\n' \
-        | grep -o '"source"[[:space:]]*:[[:space:]]*"[^"]*"' \
-        | head -n 1 \
-        | sed 's/.*"\([^"]*\)"$/\1/')" in
-        compact) STATE="compacting" ;;
-      esac
-    fi
-
-    # Refuse anything a shell would read as more than one word, and anything
-    # starting with a dash: this value is eventually typed at a prompt after
-    # `claude --resume`, where an id spelled like a flag is a flag.
-    #
-    # A function because both sources of an id have to pass through it. When
-    # only the payload was filtered, a corrupt value read back out of the file
-    # was copied forward verbatim on every later event, so one bad write stuck
-    # to the tab permanently: the file still looked like it held an id, and the
-    # resume stayed silently imprecise with nothing able to heal it.
-    sanitize_session() {
-      case "$1" in
-        ""|-*|*[!A-Za-z0-9._-]*) return 0 ;;
-        *) printf '%s' "$1" ;;
-      esac
-    }
-
-    # Deliberately not jq: a hook that needs jq is a hook that silently stops
-    # reporting on every machine without it. Lifting one string out of a flat
-    # JSON object is within grep and sed's reach, and anything they cannot make
-    # sense of degrades to reporting the state alone.
-    #
-    # The FIRST match, and that is the whole point. A `sed` opening with `.*` is
-    # greedy, so it lands on the LAST "session_id" in the payload — and tool
-    # events nest one inside `tool_input`/`tool_response`: a subagent call, an
-    # MCP tool that hands back a session of its own. That nested id is a
-    # perfectly well-formed UUID, so the filter above passes it and nothing
-    # downstream objects, and the tab comes back in a conversation it never
-    # held. In every payload these CLIs emit the session's own id is a
-    # top-level field and so precedes anything nested; taking the first match
-    # is what keeps them apart.
-    SESSION=$(sanitize_session "$(printf '%s' "$PAYLOAD" | tr -d '\n' \
-      | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' \
-      | head -n 1 \
-      | sed 's/.*"\([^"]*\)"$/\1/')")
-
-    # An event arriving without an id must not erase the one on record. The
-    # last write before a quit is the one a restore reads, and nothing says
-    # that write will be an event that carried the id.
-    if [ -z "$SESSION" ] && [ -f "$GHOSTTY_TAB_STATE_FILE" ]; then
-      SESSION=$(sanitize_session "$(sed -n 's/^session=//p' \
-        "$GHOSTTY_TAB_STATE_FILE" | head -n 1)")
-    fi
-
-    # A temp name private to this invocation. A fixed `.tmp` is one path shared
-    # by everything writing this tab — two hooks on parallel tool calls, a
-    # second agent in the same terminal, another integration on the same events
-    # — and two of them truncating that one file interleaves their bytes. The
-    # rename that wins carries the mixture, which is how a `session=` line
-    # arrives cut in half; the one that loses renames a file the winner already
-    # took, so its error goes to /dev/null rather than into the agent's
-    # transcript, and the fragment it left behind is removed.
-    #
-    # The name still cannot be mistaken for a state file: TabStateCenter only
-    # reads entries whose whole name parses as a UUID, and this one does not.
-    TMP="$GHOSTTY_TAB_STATE_FILE.$$.tmp"
-
-    # State stays alone on the first line: a Phantom old enough to read only
-    # that line keeps reading this file correctly.
-    {
-      printf '%s\nagent=claude\n' "$STATE"
-      if [ -n "$SESSION" ]; then
-        printf 'session=%s\n' "$SESSION"
-      fi
-    } > "$TMP" \
-      && mv "$TMP" "$GHOSTTY_TAB_STATE_FILE" 2>/dev/null \
-      || rm -f "$TMP"
-    exit 0
-
-    """#
+    static let scriptBody = TabStateScript.body
 
     /// Human-readable detail of the last failure, for the settings UI.
     static private(set) var lastError: String?

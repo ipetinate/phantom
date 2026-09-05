@@ -25,7 +25,7 @@ import Foundation
 /// trying five spellings the way the Codex script has to.
 @MainActor
 enum KimiHooksInstaller {
-    static let scriptName = PhantomBuild.fileName("phantom-tab-state.sh")
+    static let scriptName = TabStateScript.fileName
 
     /// `KIMI_CODE_HOME` relocates Kimi's whole directory, and the reader who
     /// set it did so to keep this out of their home. Writing to the default
@@ -62,7 +62,12 @@ enum KimiHooksInstaller {
     }
 
     static func command(for state: String, scriptPath: String) -> String {
-        state.isEmpty ? "'\(scriptPath)'" : "'\(scriptPath)' \(state)"
+        TabStateScript.commandLine(
+            scriptPath: scriptPath,
+            arguments: TabStateScript.arguments(
+                agent: AgentRegistry.kimi.id,
+                state: state,
+                options: TabStateScript.options(of: AgentRegistry.kimi)))
     }
 
     /// One `[[hooks]]` block per event.
@@ -117,58 +122,7 @@ enum KimiHooksInstaller {
         return "\"\(escaped)\""
     }
 
-    static let scriptBody = #"""
-    #!/bin/bash
-    # Reports Kimi Code session state to the Phantom sidebar.
-    [ -n "$GHOSTTY_TAB_STATE_FILE" ] || exit 0
-    # Absent on purpose for SessionStart, which reports identity rather than
-    # activity: no argument means an empty first line, and no indicator.
-    STATE="$1"
-
-    PAYLOAD=""
-    if [ ! -t 0 ]; then
-      PAYLOAD=$(cat 2>/dev/null)
-    fi
-    FLAT=$(printf '%s' "$PAYLOAD" | tr -d '\n')
-
-    # A dash-leading id is a flag, not an id, once it reaches `kimi --session`.
-    sanitize_session() {
-      case "$1" in
-        ""|-*|*[!A-Za-z0-9._-]*) return 0 ;;
-        *) printf '%s' "$1" ;;
-      esac
-    }
-
-    # One key, because Kimi documents it: `session_id`, top level, in every
-    # payload. The FIRST match and not the last — a `sed` opening with `.*` is
-    # greedy and would land on an id nested inside a tool's own input, which is
-    # a valid UUID that nothing downstream would object to and a conversation
-    # this tab never held.
-    SESSION=$(sanitize_session "$(printf '%s' "$FLAT" \
-      | grep -o "\"session_id\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
-      | head -n 1 \
-      | sed 's/.*"\([^"]*\)"$/\1/')")
-
-    if [ -z "$SESSION" ] && [ -f "$GHOSTTY_TAB_STATE_FILE" ]; then
-      SESSION=$(sanitize_session "$(sed -n 's/^session=//p' \
-        "$GHOSTTY_TAB_STATE_FILE" | head -n 1)")
-    fi
-
-    # A temp name private to this invocation. A fixed `.tmp` is one path shared
-    # by everything writing this tab, and two writers truncating it interleave
-    # their bytes — which is how a `session=` line arrives cut in half.
-    TMP="$GHOSTTY_TAB_STATE_FILE.$$.tmp"
-
-    {
-      printf '%s\nagent=kimi\n' "$STATE"
-      if [ -n "$SESSION" ]; then
-        printf 'session=%s\n' "$SESSION"
-      fi
-    } > "$TMP" \
-      && mv "$TMP" "$GHOSTTY_TAB_STATE_FILE" 2>/dev/null \
-      || rm -f "$TMP"
-    exit 0
-    """#
+    static let scriptBody = TabStateScript.body
 
     static private(set) var lastError: String?
 
