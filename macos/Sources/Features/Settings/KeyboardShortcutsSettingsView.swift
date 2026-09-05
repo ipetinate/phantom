@@ -198,7 +198,7 @@ struct KeyboardShortcutsSettingsView: View {
             } header: {
                 Text("From Your Config")
             } footer: {
-                Text("These come from your main configuration file, not from this window — edit its keybind lines to change them. A key press is offered to whatever is on screen before it reaches the menu bar, which is how the editor's ⌘W closes a file tab while a file has focus and the menu's Close Tab takes it everywhere else; anything neither the editor nor a menu item claims falls through to the terminal. One kind of binding is missing here rather than unbound: a chord Ghostty marks performable — it offers the key to the terminal first and acts only if the terminal declines, as the default ⌘K for Clear Screen does — cannot be read back from a loaded configuration at all.")
+                Text("These come from your main configuration file, not from this window — edit its keybind lines to change them. A key press is offered to whatever is on screen before it reaches the menu bar, which is how the editor's ⌘W closes a file tab while a file has focus and the menu's Close Tab takes it everywhere else; anything neither the editor nor a menu item claims falls through to the terminal. One kind of binding is missing here rather than unbound: a chord Phantom marks performable — it offers the key to the terminal first and acts only if the terminal declines, as the default ⌘K for Clear Screen does — cannot be read back from a loaded configuration at all.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

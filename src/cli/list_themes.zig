@@ -127,8 +127,8 @@ pub fn run(gpa_alloc: std.mem.Allocator) !u8 {
 
     const resources_dir = global.resourcesDir().app();
     if (resources_dir == null)
-        try stderr.print("Could not find the Ghostty resources directory. Please ensure " ++
-            "that Ghostty is installed correctly.\n", .{});
+        try stderr.print("Could not find the Phantom resources directory. Please ensure " ++
+            "that Phantom is installed correctly.\n", .{});
 
     var count: usize = 0;
 
@@ -309,7 +309,7 @@ const Preview = struct {
 
         const writer = self.tty.writer();
         try self.vx.enterAltScreen(writer);
-        try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
+        try self.vx.setTitle(writer, "👻 Phantom Theme Preview 👻");
         try self.vx.queryTerminal(writer, .fromSeconds(1));
         try self.vx.setMouseMode(writer, true);
         if (self.vx.caps.color_scheme_updates)
@@ -856,20 +856,20 @@ const Preview = struct {
                 child.fill(.{ .style = self.ui_standard() });
 
                 const save_instructions = [_][]const u8{
-                    "To apply this theme, add the following line to your Ghostty configuration:",
+                    "To apply this theme, add the following line to your Phantom configuration:",
                     "",
                     try std.fmt.allocPrint(alloc, "theme = {s}", .{theme.theme}),
                     "",
                     "Save the configuration file and then reload it to apply the new theme.",
                     "",
                     "Or press 'w' to write an auto theme file to your system's preferred default config path.",
-                    "Then add the following line to your Ghostty configuration and reload:",
+                    "Then add the following line to your Phantom configuration and reload:",
                     "",
                     "config-file = ?auto/theme.ghostty",
                     "",
-                    "For more details on configuration and themes, visit the Ghostty documentation:",
+                    "For more details on configuration and themes, visit the Phantom repository:",
                     "",
-                    "https://ghostty.org/docs/config/reference",
+                    "https://github.com/ipetinate/phantom",
                 };
 
                 for (save_instructions, 0..) |instruction, captured_i| {

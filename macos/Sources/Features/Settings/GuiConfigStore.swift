@@ -399,7 +399,7 @@ final class GuiConfigStore: ObservableObject {
         let fm = FileManager.default
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        var content = "# Managed by the Ghostty settings window.\n"
+        var content = "# Managed by the Phantom settings window.\n"
         content += "# Manual edits are overwritten; use the main config file instead.\n\n"
         for key in values.keys.sorted() {
             content += "\(key) = \(values[key]!)\n"

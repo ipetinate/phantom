@@ -1370,7 +1370,7 @@ fn childExitedAbnormally(
     // Output our error message
     try t.setAttribute(.{ .@"8_fg" = .bright_red });
     try t.setAttribute(.{ .bold = {} });
-    try t.printString("Ghostty failed to launch the requested command:");
+    try t.printString("Phantom failed to launch the requested command:");
     try t.setAttribute(.{ .unset = {} });
 
     t.carriageReturn();

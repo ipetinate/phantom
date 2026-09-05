@@ -1251,8 +1251,7 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func showHelp(_ sender: Any) {
-        guard let url = URL(string: "https://ghostty.org/docs") else { return }
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(Phantom.repositoryURL)
     }
 
     @IBAction func toggleSecureInput(_ sender: Any) {
