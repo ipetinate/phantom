@@ -226,192 +226,25 @@ struct ExtensionsSettingsView: View {
 
     // MARK: Rows
 
-    private func entryRow(_ entry: ExtensionIndex.Entry) -> some View {
-        let state = store.state(for: entry)
-
-        return LabeledContent {
-            HStack(spacing: 10) {
-                stateBadge(state)
-                if let activity = store.activity[entry.id] {
-                    activityView(activity)
-                } else {
-                    actionButton(for: entry, state: state)
-                }
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(verbatim: entry.name)
-                    Text(verbatim: versionText(entry, state: state))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text(verbatim: entry.publisher)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if !entry.summary.isEmpty {
-                    Text(verbatim: entry.summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if !entry.contributes.isEmpty {
-                    chips(for: entry)
-                }
-                if let error = store.errors[entry.id] {
-                    Text(verbatim: error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-            .help(entry.id)
-        }
+    private func entryRow(_ entry: ExtensionIndex.Entry) -> ExtensionRow {
+        ExtensionRow(
+            subject: .entry(entry, state: store.state(for: entry)),
+            style: .form,
+            activity: store.activity[entry.id],
+            error: store.errors[entry.id],
+            onInstall: { Task { await store.install(entry) } },
+            onRemove: { Task { await store.remove(id: entry.id) } }
+        )
     }
 
-    private func orphanRow(_ installed: InstalledExtension) -> some View {
-        LabeledContent {
-            if let activity = store.activity[installed.id] {
-                activityView(activity)
-            } else {
-                Button("Remove") {
-                    Task { await store.remove(id: installed.id) }
-                }
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(verbatim: installed.name)
-                    Text(verbatim: installed.version)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text(verbatim: installed.id)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let error = store.errors[installed.id] {
-                    Text(verbatim: error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func actionButton(for entry: ExtensionIndex.Entry, state: ExtensionState) -> some View {
-        switch state {
-        case .notInstalled:
-            Button("Install") {
-                Task { await store.install(entry) }
-            }
-        case .installed:
-            Button("Remove") {
-                Task { await store.remove(id: entry.id) }
-            }
-        case .updateAvailable:
-            Button("Update") {
-                Task { await store.install(entry) }
-            }
-        }
-    }
-
-    private func versionText(_ entry: ExtensionIndex.Entry, state: ExtensionState) -> String {
-        if case .updateAvailable(let installed, let available) = state {
-            return "\(installed) \u{2192} \(available)"
-        }
-        return entry.version
-    }
-
-    @ViewBuilder
-    private func stateBadge(_ state: ExtensionState) -> some View {
-        switch state {
-        case .notInstalled:
-            EmptyView()
-        case .installed:
-            badge("Installed", color: .green)
-        case .updateAvailable:
-            badge("Update available", color: .orange)
-        }
-    }
-
-    private func badge(_ title: LocalizedStringKey, color: Color) -> some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(color)
-                .frame(width: 7, height: 7)
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func activityView(_ activity: ExtensionActivity) -> some View {
-        HStack(spacing: 8) {
-            if case .downloading(let fraction?) = activity {
-                ProgressView(value: fraction)
-                    .progressViewStyle(.linear)
-                    .frame(width: 100)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-            }
-            Text(activityLabel(activity))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func activityLabel(_ activity: ExtensionActivity) -> LocalizedStringKey {
-        switch activity {
-        case .downloading: return "Downloading…"
-        case .verifying: return "Verifying…"
-        case .installing: return "Installing…"
-        case .removing: return "Removing…"
-        }
-    }
-
-    // MARK: Chips
-
-    private func chips(for entry: ExtensionIndex.Entry) -> some View {
-        HStack(spacing: 4) {
-            ForEach(entry.contributes, id: \.self) { kind in
-                chip(ExtensionContributionChip.of(kind))
-                    .help(kind == "languages" && !entry.languages.isEmpty
-                        ? entry.languages.joined(separator: ", ")
-                        : ExtensionContributionChip.of(kind).title)
-            }
-        }
-    }
-
-    private func chip(_ chip: ExtensionContributionChip) -> some View {
-        Label(chip.title, systemImage: chip.systemImage)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(
-                Capsule().fill(Color.secondary.opacity(0.15))
-            )
-            .foregroundStyle(.secondary)
-    }
-}
-
-struct ExtensionContributionChip: Equatable {
-    let title: String
-    let systemImage: String
-
-    static func of(_ kind: String) -> ExtensionContributionChip {
-        switch kind {
-        case "languages":
-            return ExtensionContributionChip(
-                title: "Languages", systemImage: "chevron.left.forwardslash.chevron.right")
-        case "formatters":
-            return ExtensionContributionChip(title: "Formatters", systemImage: "text.alignleft")
-        case "themes":
-            return ExtensionContributionChip(title: "Themes", systemImage: "paintpalette")
-        case "iconThemes":
-            return ExtensionContributionChip(title: "Icon Themes", systemImage: "photo.on.rectangle")
-        default:
-            return ExtensionContributionChip(title: kind, systemImage: "puzzlepiece")
-        }
+    private func orphanRow(_ installed: InstalledExtension) -> ExtensionRow {
+        ExtensionRow(
+            subject: .orphan(installed),
+            style: .form,
+            activity: store.activity[installed.id],
+            error: store.errors[installed.id],
+            onInstall: {},
+            onRemove: { Task { await store.remove(id: installed.id) } }
+        )
     }
 }
