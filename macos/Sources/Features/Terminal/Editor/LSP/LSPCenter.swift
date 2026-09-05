@@ -75,6 +75,9 @@ final class LSPCenter: ObservableObject {
     /// reads it directly anyway — `status(forPath:)` below is the surface.
     @Published private var status: [Key: LSPServerStatus] = [:]
 
+    @Published private var progress: [Key: LSPProgressLedger] = [:]
+    private var progressPruneTask: Task<Void, Never>?
+
     /// One running server: the language it serves, the workspace it serves it
     /// in, **and the command it runs**.
     ///
@@ -661,6 +664,14 @@ final class LSPCenter: ObservableObject {
         return status[key]
     }
 
+    func activity(forPath path: String) -> LSPWorkDoneProgress? {
+        let keys = keys(forPath: path)
+        let ordered = speakingKey(forPath: path).map { speaking in
+            [speaking] + keys.filter { $0 != speaking }
+        } ?? keys
+        return ordered.lazy.compactMap { self.progress[$0]?.current }.first
+    }
+
     /// The server this file's banner should speak for.
     ///
     /// The primary while everything is healthy, and otherwise **the first one
@@ -793,6 +804,10 @@ final class LSPCenter: ObservableObject {
         where servers[key] == nil {
             status.removeValue(forKey: key)
             serverLogs.removeValue(forKey: key)
+        }
+
+        for key in progress.keys where commands.contains(key.command) {
+            progress.removeValue(forKey: key)
         }
 
         for path in announced.keys {
@@ -1845,8 +1860,8 @@ final class LSPCenter: ObservableObject {
         // time it is asked, and this function is main-actor-isolated — the
         // window would be frozen for the whole of it, on the first code
         // file opened in a session.
-        let searchPath = await Task.detached(priority: .userInitiated) {
-            LoginEnvironment.executableSearchPath()
+        let (searchPath, rootURI) = await Task.detached(priority: .userInitiated) {
+            (LoginEnvironment.executableSearchPath(), Self.rootURI(forRoot: key.root))
         }.value
         guard let resolvedPath = LSPProcess.locate(definition.command, searchPath: searchPath) else {
             status[key] = .notInstalled
@@ -1879,6 +1894,7 @@ final class LSPCenter: ObservableObject {
         // has since been fixed.
         serverLogs[key] = []
         consecutiveTimeouts[key] = 0
+        progress.removeValue(forKey: key)
         status[key] = .starting
 
         let launch: LSPLaunchSettings
@@ -1906,7 +1922,7 @@ final class LSPCenter: ObservableObject {
         do {
             try await process.start(workingDirectory: key.root)
             let result = try await process.initialize(
-                rootURI: Self.uri(key.root),
+                rootURI: rootURI,
                 capabilities: Self.clientCapabilities,
                 initializationOptions: launch.initializationOptions
             )
@@ -2113,6 +2129,12 @@ final class LSPCenter: ObservableObject {
                 appendLog(line, for: key)
             }
 
+        case LSPProgressLedger.method:
+            var ledger = progress[key] ?? LSPProgressLedger()
+            ledger.apply(notification, now: Date())
+            progress[key] = ledger.active.isEmpty ? nil : ledger
+            scheduleProgressPrune()
+
         /// The Vue server asking `tsserver` something LSP has no request
         /// for. Answered off this call — the relay waits on another server,
         /// and `handle` is on the main actor.
@@ -2308,6 +2330,25 @@ final class LSPCenter: ObservableObject {
         }
     }
 
+    private func scheduleProgressPrune() {
+        progressPruneTask?.cancel()
+        guard !progress.isEmpty else { return }
+        progressPruneTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(LSPProgressLedger.staleAfter))
+            guard !Task.isCancelled else { return }
+            self?.pruneProgress()
+        }
+    }
+
+    private func pruneProgress() {
+        let now = Date()
+        for key in progress.keys {
+            progress[key]?.prune(now: now)
+            if progress[key]?.active.isEmpty == true { progress.removeValue(forKey: key) }
+        }
+        scheduleProgressPrune()
+    }
+
     /// The process exited after having run — as opposed to `server(for:)`'s
     /// own `catch`, which is a server that never got this far at all.
     private func handleExit(exitStatus: Int32?, key: Key, process: LSPProcess) {
@@ -2323,6 +2364,7 @@ final class LSPCenter: ObservableObject {
         servers.removeValue(forKey: key)
         serverCapabilities.removeValue(forKey: key)
         completionSupport.removeValue(forKey: key)
+        progress.removeValue(forKey: key)
 
         /// A server the app stopped on purpose did not crash, and recording it
         /// as crashed would leave the reader reading a fault that was their
@@ -2363,6 +2405,12 @@ final class LSPCenter: ObservableObject {
 
     nonisolated static func uri(_ path: String) -> String {
         URL(fileURLWithPath: path).absoluteString
+    }
+
+    nonisolated static func rootURI(forRoot root: String) -> String? {
+        guard !LSPWorkspaceBreadth.isTooBroad(root) else { return nil }
+        let uri = URL(fileURLWithPath: root, isDirectory: false).absoluteString
+        return uri.hasSuffix("/") ? String(uri.dropLast()) : uri
     }
 
     /// Hover comes back as a string, a `{ value: }`, or an array of either.
@@ -3031,6 +3079,7 @@ extension LSPCenter {
                 "applyEdit": true,
                 "executeCommand": ["dynamicRegistration": false],
             ],
+            "window": ["workDoneProgress": true],
         ])
 
     /// The code-action half.

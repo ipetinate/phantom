@@ -931,6 +931,10 @@ private struct DocumentView: View {
                 serverStatusBanner(server: server, status: status)
             }
 
+            if let activity = serverActivity, let server = lsp.definition(forPath: document.url.path) {
+                serverActivityBanner(server: server, activity: activity)
+            }
+
             ZStack(alignment: .topTrailing) {
                 presentedContent
 
@@ -2001,6 +2005,33 @@ private struct DocumentView: View {
     /// when none is known for this language at all.
     private var serverStatus: LSPServerStatus? {
         lsp.status(forPath: document.url.path)
+    }
+
+    private var serverActivity: LSPWorkDoneProgress? {
+        lsp.activity(forPath: document.url.path)
+    }
+
+    private func serverActivityBanner(server: LSPServerDefinition, activity: LSPWorkDoneProgress) -> some View {
+        HStack(spacing: 8) {
+            if let percentage = activity.percentage {
+                ProgressView(value: Double(min(max(percentage, 0), 100)), total: 100)
+                    .progressViewStyle(.circular)
+                    .controlSize(.mini)
+            } else {
+                ProgressView()
+                    .controlSize(.mini)
+            }
+
+            Text(verbatim: "\(server.displayName): \(activity.title)\(activity.message.map { " — \($0)" } ?? "")")
+                .font(palette.font(size: 11))
+                .textSelection(.enabled)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.secondary.opacity(0.12))
     }
 
     private func serverStatusBanner(server: LSPServerDefinition, status: LSPServerStatus) -> some View {
