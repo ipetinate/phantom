@@ -47,10 +47,17 @@ struct SidebarPaneTests {
     }
 
     @Test func aDisabledPaneDropsOutOfTheTabOrder() {
-        withPanes([.files: false, .git: true, .worktrees: true]) {
-            #expect(SidebarPane.enabled == [.terminals, .git, .worktrees])
+        withPanes([.files: false, .git: true, .worktrees: true, .extensions: true]) {
+            #expect(SidebarPane.enabled == [.terminals, .git, .worktrees, .extensions])
             #expect(SidebarPane.showsTabBar)
         }
+    }
+
+    @Test func extensionsIsOptOutLikeTheOtherExtras() {
+        #expect(SidebarPane.extensions.canBeHidden)
+        #expect(SidebarPane.extensions.defaultsKey == "SidebarShowExtensionsPane")
+        #expect(SidebarPane.extensions.symbol == "puzzlepiece")
+        #expect(SidebarPane.allCases.last == .extensions)
     }
 
     /// With both extras off there is nothing to switch between, so the bar
@@ -107,5 +114,6 @@ struct SidebarPaneTests {
         #expect(SidebarPane.worktrees.symbol == nil)
         #expect(SidebarPane.terminals.symbol != nil)
         #expect(SidebarPane.files.symbol != nil)
+        #expect(SidebarPane.extensions.symbol != nil)
     }
 }

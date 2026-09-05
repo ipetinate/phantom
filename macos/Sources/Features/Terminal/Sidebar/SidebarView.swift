@@ -210,6 +210,8 @@ struct SidebarView: View {
                         layout.onNewWorktreeAgentTab(path, agent, selectedGroupId)
                     }
                 )
+            case .extensions:
+                ExtensionsPanelView()
             }
         }
     }
@@ -518,6 +520,7 @@ struct SidebarTitlebarChrome: View {
                 case .files: FileExplorerRefresh.shared.request()
                 case .git: GitPanelRefresh.shared.request()
                 case .worktrees: WorktreePanelRefresh.shared.request()
+                case .extensions: Task { await ExtensionStore.shared.refresh() }
                 case .terminals: break
                 }
             }

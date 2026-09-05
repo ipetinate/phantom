@@ -277,16 +277,16 @@ struct SidebarSettingsView: View {
             }
 
             Section {
-                Toggle("File Explorer", isOn: visibility.binding(for: .files))
-                    .toggleStyle(.switch)
-                Toggle("Git", isOn: visibility.binding(for: .git))
-                    .toggleStyle(.switch)
-                Toggle("Worktrees", isOn: visibility.binding(for: .worktrees))
-                    .toggleStyle(.switch)
+                SettingsMultiSelect(
+                    title: "Show",
+                    options: SidebarPane.allCases.filter(\.canBeHidden).map { pane in
+                        .init(id: pane.rawValue, title: pane.title, isOn: visibility.binding(for: pane))
+                    },
+                    emptyLabel: "Terminals only")
             } header: {
                 Text("Panes")
             } footer: {
-                Text("Terminals is always available. With everything else off there is nothing to switch between, so the tabs disappear and the sidebar is just the terminal list.")
+                Text("Terminals is always available. With everything else off there is nothing to switch between, so the tabs disappear and the sidebar is just the terminal list. Extensions lists the registry and lets you install from the sidebar.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

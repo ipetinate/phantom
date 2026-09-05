@@ -14,6 +14,7 @@ enum SidebarPane: String, CaseIterable, Identifiable, Codable {
     case files
     case git
     case worktrees
+    case extensions
 
     var id: String { rawValue }
 
@@ -23,6 +24,7 @@ enum SidebarPane: String, CaseIterable, Identifiable, Codable {
         case .files: return "Files"
         case .git: return "Git"
         case .worktrees: return "Worktrees"
+        case .extensions: return "Extensions"
         }
     }
 
@@ -34,6 +36,7 @@ enum SidebarPane: String, CaseIterable, Identifiable, Codable {
         case .files: return "folder"
         case .git: return nil
         case .worktrees: return nil
+        case .extensions: return "puzzlepiece"
         }
     }
 
@@ -47,6 +50,7 @@ enum SidebarPane: String, CaseIterable, Identifiable, Codable {
         case .files: return "SidebarShowFilesPane"
         case .git: return "SidebarShowGitPane"
         case .worktrees: return "SidebarShowWorktreesPane"
+        case .extensions: return "SidebarShowExtensionsPane"
         }
     }
 
