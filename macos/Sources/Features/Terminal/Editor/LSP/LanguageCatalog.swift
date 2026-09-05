@@ -115,6 +115,14 @@ struct LanguageCatalog: Equatable {
         var id: String { listIdentity + "#theme:" + theme.name }
     }
 
+    struct ContributedIconTheme: Equatable, Sendable, Identifiable {
+        let listIdentity: String
+        let extensionName: String
+        let iconTheme: IconThemeContribution
+
+        var id: String { listIdentity + "#iconTheme:" + iconTheme.name }
+    }
+
     enum Resolution: Equatable, Sendable {
         case active
 
@@ -136,8 +144,15 @@ struct LanguageCatalog: Equatable {
     let contributed: [Contributed]
     let formatters: [ContributedFormatter]
     let themes: [ContributedTheme]
+    let iconThemes: [ContributedIconTheme]
 
-    static let empty = LanguageCatalog(entries: [], contributed: [], formatters: [], themes: [])
+    static let empty = LanguageCatalog(
+        entries: [],
+        contributed: [],
+        formatters: [],
+        themes: [],
+        iconThemes: []
+    )
 
     // MARK: Lookup
 
@@ -314,7 +329,8 @@ struct LanguageCatalog: Equatable {
             entries: entries,
             contributed: contributed,
             formatters: resolveFormatters(manifests: manifests),
-            themes: resolveThemes(manifests: manifests)
+            themes: resolveThemes(manifests: manifests),
+            iconThemes: resolveIconThemes(manifests: manifests)
         )
     }
 
@@ -344,6 +360,18 @@ struct LanguageCatalog: Equatable {
                 listIdentity: manifest.listIdentity,
                 extensionName: manifest.name,
                 theme: theme
+            )
+        }
+    }
+
+    static func resolveIconThemes(manifests: [LanguageManifest]) -> [ContributedIconTheme] {
+        var seen: Set<String> = []
+        return ordered(\.iconThemes, in: manifests, by: \.name).compactMap { manifest, iconTheme in
+            guard seen.insert(iconTheme.name).inserted else { return nil }
+            return ContributedIconTheme(
+                listIdentity: manifest.listIdentity,
+                extensionName: manifest.name,
+                iconTheme: iconTheme
             )
         }
     }
