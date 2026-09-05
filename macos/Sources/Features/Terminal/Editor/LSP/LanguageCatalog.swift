@@ -107,6 +107,14 @@ struct LanguageCatalog: Equatable {
         }
     }
 
+    struct ContributedTheme: Equatable, Sendable, Identifiable {
+        let listIdentity: String
+        let extensionName: String
+        let theme: ThemeContribution
+
+        var id: String { listIdentity + "#theme:" + theme.name }
+    }
+
     enum Resolution: Equatable, Sendable {
         case active
 
@@ -127,8 +135,9 @@ struct LanguageCatalog: Equatable {
     let entries: [Entry]
     let contributed: [Contributed]
     let formatters: [ContributedFormatter]
+    let themes: [ContributedTheme]
 
-    static let empty = LanguageCatalog(entries: [], contributed: [], formatters: [])
+    static let empty = LanguageCatalog(entries: [], contributed: [], formatters: [], themes: [])
 
     // MARK: Lookup
 
@@ -304,13 +313,18 @@ struct LanguageCatalog: Equatable {
         return LanguageCatalog(
             entries: entries,
             contributed: contributed,
-            formatters: resolveFormatters(manifests: manifests)
+            formatters: resolveFormatters(manifests: manifests),
+            themes: resolveThemes(manifests: manifests)
         )
     }
 
-    static func resolveFormatters(manifests: [LanguageManifest]) -> [ContributedFormatter] {
-        let ordered = manifests
-            .flatMap { manifest in manifest.formatters.map { (manifest: manifest, formatter: $0) } }
+    private static func ordered<Item>(
+        _ items: (LanguageManifest) -> [Item],
+        in manifests: [LanguageManifest],
+        by key: @escaping (Item) -> String
+    ) -> [(manifest: LanguageManifest, item: Item)] {
+        manifests
+            .flatMap { manifest in items(manifest).map { (manifest: manifest, item: $0) } }
             .sorted { lhs, rhs in
                 let lhsRank = rank(scope: lhs.manifest.scope, promoted: false)
                 let rhsRank = rank(scope: rhs.manifest.scope, promoted: false)
@@ -318,11 +332,25 @@ struct LanguageCatalog: Equatable {
                 let lhsDirectory = lhs.manifest.root.lastPathComponent
                 let rhsDirectory = rhs.manifest.root.lastPathComponent
                 if lhsDirectory != rhsDirectory { return lhsDirectory < rhsDirectory }
-                return lhs.formatter.id < rhs.formatter.id
+                return key(lhs.item) < key(rhs.item)
             }
+    }
 
+    static func resolveThemes(manifests: [LanguageManifest]) -> [ContributedTheme] {
+        var seen: Set<String> = []
+        return ordered(\.themes, in: manifests, by: \.name).compactMap { manifest, theme in
+            guard seen.insert(theme.name).inserted else { return nil }
+            return ContributedTheme(
+                listIdentity: manifest.listIdentity,
+                extensionName: manifest.name,
+                theme: theme
+            )
+        }
+    }
+
+    static func resolveFormatters(manifests: [LanguageManifest]) -> [ContributedFormatter] {
         var claimed: [String: String] = [:]
-        return ordered.map { manifest, formatter in
+        return ordered(\.formatters, in: manifests, by: \.id).map { manifest, formatter in
             var resolution = Resolution.active
             for ext in formatter.fileExtensions {
                 if let owner = claimed[ext] {
