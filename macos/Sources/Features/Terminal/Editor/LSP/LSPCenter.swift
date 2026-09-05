@@ -1845,8 +1845,8 @@ final class LSPCenter: ObservableObject {
         // time it is asked, and this function is main-actor-isolated — the
         // window would be frozen for the whole of it, on the first code
         // file opened in a session.
-        let searchPath = await Task.detached(priority: .userInitiated) {
-            LoginEnvironment.executableSearchPath()
+        let (searchPath, rootURI) = await Task.detached(priority: .userInitiated) {
+            (LoginEnvironment.executableSearchPath(), Self.rootURI(forRoot: key.root))
         }.value
         guard let resolvedPath = LSPProcess.locate(definition.command, searchPath: searchPath) else {
             status[key] = .notInstalled
@@ -1906,7 +1906,7 @@ final class LSPCenter: ObservableObject {
         do {
             try await process.start(workingDirectory: key.root)
             let result = try await process.initialize(
-                rootURI: Self.uri(key.root),
+                rootURI: rootURI,
                 capabilities: Self.clientCapabilities,
                 initializationOptions: launch.initializationOptions
             )
@@ -2363,6 +2363,12 @@ final class LSPCenter: ObservableObject {
 
     nonisolated static func uri(_ path: String) -> String {
         URL(fileURLWithPath: path).absoluteString
+    }
+
+    nonisolated static func rootURI(forRoot root: String) -> String? {
+        guard !LSPWorkspaceBreadth.isTooBroad(root) else { return nil }
+        let uri = URL(fileURLWithPath: root, isDirectory: false).absoluteString
+        return uri.hasSuffix("/") ? String(uri.dropLast()) : uri
     }
 
     /// Hover comes back as a string, a `{ value: }`, or an array of either.

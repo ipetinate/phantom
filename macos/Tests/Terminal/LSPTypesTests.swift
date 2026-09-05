@@ -741,3 +741,60 @@ struct LSPWorkspaceRootTests {
         #expect(root.hasPrefix("/tmp/nowhere-"))
     }
 }
+
+struct LSPWorkspaceBreadthTests {
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func makeRepo(_ base: URL, _ name: String) throws {
+        try FileManager.default.createDirectory(
+            at: base.appendingPathComponent(name).appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+    }
+
+    @Test func theHomeDirectoryIsRootedNowhere() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #expect(LSPWorkspaceBreadth.isTooBroad(home))
+        #expect(LSPWorkspaceBreadth.isTooBroad("/"))
+        #expect(LSPCenter.rootURI(forRoot: home) == nil)
+    }
+
+    @Test func aFolderHoldingRepositoriesIsRootedNowhere() throws {
+        let base = try tempDir()
+        try makeRepo(base, "alpha")
+        try makeRepo(base, "beta")
+
+        #expect(LSPWorkspaceBreadth.isTooBroad(base.path))
+        #expect(LSPCenter.rootURI(forRoot: base.path) == nil)
+    }
+
+    @Test func theChildrenMayBeHandedInInsteadOfRead() throws {
+        let base = try tempDir()
+        try makeRepo(base, "alpha")
+
+        #expect(LSPWorkspaceBreadth.isTooBroad(base.path, children: ["alpha"]))
+        #expect(!LSPWorkspaceBreadth.isTooBroad(base.path, children: ["nowhere"]))
+        #expect(!LSPWorkspaceBreadth.isTooBroad(base.path, children: []))
+    }
+
+    @Test func aPlainFolderIsItsOwnRootWithoutATrailingSlash() throws {
+        let base = try tempDir()
+
+        let uri = LSPCenter.rootURI(forRoot: base.path)
+        #expect(uri == "file://" + base.path)
+        #expect(uri?.hasSuffix("/") == false)
+        #expect(LSPCenter.uri(base.path).hasSuffix("/"))
+    }
+
+    @Test func theRepositoryRootIsItsOwnRoot() {
+        let root = LSPCenter.workspaceRoot(for: URL(fileURLWithPath: #filePath).path)
+
+        #expect(!LSPWorkspaceBreadth.isTooBroad(root))
+        #expect(LSPCenter.rootURI(forRoot: root) == "file://" + root)
+    }
+}
