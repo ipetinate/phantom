@@ -120,6 +120,18 @@ final class LanguageResolver: ObservableObject {
         return LSPServerRegistry.server(forLanguage: languageID)
     }
 
+    func formatter(forFileNamed name: String) -> ExternalFormatter? {
+        Self.formatter(forFileNamed: name, catalog: catalog)
+    }
+
+    nonisolated static func formatter(
+        forFileNamed name: String,
+        catalog: LanguageCatalog
+    ) -> ExternalFormatter? {
+        if let compiled = ExternalFormatterRegistry.formatter(forFileNamed: name) { return compiled }
+        return catalog.formatter(forFileName: name)?.externalFormatter
+    }
+
     /// `initializationOptions` a contribution supplied, as JSON text — the
     /// same shape a user's own override is stored in, so it can travel the
     /// same parse.

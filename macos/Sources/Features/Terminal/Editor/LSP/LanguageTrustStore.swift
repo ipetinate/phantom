@@ -74,7 +74,11 @@ enum LanguageTrustStore {
     ) {
         guard case .manifest(let provenance) = subject.origin else { return }
         set(
-            LanguageTrust.record(for: subject, decision: decision),
+            LanguageTrust.record(
+                for: subject,
+                decision: decision,
+                extending: record(for: provenance.extensionID)
+            ),
             for: provenance.extensionID
         )
     }

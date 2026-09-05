@@ -1761,7 +1761,7 @@ private struct DocumentView: View {
         let path = document.url.path
         let name = (path as NSString).lastPathComponent
 
-        guard let known = ExternalFormatterRegistry.formatter(forFileNamed: name),
+        guard let known = LanguageResolver.shared.formatter(forFileNamed: name),
               let formatter = ExternalFormatterStore.effective(known),
               EditorFormatRoute.usesExternalFormatter(
                 server: lsp.status(forPath: path),
@@ -1771,6 +1771,28 @@ private struct DocumentView: View {
 
         let revision = document.revision
         let text = document.currentText
+
+        if formatter.provenance != nil {
+            let searchPath = await Task.detached(priority: .userInitiated) {
+                LoginEnvironment.executableSearchPath()
+            }.value
+            guard let resolvedPath = ExternalFormatterRunner.locate(
+                formatter.command, searchPath: searchPath)
+            else {
+                let missing = ExternalFormatterFailure.notFound(
+                    tool: formatter.displayName, hint: formatter.installHint)
+                return apply(.failed(missing.reason), trigger: trigger, at: path, to: text, since: revision)
+            }
+            guard await LanguageTrustGate.allowsRun(
+                of: formatter,
+                resolvedPath: resolvedPath,
+                workspaceRoot: LSPCenter.workspaceRoot(for: path))
+            else {
+                return apply(
+                    .failed("\(formatter.displayName) comes from an extension you have not approved, so it did not run."),
+                    trigger: trigger, at: path, to: text, since: revision)
+            }
+        }
 
         let outcome = await Task.detached(priority: .userInitiated) {
             do {
