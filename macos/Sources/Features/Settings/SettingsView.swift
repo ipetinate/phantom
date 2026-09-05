@@ -220,9 +220,7 @@ struct SidebarSettingsView: View {
 
     @State private var sidebarEnabled: Bool = false
 
-    @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
-    @AppStorage("SidebarShowGitPane") private var showGitPane = true
-    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
+    @ObservedObject private var visibility: SidebarPaneVisibility = .shared
 
     @AppStorage("SidebarShowDirectory") private var showDirectory = true
     @AppStorage("SidebarShowGitBranch") private var showGitBranch = true
@@ -279,11 +277,11 @@ struct SidebarSettingsView: View {
             }
 
             Section {
-                Toggle("File Explorer", isOn: $showFilesPane)
+                Toggle("File Explorer", isOn: visibility.binding(for: .files))
                     .toggleStyle(.switch)
-                Toggle("Git", isOn: $showGitPane)
+                Toggle("Git", isOn: visibility.binding(for: .git))
                     .toggleStyle(.switch)
-                Toggle("Worktrees", isOn: $showWorktreesPane)
+                Toggle("Worktrees", isOn: visibility.binding(for: .worktrees))
                     .toggleStyle(.switch)
             } header: {
                 Text("Panes")

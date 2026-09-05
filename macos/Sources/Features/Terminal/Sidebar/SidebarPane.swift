@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// One panel the sidebar can show.
@@ -81,5 +82,45 @@ struct SidebarPaneIcon: View {
         } else {
             GitIcon(size: size + 1)
         }
+    }
+}
+
+@MainActor
+final class SidebarPaneVisibility: ObservableObject {
+    static let shared = SidebarPaneVisibility()
+
+    @Published private(set) var enabled: [SidebarPane]
+
+    private var subscription: AnyCancellable?
+
+    init() {
+        enabled = SidebarPane.enabled
+        subscription = NotificationCenter.default
+            .publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .map { _ in SidebarPane.enabled }
+            .removeDuplicates()
+            .sink { [weak self] panes in
+                MainActor.assumeIsolated { self?.update(panes) }
+            }
+    }
+
+    func isEnabled(_ pane: SidebarPane) -> Bool {
+        enabled.contains(pane)
+    }
+
+    func binding(for pane: SidebarPane) -> Binding<Bool> {
+        Binding(
+            get: { pane.isEnabled },
+            set: { value in
+                guard let key = pane.defaultsKey else { return }
+                UserDefaults.standard.set(value, forKey: key)
+            }
+        )
+    }
+
+    private func update(_ panes: [SidebarPane]) {
+        guard enabled != panes else { return }
+        enabled = panes
     }
 }

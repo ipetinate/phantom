@@ -152,22 +152,14 @@ struct SidebarView: View {
             .clipped()
     }
 
-    /// The panels the user has switched on. Read through `@AppStorage` so
-    /// the sidebar follows the setting live — `SidebarPane.isEnabled` goes
-    /// to `UserDefaults` directly, which SwiftUI has no way to observe.
-    @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
-    @AppStorage("SidebarShowGitPane") private var showGitPane = true
-    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
+    /// The panels the user has switched on. Observed through
+    /// `SidebarPaneVisibility` so the sidebar follows the setting live —
+    /// `SidebarPane.isEnabled` goes to `UserDefaults` directly, which
+    /// SwiftUI has no way to observe.
+    @ObservedObject private var visibility: SidebarPaneVisibility = .shared
 
     private var enabledPanes: [SidebarPane] {
-        SidebarPane.allCases.filter { pane in
-            switch pane {
-            case .terminals: return true
-            case .files: return showFilesPane
-            case .git: return showGitPane
-            case .worktrees: return showWorktreesPane
-            }
-        }
+        visibility.enabled
     }
 
     /// Falls back to terminals when the selected panel has been switched
@@ -344,9 +336,7 @@ struct SidebarTitlebarChrome: View {
 
     /// Mirrors `SidebarView`'s own fallback: a panel switched off in
     /// settings must not leave its buttons behind in the titlebar.
-    @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
-    @AppStorage("SidebarShowGitPane") private var showGitPane = true
-    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
+    @ObservedObject private var visibility: SidebarPaneVisibility = .shared
     @AppStorage(AgentButtonDefaults.key(.chrome, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage(AgentButtonDefaults.key(.chrome, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage(AgentButtonDefaults.key(.chrome, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
@@ -376,12 +366,7 @@ struct SidebarTitlebarChrome: View {
     }
 
     private var visiblePane: SidebarPane {
-        switch layout.selectedPane {
-        case .files where !showFilesPane: return .terminals
-        case .git where !showGitPane: return .terminals
-        case .worktrees where !showWorktreesPane: return .terminals
-        default: return layout.selectedPane
-        }
+        visibility.isEnabled(layout.selectedPane) ? layout.selectedPane : .terminals
     }
 
     var body: some View {
@@ -483,7 +468,7 @@ struct SidebarTitlebarChrome: View {
                     PiIcon(size: 12)
                 }
             }
-            if showWorktreesPane {
+            if visibility.isEnabled(.worktrees) {
                 WorktreeEntryButton(
                     entry: .chrome,
                     isEnabled: showWorktree,

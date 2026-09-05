@@ -17,33 +17,37 @@ struct SidebarPaneTests {
     /// Wrapped in a saved/restored snapshot: these read the real user
     /// defaults, and a test must not leave the user's panels switched off
     /// behind it.
-    private func withPanes(files: Bool?, git: Bool?, worktrees: Bool? = nil, _ body: () -> Void) {
+    private func withPanes(_ values: [SidebarPane: Bool], _ body: () -> Void) {
         let defaults = UserDefaults.standard
-        let savedFiles = defaults.object(forKey: "SidebarShowFilesPane")
-        let savedGit = defaults.object(forKey: "SidebarShowGitPane")
-        let savedWorktrees = defaults.object(forKey: "SidebarShowWorktreesPane")
+        let keys = SidebarPane.allCases.compactMap(\.defaultsKey)
+        let saved = keys.map { ($0, defaults.object(forKey: $0)) }
         defer {
-            defaults.set(savedFiles, forKey: "SidebarShowFilesPane")
-            defaults.set(savedGit, forKey: "SidebarShowGitPane")
-            defaults.set(savedWorktrees, forKey: "SidebarShowWorktreesPane")
+            for (key, value) in saved {
+                defaults.set(value, forKey: key)
+            }
         }
 
-        defaults.set(files, forKey: "SidebarShowFilesPane")
-        defaults.set(git, forKey: "SidebarShowGitPane")
-        defaults.set(worktrees, forKey: "SidebarShowWorktreesPane")
+        for pane in SidebarPane.allCases {
+            guard let key = pane.defaultsKey else { continue }
+            defaults.set(values[pane], forKey: key)
+        }
         body()
+    }
+
+    private var everyExtraOff: [SidebarPane: Bool] {
+        Dictionary(uniqueKeysWithValues: SidebarPane.allCases.filter(\.canBeHidden).map { ($0, false) })
     }
 
     /// Absent keys mean a fresh install, which gets everything.
     @Test func panesDefaultToEnabled() {
-        withPanes(files: nil, git: nil) {
+        withPanes([:]) {
             #expect(SidebarPane.enabled == SidebarPane.allCases)
             #expect(SidebarPane.showsTabBar)
         }
     }
 
     @Test func aDisabledPaneDropsOutOfTheTabOrder() {
-        withPanes(files: false, git: true, worktrees: true) {
+        withPanes([.files: false, .git: true, .worktrees: true]) {
             #expect(SidebarPane.enabled == [.terminals, .git, .worktrees])
             #expect(SidebarPane.showsTabBar)
         }
@@ -53,7 +57,7 @@ struct SidebarPaneTests {
     /// hides and the sidebar goes back to being the plain terminal list it
     /// started as.
     @Test func turningEveryExtraOffHidesTheTabBar() {
-        withPanes(files: false, git: false, worktrees: false) {
+        withPanes(everyExtraOff) {
             #expect(SidebarPane.enabled == [.terminals])
             #expect(!SidebarPane.showsTabBar)
         }
@@ -62,10 +66,27 @@ struct SidebarPaneTests {
     /// Terminals is the sidebar's reason to exist; the settings UI must
     /// never offer a switch for it.
     @Test func terminalsCannotBeHidden() {
-        withPanes(files: false, git: false, worktrees: false) {
+        withPanes(everyExtraOff) {
             #expect(SidebarPane.terminals.isEnabled)
             #expect(!SidebarPane.terminals.canBeHidden)
             #expect(SidebarPane.terminals.defaultsKey == nil)
+        }
+    }
+
+    @Test @MainActor func writingAKeyReachesTheSharedVisibility() {
+        withPanes([:]) {
+            let visibility = SidebarPaneVisibility.shared
+            RunLoop.main.run(until: Date() + 0.05)
+            #expect(visibility.isEnabled(.git))
+
+            UserDefaults.standard.set(false, forKey: "SidebarShowGitPane")
+            RunLoop.main.run(until: Date() + 0.05)
+            #expect(!visibility.isEnabled(.git))
+            #expect(visibility.enabled == SidebarPane.enabled)
+
+            UserDefaults.standard.set(true, forKey: "SidebarShowGitPane")
+            RunLoop.main.run(until: Date() + 0.05)
+            #expect(visibility.isEnabled(.git))
         }
     }
 
