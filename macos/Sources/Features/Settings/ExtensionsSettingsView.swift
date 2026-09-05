@@ -25,7 +25,7 @@ enum ExtensionListFilter {
     }
 
     private static func fields(of entry: ExtensionIndex.Entry) -> [String] {
-        [entry.name, entry.id, entry.publisher, entry.summary] + entry.languages
+        [entry.name, entry.id, entry.publisher, entry.summary] + entry.languages + (entry.card?.tags ?? [])
     }
 
     private static func matches(_ needle: String, in fields: [String]) -> Bool {

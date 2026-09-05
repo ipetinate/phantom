@@ -14,6 +14,7 @@ struct ExtensionIndex: Equatable, Sendable {
         let downloadURL: URL
         let sha256: String
         let bytes: Int
+        var card: ExtensionCard?
     }
 
     let generatedAt: Date?
@@ -113,7 +114,8 @@ extension ExtensionIndex.Entry {
             languages: languageList(json["languages"]),
             downloadURL: downloadURL,
             sha256: sha256,
-            bytes: bytes
+            bytes: bytes,
+            card: (json["card"] as? [String: Any]).flatMap(ExtensionCard.parse)
         )
     }
 

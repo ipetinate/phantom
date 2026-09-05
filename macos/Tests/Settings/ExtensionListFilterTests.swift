@@ -101,6 +101,18 @@ struct ExtensionListFilterTests {
         #expect(sections.entries.map(\.id) == ["beam.elixir"])
     }
 
+    @Test func aQueryMatchesACardTag() {
+        var tagged = zig
+        tagged.card = ExtensionCard(
+            title: "Zig", tagline: "", license: "MIT", author: ExtensionCard.Author(name: "ziglings", url: nil),
+            created: Date(timeIntervalSince1970: 0), updated: nil, icon: nil, cover: nil,
+            tags: ["systems", "comptime"], screenshots: [], document: "extension.mdx", documentBytes: 1,
+            media: [], mediaBytes: 0)
+        let sections = ExtensionListFilter.sections(entries: [lua, tagged, elixir], installed: [], query: "comptime")
+        #expect(sections.entries.map(\.id) == ["acme.zig"])
+        #expect(ExtensionListFilter.sections(entries: [lua, zig, elixir], installed: [], query: "comptime").isEmpty)
+    }
+
     @Test func nothingMatchingIsEmptyRatherThanEverything() {
         let sections = ExtensionListFilter.sections(entries: [lua, zig], installed: [], query: "rust")
         #expect(sections.isEmpty)
