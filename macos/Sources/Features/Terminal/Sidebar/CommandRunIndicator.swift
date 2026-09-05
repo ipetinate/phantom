@@ -1,11 +1,16 @@
 import SwiftUI
 
-/// The trailing mark a row shows for a plain command: the spinner and the dot
-/// the agent states already draw, at the same sizes.
+/// The trailing mark a row shows for a plain command: the spinner the agent
+/// states already draw, a check when the command ended well, and the
+/// triangle `failed` draws when it did not, at the same sizes.
 ///
-/// Deliberately not a new shape. The reader asked for the indicator they
-/// already know, on a `brew install` — a second visual language for "this tab
-/// is busy" would make the row say two things where it means one.
+/// Deliberately close to what the agent states draw. The reader asked for the
+/// indicator they already know, on a `brew install` — a second visual language
+/// for "this tab is busy" would make the row say two things where it means
+/// one. The check is the one departure: a dot beside a triangle only said
+/// "not running", and the tooltip on the triangle now says the exit code and
+/// how long the command ran, so a red mark after a command that printed its
+/// own success can be read rather than guessed at.
 ///
 /// Its own view rather than two more cases in the row's `statusIndicator`,
 /// which switches on `agentState`: this is not one of those, and it has to be
@@ -21,17 +26,17 @@ struct CommandRunIndicator: View {
             ProgressView()
                 .controlSize(.mini)
                 .frame(width: 12, height: 12)
-                .help("Running a command")
+                .help(Text(verbatim: mark.tooltip))
         case .finished:
-            Circle()
-                .fill(themePalette.accent ?? .accentColor)
-                .frame(width: 8, height: 8)
-                .help("A command finished here")
-        case .failed(let exitCode):
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(themePalette.accent ?? .accentColor)
+                .help(Text(verbatim: mark.tooltip))
+        case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 10))
                 .foregroundStyle(.red)
-                .help("A command exited \(exitCode)")
+                .help(Text(verbatim: mark.tooltip))
         }
     }
 }

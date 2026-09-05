@@ -10,13 +10,35 @@ enum CommandRunMark: Equatable {
     /// Drawn as the spinner `working` draws.
     case running
 
-    /// Drawn as the dot `done` draws.
+    /// Drawn as a check mark, where `done` draws a dot.
     case finished
 
     /// Drawn as the triangle `failed` draws. Only a shell that reports its
     /// commands can produce this: a poll of the foreground process sees a
     /// command leave, never how it left.
-    case failed(exitCode: Int)
+    case failed(exitCode: Int, duration: TimeInterval)
+
+    var tooltip: String {
+        switch self {
+        case .running:
+            return "Running a command"
+        case .finished:
+            return "A command finished here"
+        case .failed(let exitCode, let duration):
+            return "Exited with code \(exitCode) after \(Self.durationText(duration))"
+        }
+    }
+
+    static func durationText(_ seconds: TimeInterval) -> String {
+        let whole = Int(seconds.rounded())
+        guard whole >= 1 else { return String(format: "%.1fs", seconds) }
+        let hours = whole / 3600
+        let minutes = (whole % 3600) / 60
+        let rest = whole % 60
+        if hours > 0 { return "\(hours)h" + String(format: "%02dm", minutes) }
+        if minutes > 0 { return "\(minutes)m" + String(format: "%02ds", rest) }
+        return "\(rest)s"
+    }
 }
 
 /// What a tab is doing with a plain command, and which signal said so.
@@ -40,7 +62,7 @@ struct CommandRun: Equatable {
         case finished
 
         /// A command ended with a non-zero exit code.
-        case failed(exitCode: Int)
+        case failed(exitCode: Int, duration: TimeInterval)
 
         /// Nothing to draw. Distinct from no state at all, which is what nil
         /// means: this keeps `isShellReported` for a tab that has news later.
@@ -67,7 +89,7 @@ struct CommandRun: Equatable {
         case .pending, .interactive, .idle: return nil
         case .running: return .running
         case .finished: return .finished
-        case .failed(let code): return .failed(exitCode: code)
+        case .failed(let code, let duration): return .failed(exitCode: code, duration: duration)
         }
     }
 
@@ -229,7 +251,7 @@ enum CommandRunRule {
         if case .interactive = previous?.phase { return silent }
 
         if let exitCode, exitCode != 0 {
-            return .init(phase: .failed(exitCode: exitCode), isShellReported: true)
+            return .init(phase: .failed(exitCode: exitCode, duration: duration), isShellReported: true)
         }
 
         guard duration >= shellMinimumDuration else { return silent }
