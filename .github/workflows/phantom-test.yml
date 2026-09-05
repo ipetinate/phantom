@@ -1,12 +1,11 @@
 name: Phantom Test
 
-# Phantom-only CI — separate from test.yml (Ghostty's own, untouched aside
-# from one runner-label fix on its "required" gate job). test.yml's real
-# work already skips itself on forks (most jobs gate on
-# `github.repository == 'ghostty-org/ghostty'`), so it's harmless noise here,
-# not something to replicate. This runs the checks that actually matter for
-# this fork, on runners this fork actually has: the Zig core test suite,
-# the macOS build, the Swift regression suite, and formatting.
+# The fork's only CI. Ghostty's own workflows are gone from this repo: most
+# of their jobs gated on `github.repository == 'ghostty-org/ghostty'` and
+# the rest needed runners this fork does not have, so every PR showed a
+# hundred skipped checks around the four that ran. These are the four: the
+# Zig core test suite, the macOS build, the Swift regression suite, and
+# formatting.
 on:
   pull_request: {}
   push:

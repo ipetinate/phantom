@@ -1,8 +1,8 @@
 name: Phantom Release
 
-# Phantom-only release pipeline — separate from release-tag.yml (Ghostty's
-# own, untouched, using infrastructure this fork has no access to: paid
-# Namespace runners, Nix, a real Developer ID cert, R2).
+# The fork's release pipeline. Ghostty's release-tag.yml is gone from this
+# repo: it used infrastructure this fork has no access to (paid Namespace
+# runners, Nix, a real Developer ID cert, R2).
 # This builds, ad-hoc signs, packages and publishes a Phantom.dmg to this
 # repo's own Releases page on every push to main — together with the Sparkle
 # appcast the app updates itself from, so the Releases page is the whole of
