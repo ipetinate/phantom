@@ -164,6 +164,7 @@ struct GhosttyConfigShortcutCatalogTests {
 /// lookup answers nil, the row never draws, and every test above still
 /// passes. A `TemporaryConfig` is a real load of Ghostty's own defaults with
 /// nothing of this machine's in it, so these are stable answers.
+@MainActor
 struct CatalogAgainstGhosttyDefaultsTests {
     @Test func theSectionIsWorthOpeningOnADefaultConfiguration() throws {
         let config = try TemporaryConfig("")

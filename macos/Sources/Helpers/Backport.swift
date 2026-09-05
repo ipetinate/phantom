@@ -34,27 +34,19 @@ struct BackportKeyPress {
 
 extension Backport where Content: View {
     func pointerVisibility(_ v: BackportVisibility) -> some View {
-        #if canImport(AppKit)
         if #available(macOS 15, *) {
             return content.pointerVisibility(v.official)
         } else {
             return content
         }
-        #else
-        return content
-        #endif
     }
 
     func pointerStyle(_ style: BackportPointerStyle?) -> some View {
-        #if canImport(AppKit)
         if #available(macOS 15, *) {
             return content.pointerStyle(style?.official)
         } else {
             return content
         }
-        #else
-        return content
-        #endif
     }
 
     /// Drops the system focus ring while leaving the view focusable.
@@ -82,7 +74,6 @@ extension Backport where Content: View {
 
     /// Backported onKeyPress that works on macOS 14+ and is a no-op on macOS 13.
     func onKeyPress(_ key: KeyEquivalent, action: @escaping (EventModifiers) -> BackportKeyPressResult) -> some View {
-        #if canImport(AppKit)
         if #available(macOS 14, *) {
             return content.onKeyPress(key, phases: .down, action: { keyPress in
                 switch action(keyPress.modifiers) {
@@ -93,9 +84,6 @@ extension Backport where Content: View {
         } else {
             return content
         }
-        #else
-        return content
-        #endif
     }
 
     /// Backported free-form onKeyPress that works on macOS 14+ and is a
@@ -152,7 +140,6 @@ enum BackportPointerStyle {
     case resizeUpDown
     case resizeLeftRight
 
-    #if canImport(AppKit)
     @available(macOS 15, *)
     var official: PointerStyle {
         switch self {
@@ -170,25 +157,33 @@ enum BackportPointerStyle {
         case .resizeLeftRight: return .columnResize
         }
     }
-    #endif
 }
 
-enum BackportNSGlassStyle {
+enum BackportGlass {
     case regular, clear
 
-    #if canImport(AppKit)
     @available(macOS 26, *)
-    var official: NSGlassEffectView.Style {
+    var official: Glass {
         switch self {
         case .regular: return .regular
         case .clear: return .clear
         }
     }
-    #endif
 }
 
-/// Backported `TextField` that supports text selection on macOS 15/iOS 18 and up. The `selection`
-/// has no effect on versions below macOS 15/iOS 18.
+/// Backported `TextField` that supports text selection on macOS 26 and up. The `selection`
+/// has no effect on versions below macOS 26.
+///
+/// Although the API is available from macOS 15, we force it to be 26. Because on macOS 15,
+/// SwiftUI will crash when deleting texts, even for this simple example.
+///
+///     struct ContentView: View {
+///         @State private var text = ""
+///         @State private var selection: TextSelection?
+///         var body: some View {
+///             TextField("Search", text: $text, selection: $selection)
+///         }
+///     }
 struct BackportSelectionTextField: View {
     private let titleKey: LocalizedStringKey
     @Binding private var text: String
@@ -205,7 +200,7 @@ struct BackportSelectionTextField: View {
     }
 
     var body: some View {
-        if #available(iOS 18.0, macOS 15, *) {
+        if #available(macOS 26, *) {
             TextField(
                 titleKey,
                 text: _text,
