@@ -5,9 +5,11 @@ enum ExtensionViewerMessage: Equatable, Sendable {
     case rendered(warnings: [String])
     case failed(message: String, line: Int?, column: Int?)
     case open(URL)
+    case copy(String)
 
     static let maxWarnings = 32
     static let maxMessageLength = 512
+    static let maxCopyLength = 64 * 1024
 
     static func parse(_ body: Any) -> ExtensionViewerMessage? {
         guard let object = body as? [String: Any],
@@ -33,6 +35,10 @@ enum ExtensionViewerMessage: Equatable, Sendable {
         case "open":
             guard let href = openableURL(object["href"]) else { return nil }
             return .open(href)
+
+        case "copy":
+            guard let text = object["text"] as? String, !text.isEmpty, text.count <= maxCopyLength else { return nil }
+            return .copy(text)
 
         default:
             return nil

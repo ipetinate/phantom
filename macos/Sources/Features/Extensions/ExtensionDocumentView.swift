@@ -149,6 +149,9 @@ struct ExtensionDocumentView: NSViewRepresentable {
                 onStatus(.failed(message: message, line: line, column: column))
             case .open(let url):
                 NSWorkspace.shared.open(url)
+            case .copy(let text):
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
             }
         }
 

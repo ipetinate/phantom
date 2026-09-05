@@ -95,6 +95,8 @@ struct ExtensionPaneView: View {
                     } else if installed != nil {
                         ExtensionStateBadge(state: .installed(version: installed?.version ?? ""))
                     }
+                    Spacer(minLength: 12)
+                    actionControl
                 }
 
                 if !tagline.isEmpty {
@@ -117,10 +119,14 @@ struct ExtensionPaneView: View {
                     ExtensionContributionChips(entry: entry)
                 }
 
-                actions
+                if let error = store.errors[id] {
+                    Text(verbatim: error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(20)
         .help(id)
@@ -156,31 +162,20 @@ struct ExtensionPaneView: View {
         Text(verbatim: "\u{00B7}")
     }
 
-    private var actions: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                if let activity = store.activity[id] {
-                    ExtensionActivityView(activity: activity)
-                } else if let entry {
-                    ExtensionActionButton(
-                        state: store.state(for: entry),
-                        onInstall: { Task { await store.install(entry) } },
-                        onRemove: { Task { await store.remove(id: id) } }
-                    )
-                } else if installed != nil {
-                    Button("Uninstall") {
-                        Task { await store.remove(id: id) }
-                    }
-                }
-            }
-            if let error = store.errors[id] {
-                Text(verbatim: error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder private var actionControl: some View {
+        if let activity = store.activity[id] {
+            ExtensionActivityView(activity: activity)
+        } else if let entry {
+            ExtensionActionButton(
+                state: store.state(for: entry),
+                onInstall: { Task { await store.install(entry) } },
+                onRemove: { Task { await store.remove(id: id) } }
+            )
+        } else if installed != nil {
+            Button("Uninstall") {
+                Task { await store.remove(id: id) }
             }
         }
-        .padding(.top, 4)
     }
 
     private var iconURL: URL? {

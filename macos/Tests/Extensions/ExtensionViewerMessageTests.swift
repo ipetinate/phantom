@@ -50,6 +50,13 @@ struct ExtensionViewerMessageTests {
         #expect(capped.count == ExtensionViewerMessage.maxMessageLength)
     }
 
+    @Test func copyCarriesTheTextUntouchedAndRefusesEmptyOrHuge() {
+        #expect(ExtensionViewerMessage.parse(["type": "copy", "text": "brew install stylua\n"]) == .copy("brew install stylua\n"))
+        #expect(ExtensionViewerMessage.parse(["type": "copy", "text": ""]) == nil)
+        #expect(ExtensionViewerMessage.parse(["type": "copy", "text": 7]) == nil)
+        #expect(ExtensionViewerMessage.parse(["type": "copy", "text": String(repeating: "x", count: ExtensionViewerMessage.maxCopyLength + 1)]) == nil)
+    }
+
     @Test func openAcceptsOnlyHTTPSAndMail() {
         #expect(
             ExtensionViewerMessage.parse(["type": "open", "href": "https://example.com/docs"])
