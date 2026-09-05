@@ -937,6 +937,10 @@ private struct DocumentView: View {
                 serverActivityBanner(server: server, activity: activity)
             }
 
+            if let warning = lsp.warning(forPath: document.url.path) {
+                serverWarningBanner(warning)
+            }
+
             ZStack(alignment: .topTrailing) {
                 presentedContent
 
@@ -2011,6 +2015,36 @@ private struct DocumentView: View {
 
     private var serverActivity: LSPWorkDoneProgress? {
         lsp.activity(forPath: document.url.path)
+    }
+
+    private func serverWarningBanner(_ warning: LSPServerWarning) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(warning.isError ? Color.red : Color.orange)
+
+            Text(verbatim: warning.text)
+                .font(palette.font(size: 11))
+                .textSelection(.enabled)
+                .lineLimit(2)
+
+            Spacer(minLength: 0)
+
+            Button("View Log") { showLog(lsp.log(forPath: document.url.path), title: "Language Server") }
+                .buttonStyle(.link)
+                .font(palette.font(size: 11))
+
+            Button {
+                lsp.dismissWarning(forPath: document.url.path)
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.secondary.opacity(0.12))
     }
 
     private func serverActivityBanner(server: LSPServerDefinition, activity: LSPWorkDoneProgress) -> some View {

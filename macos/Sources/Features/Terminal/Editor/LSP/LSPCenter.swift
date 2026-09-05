@@ -76,6 +76,8 @@ final class LSPCenter: ObservableObject {
     @Published private var status: [Key: LSPServerStatus] = [:]
 
     @Published private var progress: [Key: LSPProgressLedger] = [:]
+
+    @Published private var warnings: [Key: LSPServerWarning] = [:]
     private var progressPruneTask: Task<Void, Never>?
 
     /// One running server: the language it serves, the workspace it serves it
@@ -664,6 +666,18 @@ final class LSPCenter: ObservableObject {
         return status[key]
     }
 
+    func warning(forPath path: String) -> LSPServerWarning? {
+        let now = Date()
+        return keys(forPath: path).lazy
+            .compactMap { self.warnings[$0] }
+            .filter { !$0.isStale(now: now) }
+            .max { $0.at < $1.at }
+    }
+
+    func dismissWarning(forPath path: String) {
+        for key in keys(forPath: path) { warnings.removeValue(forKey: key) }
+    }
+
     func activity(forPath path: String) -> LSPWorkDoneProgress? {
         let keys = keys(forPath: path)
         let ordered = speakingKey(forPath: path).map { speaking in
@@ -808,6 +822,7 @@ final class LSPCenter: ObservableObject {
 
         for key in progress.keys where commands.contains(key.command) {
             progress.removeValue(forKey: key)
+            warnings.removeValue(forKey: key)
         }
 
         for path in announced.keys {
@@ -2124,9 +2139,12 @@ final class LSPCenter: ObservableObject {
         /// sheet showed stderr only, and a server that reports its failures
         /// through the protocol rather than stderr looked perfectly healthy
         /// while answering nothing.
-        case "window/logMessage", "window/showMessage":
+        case "window/logMessage", LSPServerWarning.method:
             for line in Self.logLines(from: notification) {
                 appendLog(line, for: key)
+            }
+            if let warning = LSPServerWarning.make(from: notification, now: Date()) {
+                warnings[key] = warning
             }
 
         case LSPProgressLedger.method:
