@@ -443,7 +443,15 @@ struct AgentsSettingsView: View {
     /// Pi is drawn in its own section below, because what it installs is an
     /// extension rather than a hook and the sentence under it says so.
     private var hookAgents: [AgentHooksRegistration.Agent] {
-        AgentHooksRegistration.agents.filter { $0.id != .pi }
+        AgentHooksRegistration.agents.filter {
+            $0.id != .pi && !AgentHooksRegistration.installsAnExtensionTemplate($0.id.descriptor)
+        }
+    }
+
+    private var templateAgents: [AgentHooksRegistration.Agent] {
+        AgentHooksRegistration.agents.filter {
+            AgentHooksRegistration.installsAnExtensionTemplate($0.id.descriptor)
+        }
     }
 
     var body: some View {
@@ -480,6 +488,10 @@ struct AgentsSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            ForEach(templateAgents) { agent in
+                templateSection(agent)
+            }
+
             Section {
                 Toggle("Notify on Agent Activity", isOn: $agentNotifications)
                     .toggleStyle(.switch)
@@ -509,6 +521,26 @@ struct AgentsSettingsView: View {
 
     private func refresh() {
         installed = AgentHooksRegistration.status()
+    }
+
+    private func templateSection(_ agent: AgentHooksRegistration.Agent) -> some View {
+        let installer = AgentHooksRegistration.pluginFile(for: agent.id)
+        let contributed = LanguageResolver.shared.catalog.agent(forID: agent.id.rawValue)
+
+        return Section {
+            agentHookRow(agent, noun: "Plugin")
+            CopyableValueRow(title: "Installed at", value: installer?.fileURL.path ?? "")
+        } header: {
+            Text(verbatim: "\(agent.name) Plugin")
+        } footer: {
+            Text(verbatim: AgentHooksRegistration.templateFooter(
+                agentName: agent.name,
+                extensionName: contributed?.extensionName,
+                fileName: installer?.fileName ?? "",
+                events: installer?.events ?? []))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func agentHookRow(

@@ -80,6 +80,28 @@ enum AgentHooksRegistration {
         engine(for: agent) as? PluginFileInstaller
     }
 
+    nonisolated static func installsAnExtensionTemplate(_ descriptor: AgentDescriptor) -> Bool {
+        guard case .file? = descriptor.hooks else { return false }
+        return !AgentRegistry.builtInIDs.contains(descriptor.id)
+    }
+
+    nonisolated static func templateFooter(
+        agentName: String,
+        extensionName: String?,
+        fileName: String,
+        events: [String]
+    ) -> String {
+        let source = extensionName.map { "the \($0) extension" } ?? "an extension"
+        var sentences = [
+            "\(fileName) is a plugin \(source) ships, written to the folder above where \(agentName) loads it.",
+            "Phantom writes the file when you press Install and runs none of it; \(agentName) does.",
+        ]
+        if !events.isEmpty {
+            sentences.append("It subscribes to \(events.joined(separator: ", ")).")
+        }
+        return sentences.joined(separator: " ")
+    }
+
     static var agents: [Agent] {
         CodingAgent.allCases.compactMap { agent in
             engine(for: agent).map { Agent(id: agent, engine: $0) }
