@@ -220,9 +220,9 @@ struct SidebarSettingsView: View {
 
     @State private var sidebarEnabled: Bool = false
 
-    @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
-    @AppStorage("SidebarShowGitPane") private var showGitPane = true
-    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
+    @ObservedObject private var visibility: SidebarPaneVisibility = .shared
+    @AppStorage(SidebarTabBarPlacement.defaultsKey)
+    private var tabBarPlacementRaw = SidebarTabBarPlacement.top.rawValue
 
     @AppStorage("SidebarShowDirectory") private var showDirectory = true
     @AppStorage("SidebarShowGitBranch") private var showGitBranch = true
@@ -279,16 +279,23 @@ struct SidebarSettingsView: View {
             }
 
             Section {
-                Toggle("File Explorer", isOn: $showFilesPane)
-                    .toggleStyle(.switch)
-                Toggle("Git", isOn: $showGitPane)
-                    .toggleStyle(.switch)
-                Toggle("Worktrees", isOn: $showWorktreesPane)
-                    .toggleStyle(.switch)
+                SettingsMultiSelect(
+                    title: "Show",
+                    options: SidebarPane.allCases.filter(\.canBeHidden).map { pane in
+                        .init(id: pane.rawValue, title: pane.title, isOn: visibility.binding(for: pane))
+                    },
+                    emptyLabel: "Terminals only")
+
+                Picker("Tab Bar", selection: $tabBarPlacementRaw) {
+                    ForEach(SidebarTabBarPlacement.allCases) { placement in
+                        Text(placement.title).tag(placement.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
             } header: {
                 Text("Panes")
             } footer: {
-                Text("Terminals is always available. With everything else off there is nothing to switch between, so the tabs disappear and the sidebar is just the terminal list.")
+                Text("Terminals is always available. With everything else off there is nothing to switch between, so the tabs disappear and the sidebar is just the terminal list. Extensions lists the registry and lets you install from the sidebar. Side puts one icon per pane in a column along the sidebar's edge.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

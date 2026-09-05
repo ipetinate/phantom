@@ -152,22 +152,14 @@ struct SidebarView: View {
             .clipped()
     }
 
-    /// The panels the user has switched on. Read through `@AppStorage` so
-    /// the sidebar follows the setting live — `SidebarPane.isEnabled` goes
-    /// to `UserDefaults` directly, which SwiftUI has no way to observe.
-    @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
-    @AppStorage("SidebarShowGitPane") private var showGitPane = true
-    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
+    /// The panels the user has switched on. Observed through
+    /// `SidebarPaneVisibility` so the sidebar follows the setting live —
+    /// `SidebarPane.isEnabled` goes to `UserDefaults` directly, which
+    /// SwiftUI has no way to observe.
+    @ObservedObject private var visibility: SidebarPaneVisibility = .shared
 
     private var enabledPanes: [SidebarPane] {
-        SidebarPane.allCases.filter { pane in
-            switch pane {
-            case .terminals: return true
-            case .files: return showFilesPane
-            case .git: return showGitPane
-            case .worktrees: return showWorktreesPane
-            }
-        }
+        visibility.enabled
     }
 
     /// Falls back to terminals when the selected panel has been switched
@@ -179,46 +171,66 @@ struct SidebarView: View {
         enabledPanes.contains(layout.selectedPane) ? layout.selectedPane : .terminals
     }
 
+    @AppStorage(SidebarTabBarPlacement.defaultsKey)
+    private var tabBarPlacementRaw = SidebarTabBarPlacement.top.rawValue
+
+    private var tabBarPlacement: SidebarTabBarPlacement {
+        SidebarTabBarPlacement(raw: tabBarPlacementRaw)
+    }
+
     private var expanded: some View {
-        VStack(spacing: 0) {
-            if enabledPanes.count > 1 {
-                SidebarPaneTabBar(selection: $layout.selectedPane, panes: enabledPanes)
+        HStack(alignment: .top, spacing: 0) {
+            if enabledPanes.count > 1, tabBarPlacement == .side {
+                SidebarActivityBar(selection: $layout.selectedPane, panes: enabledPanes)
             }
 
-            switch visiblePane {
-            case .terminals:
-                terminalList
-            case .files:
-                FileExplorerView(
-                    tabManager: tabManager,
-                    store: store,
-                    onSpawnTerminal: onSpawnTerminalBesideSelection,
-                    onOpenInEditor: onOpenInEditor,
-                    editorCenter: editorCenter
-                )
-            case .git:
-                GitPanelView(
-                    tabManager: tabManager,
-                    editorCenter: editorCenter,
-                    onSpawnTerminal: onSpawnTerminalBesideSelection,
-                    onOpenInEditor: onOpenInEditor,
-                    onOpenDiff: onOpenDiff,
-                    onOpenBranchDiff: onOpenBranchDiff
-                )
-            case .worktrees:
-                WorktreePanelView(
-                    tabManager: tabManager,
-                    editorCenter: editorCenter,
-                    /// The panel follows one terminal, so that terminal's
-                    /// group is where a worktree opened from here belongs.
-                    onNewTerminal: { path in
-                        layout.onNewWorktreeTab(path, selectedGroupId)
-                    },
-                    onNewAgentTab: { path, agent in
-                        layout.onNewWorktreeAgentTab(path, agent, selectedGroupId)
-                    }
-                )
+            VStack(spacing: 0) {
+                if enabledPanes.count > 1, tabBarPlacement == .top {
+                    SidebarPaneTabBar(selection: $layout.selectedPane, panes: enabledPanes)
+                }
+
+                paneContent
             }
+        }
+    }
+
+    @ViewBuilder
+    private var paneContent: some View {
+        switch visiblePane {
+        case .terminals:
+            terminalList
+        case .files:
+            FileExplorerView(
+                tabManager: tabManager,
+                store: store,
+                onSpawnTerminal: onSpawnTerminalBesideSelection,
+                onOpenInEditor: onOpenInEditor,
+                editorCenter: editorCenter
+            )
+        case .git:
+            GitPanelView(
+                tabManager: tabManager,
+                editorCenter: editorCenter,
+                onSpawnTerminal: onSpawnTerminalBesideSelection,
+                onOpenInEditor: onOpenInEditor,
+                onOpenDiff: onOpenDiff,
+                onOpenBranchDiff: onOpenBranchDiff
+            )
+        case .worktrees:
+            WorktreePanelView(
+                tabManager: tabManager,
+                editorCenter: editorCenter,
+                /// The panel follows one terminal, so that terminal's
+                /// group is where a worktree opened from here belongs.
+                onNewTerminal: { path in
+                    layout.onNewWorktreeTab(path, selectedGroupId)
+                },
+                onNewAgentTab: { path, agent in
+                    layout.onNewWorktreeAgentTab(path, agent, selectedGroupId)
+                }
+            )
+        case .extensions:
+            ExtensionsPanelView()
         }
     }
 
@@ -344,9 +356,7 @@ struct SidebarTitlebarChrome: View {
 
     /// Mirrors `SidebarView`'s own fallback: a panel switched off in
     /// settings must not leave its buttons behind in the titlebar.
-    @AppStorage("SidebarShowFilesPane") private var showFilesPane = true
-    @AppStorage("SidebarShowGitPane") private var showGitPane = true
-    @AppStorage("SidebarShowWorktreesPane") private var showWorktreesPane = true
+    @ObservedObject private var visibility: SidebarPaneVisibility = .shared
     @AppStorage(AgentButtonDefaults.key(.chrome, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage(AgentButtonDefaults.key(.chrome, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
     @AppStorage(AgentButtonDefaults.key(.chrome, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
@@ -376,12 +386,7 @@ struct SidebarTitlebarChrome: View {
     }
 
     private var visiblePane: SidebarPane {
-        switch layout.selectedPane {
-        case .files where !showFilesPane: return .terminals
-        case .git where !showGitPane: return .terminals
-        case .worktrees where !showWorktreesPane: return .terminals
-        default: return layout.selectedPane
-        }
+        visibility.isEnabled(layout.selectedPane) ? layout.selectedPane : .terminals
     }
 
     var body: some View {
@@ -483,7 +488,7 @@ struct SidebarTitlebarChrome: View {
                     PiIcon(size: 12)
                 }
             }
-            if showWorktreesPane {
+            if visibility.isEnabled(.worktrees) {
                 WorktreeEntryButton(
                     entry: .chrome,
                     isEnabled: showWorktree,
@@ -533,6 +538,7 @@ struct SidebarTitlebarChrome: View {
                 case .files: FileExplorerRefresh.shared.request()
                 case .git: GitPanelRefresh.shared.request()
                 case .worktrees: WorktreePanelRefresh.shared.request()
+                case .extensions: Task { await ExtensionStore.shared.refresh() }
                 case .terminals: break
                 }
             }

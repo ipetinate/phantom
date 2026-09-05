@@ -4,12 +4,12 @@ import AppKit
 /// Asks whether a contributed program — a language server, or a formatter —
 /// may be launched.
 ///
-/// Modelled on `UntrustedURLAlert`, down to the details that look cosmetic
-/// and are not: `NSAlert` with a warning icon, the thing being approved in a
-/// monospaced, selectable, **non-editable** accessory view rather than in
-/// the prose, a sheet on the key window with a modal fallback when there
-/// isn't one, and **refusal as the default action** — the safe answer is the
-/// one that happens when somebody hits Return without reading.
+/// Shown through `ConfirmationPrompt`, and it keeps the details that look
+/// cosmetic and are not: a warning icon, the thing being approved in
+/// monospaced, selectable rows rather than in the prose, a sheet on the key
+/// window with a modal fallback when there isn't one, and **refusal as the
+/// default action** — the safe answer is the one that happens when somebody
+/// hits Return without reading.
 ///
 /// Every manifest-supplied string here goes through
 /// `UntrustedURL.escapingUnsafeScalars`. That is not hygiene. Without it the
@@ -73,39 +73,35 @@ enum LanguageTrustAlert {
     /// without which remembering the answer would not be defensible — an
     /// answer the user cannot tell the scope of is not consent.
     static func informativeText(for request: Request) -> String {
-        var lines: [String] = []
+        [consequenceText(for: request), changeText(for: request.change), rememberText()]
+            .compactMap { $0 }
+            .joined(separator: "\n\n")
+    }
 
+    static func consequenceText(for request: Request) -> String {
         let publisher = request.publisher.isEmpty
             ? "an unidentified publisher"
             : "\u{201c}\(escaped(request.publisher))\u{201d}"
+        let exposure = "it runs as you, with access to your files, your keychain and the network."
         switch request.role {
         case .languageServer:
-            lines.append("""
+            return """
             This extension, from \(publisher), wants to start a language server \
-            for \(escaped(request.languageName)).
-            """)
+            for \(escaped(request.languageName)) \u{2014} \(exposure)
+            """
         case .formatter(let tool):
-            lines.append("""
+            return """
             This extension, from \(publisher), wants to run \(escaped(tool)) to \
-            format \(escaped(request.languageName)) files.
-            """)
+            format \(escaped(request.languageName)) files \u{2014} \(exposure)
+            """
         }
+    }
 
-        lines.append("""
-        The program below runs as you, with access to your files, your \
-        keychain and the network. Phantom does not contain it once it starts.
-        """)
-
-        if let change = changeText(for: request.change) { lines.append(change) }
-
-        lines.append("""
-        Phantom remembers this answer and asks again if the extension's \
-        manifest changes, if it asks for a different command, or if either \
-        moves. It does not ask again when the program itself is updated. \
-        You can change your answer in Settings.
-        """)
-
-        return lines.joined(separator: "\n\n")
+    static func rememberText() -> String {
+        """
+        Phantom remembers this answer and asks again if the manifest, the \
+        command or its path changes. You can change it in Settings.
+        """
     }
 
     static func changeText(for change: LanguageTrust.Change) -> String? {
@@ -123,20 +119,42 @@ enum LanguageTrustAlert {
         }
     }
 
-    /// The monospaced block: what runs, where it is, and which file asked.
-    static func detailText(for request: Request) -> String {
+    static func detailRows(for request: Request) -> [ConfirmationPrompt.Detail] {
         let invocation = ([request.command] + request.arguments)
             .map(escaped)
             .joined(separator: " ")
 
-        var lines = ["Command:   \(invocation)"]
-        lines.append("Resolves:  \(escaped(request.resolvedPath))")
-        lines.append("Manifest:  \(escaped(request.manifestPath))")
-        lines.append("Extension: \(escaped(request.extensionID))")
+        var rows = [
+            ConfirmationPrompt.Detail(
+                label: "Publisher",
+                value: request.publisher.isEmpty ? "Unidentified" : escaped(request.publisher)
+            ),
+            ConfirmationPrompt.Detail(label: "Command", value: invocation),
+            ConfirmationPrompt.Detail(label: "Resolves to", value: escaped(request.resolvedPath)),
+            ConfirmationPrompt.Detail(label: "Manifest", value: escaped(request.manifestPath)),
+            ConfirmationPrompt.Detail(label: "Extension", value: escaped(request.extensionID)),
+        ]
         if !request.extensionVersion.isEmpty {
-            lines.append("Version:   \(escaped(request.extensionVersion))")
+            rows.append(.init(label: "Version", value: escaped(request.extensionVersion)))
         }
-        return lines.joined(separator: "\n")
+        return rows
+    }
+
+    /// The monospaced block: what runs, where it is, and which file asked.
+    static func detailText(for request: Request) -> String {
+        prompt(for: request).detailText
+    }
+
+    static func prompt(for request: Request) -> ConfirmationPrompt {
+        ConfirmationPrompt(
+            title: messageText(for: request),
+            consequence: consequenceText(for: request),
+            change: changeText(for: request.change),
+            details: detailRows(for: request),
+            primary: .init(title: confirmButtonTitle(for: request)),
+            secondary: .init(title: "Don't Run", isDefault: true),
+            remember: rememberText()
+        )
     }
 
     /// The one escape used for every string in this file.
@@ -160,53 +178,13 @@ enum LanguageTrustAlert {
 
     /// Shows the prompt.
     ///
-    /// The first button added is the default one, and refusing is
-    /// deliberately it — the same choice `UntrustedURLAlert` makes for
-    /// Cancel, and for the same reason: the safe answer has to be the one
-    /// that happens when Return is pressed without reading.
+    /// Refusing is deliberately the default action — the same choice
+    /// `UntrustedURLAlert` makes for Cancel, and for the same reason: the
+    /// safe answer has to be the one that happens when Return is pressed
+    /// without reading.
     @MainActor
     static func present(_ request: Request, completion: @escaping (Bool) -> Void) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.icon = NSImage(named: NSImage.cautionName)
-        alert.messageText = messageText(for: request)
-        alert.informativeText = informativeText(for: request)
-        alert.accessoryView = detailView(detailText(for: request))
-
-        alert.addButton(withTitle: "Don't Run")
-        alert.addButton(withTitle: confirmButtonTitle(for: request))
-
-        let handle: (NSApplication.ModalResponse) -> Void = { response in
-            completion(response == .alertSecondButtonReturn)
-        }
-
-        if let window = NSApp.keyWindow {
-            alert.beginSheetModal(for: window, completionHandler: handle)
-        } else {
-            handle(alert.runModal())
-        }
-    }
-
-    private static func detailView(_ text: String) -> NSView {
-        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 110))
-        scrollView.borderType = .bezelBorder
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-
-        let textView = NSTextView(frame: scrollView.contentView.bounds)
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.isRichText = false
-        textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        textView.textContainerInset = NSSize(width: 6, height: 6)
-        textView.string = text
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.containerSize = NSSize(
-            width: scrollView.contentSize.width,
-            height: .greatestFiniteMagnitude
-        )
-        scrollView.documentView = textView
-        return scrollView
+        ConfirmationPrompt.present(prompt(for: request), on: NSApp.keyWindow, completion: completion)
     }
 }
 

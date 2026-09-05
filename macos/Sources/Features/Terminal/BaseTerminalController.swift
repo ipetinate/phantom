@@ -1304,20 +1304,29 @@ class BaseTerminalController: NSWindowController,
         DispatchQueue.main.async {
             self.syncFocusToSurfaceTree()
         }
+
+        syncSurfaceTreeOcclusionState()
     }
 
     func windowDidResignKey(_ notification: Notification) {
         // Becoming/losing key means we have to notify our surface(s) that we have focus
         // so things like cursors blink, pty events are sent, etc.
         self.syncFocusToSurfaceTree()
+        syncSurfaceTreeOcclusionState()
     }
 
     func windowDidChangeOcclusionState(_ notification: Notification) {
         syncSurfaceTreeOcclusionState()
     }
 
+    static func surfaceTreeIsVisible(occlusionVisible: Bool, isKeyWindow: Bool) -> Bool {
+        occlusionVisible || isKeyWindow
+    }
+
     private func syncSurfaceTreeOcclusionState() {
-        let visible = self.window?.occlusionState.contains(.visible) ?? false
+        let visible = Self.surfaceTreeIsVisible(
+            occlusionVisible: window?.occlusionState.contains(.visible) ?? false,
+            isKeyWindow: window?.isKeyWindow ?? false)
         for view in surfaceTree {
             if let surface = view.surface, view.isWindowVisible != visible {
                 ghostty_surface_set_occlusion(surface, visible)

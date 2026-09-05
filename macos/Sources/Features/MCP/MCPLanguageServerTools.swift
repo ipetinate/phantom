@@ -49,8 +49,9 @@ enum MCPLanguageServerTools {
                     """,
                 schema: MCPSchema.object([
                     "server": MCPSchema.string(
-                        "The server's name or command, as list_language_servers "
-                        + "reported it."),
+                        "The server's name, command or language id, as "
+                        + "list_language_servers reported it — built-in or contributed "
+                        + "by an extension."),
                 ], required: ["server"]))
         ) { context, answer in
             guard let named = context.string("server") else {
@@ -113,8 +114,9 @@ enum MCPLanguageServerTools {
                     """,
                 schema: MCPSchema.object([
                     "server": MCPSchema.string(
-                        "The server's name or command, as list_language_servers "
-                        + "reported it."),
+                        "The server's name, command or language id, as "
+                        + "list_language_servers reported it — built-in or contributed "
+                        + "by an extension."),
                     "initialization_options": MCPSchema.string(
                         "The JSON object to send at startup. Must be an object. Pass an "
                         + "empty string to go back to this app's own default."),
@@ -232,22 +234,56 @@ enum MCPLanguageServerTools {
 
     // MARK: Naming a server
 
-    /// A server by the name a caller would have, which is either the one shown
-    /// or the command underneath it.
-    ///
-    /// Both, because `list_language_servers` reports both and a model given two
-    /// strings will use either. Matched case-insensitively on the name: it is
-    /// prose in the interface, and refusing "typescript (npm)" for its capital
-    /// letters would be a refusal about nothing.
-    static func server(_ named: String) -> LSPServerDefinition? {
-        let wanted = named.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return LSPServerRegistry.distinctServers.first {
-            $0.displayName.lowercased() == wanted || $0.command.lowercased() == wanted
+    static var knownServers: [LSPServerDefinition] {
+        knownServers(
+            builtIn: LSPServerRegistry.distinctServers,
+            contributed: LanguageResolver.shared.catalog.contributed.compactMap(\.serverDefinition)
+        )
+    }
+
+    static func knownServers(
+        builtIn: [LSPServerDefinition],
+        contributed: [LSPServerDefinition]
+    ) -> [LSPServerDefinition] {
+        var seen: Set<String> = []
+        return (builtIn + contributed).filter { seen.insert($0.command).inserted }
+    }
+
+    static func origin(of definition: LSPServerDefinition) -> String {
+        switch definition.origin {
+        case .builtIn: return "built-in"
+        case .manifest(let provenance): return "extension:\(provenance.extensionID)"
         }
     }
 
+    /// A server by the name a caller would have, which is either the one shown,
+    /// the command underneath it, or the language id it serves.
+    ///
+    /// All three, because `list_language_servers` reports all three and a model
+    /// given them will use any. Matched case-insensitively on the name: it is
+    /// prose in the interface, and refusing "typescript (npm)" for its capital
+    /// letters would be a refusal about nothing. The language id is tried last,
+    /// so a name that is also some other server's language id still means the
+    /// name.
+    static func server(_ named: String) -> LSPServerDefinition? {
+        server(named, among: knownServers)
+    }
+
+    static func server(
+        _ named: String,
+        among servers: [LSPServerDefinition]
+    ) -> LSPServerDefinition? {
+        let wanted = named.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return servers.first { $0.displayName.lowercased() == wanted || $0.command.lowercased() == wanted }
+            ?? servers.first { $0.languageID.lowercased() == wanted }
+    }
+
     static func unknownServer(_ named: String) -> String {
-        let names = LSPServerRegistry.distinctServers.map(\.displayName).joined(separator: ", ")
+        unknownServer(named, among: knownServers)
+    }
+
+    static func unknownServer(_ named: String, among servers: [LSPServerDefinition]) -> String {
+        let names = servers.map(\.displayName).joined(separator: ", ")
         return "“\(named)” is not a language server this app knows. Call "
             + "list_language_servers for what there is. Right now: \(names)."
     }
