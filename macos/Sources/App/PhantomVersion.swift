@@ -55,5 +55,5 @@ enum Phantom {
     /// so this has to be updated by hand when rebasing onto a newer
     /// Ghostty tip; it is not going to drift quietly, since a stale value
     /// only shows up here, not as a build failure.
-    static let upstreamCoreVersion = "1.3.6-dev"
+    static let upstreamCoreVersion = "1.3.2-dev"
 }
