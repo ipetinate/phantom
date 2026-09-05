@@ -123,6 +123,17 @@ struct LanguageCatalog: Equatable {
         var id: String { listIdentity + "#iconTheme:" + iconTheme.name }
     }
 
+    struct ContributedAgent: Equatable, Sendable, Identifiable {
+        let listIdentity: String
+        let extensionName: String
+        let descriptor: AgentDescriptor
+        let resolution: Resolution
+
+        var id: String { listIdentity + "#agent:" + descriptor.id }
+
+        var isActive: Bool { resolution == .active }
+    }
+
     enum Resolution: Equatable, Sendable {
         case active
 
@@ -145,14 +156,24 @@ struct LanguageCatalog: Equatable {
     let formatters: [ContributedFormatter]
     let themes: [ContributedTheme]
     let iconThemes: [ContributedIconTheme]
+    let agents: [ContributedAgent]
 
     static let empty = LanguageCatalog(
         entries: [],
         contributed: [],
         formatters: [],
         themes: [],
-        iconThemes: []
+        iconThemes: [],
+        agents: []
     )
+
+    var activeAgentDescriptors: [AgentDescriptor] {
+        agents.filter(\.isActive).map(\.descriptor)
+    }
+
+    func agent(forID agentID: String) -> ContributedAgent? {
+        agents.first { $0.isActive && $0.descriptor.id == agentID }
+    }
 
     // MARK: Lookup
 
@@ -330,7 +351,8 @@ struct LanguageCatalog: Equatable {
             contributed: contributed,
             formatters: resolveFormatters(manifests: manifests),
             themes: resolveThemes(manifests: manifests),
-            iconThemes: resolveIconThemes(manifests: manifests)
+            iconThemes: resolveIconThemes(manifests: manifests),
+            agents: resolveAgents(manifests: manifests)
         )
     }
 
@@ -402,6 +424,28 @@ struct LanguageCatalog: Equatable {
                 formatter: formatter,
                 resolution: resolution,
                 manifestURL: manifest.manifestURL
+            )
+        }
+    }
+
+    static func resolveAgents(manifests: [LanguageManifest]) -> [ContributedAgent] {
+        var claimed: [String: String] = [:]
+        return ordered(\.agents, in: manifests, by: \.id).map { manifest, descriptor in
+            let claim = "agent:" + descriptor.id
+            let resolution: Resolution
+            if let owner = claimed[claim] {
+                resolution = .shadowed(by: .extensionID(owner), claim: claim)
+            } else if AgentRegistry.builtInIDs.contains(descriptor.id) {
+                resolution = .shadowed(by: .builtIn, claim: claim)
+            } else {
+                resolution = .active
+                claimed[claim] = manifest.listIdentity
+            }
+            return ContributedAgent(
+                listIdentity: manifest.listIdentity,
+                extensionName: manifest.name,
+                descriptor: descriptor,
+                resolution: resolution
             )
         }
     }

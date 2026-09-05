@@ -38,6 +38,7 @@ final class LanguageResolver: ObservableObject {
             user: GuiConfigStore.shared.extensionsDirURL,
             promotions: LanguagePromotionStore.all
         )
+        AgentRegistry.shared.setExtensionAgents(catalog.activeAgentDescriptors)
     }
 
     // MARK: Resolution

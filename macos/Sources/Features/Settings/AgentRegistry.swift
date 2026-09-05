@@ -10,6 +10,7 @@ final class AgentRegistry: @unchecked Sendable {
     static let piHome: ConfigPath = "~/.pi/agent"
 
     static let builtIn: [AgentDescriptor] = [claude, codex, opencode, antigravity, kimi, pi]
+    static let builtInIDs: Set<String> = Set(builtIn.map(\.id))
 
     private let lock = NSLock()
     private var extensionAgents: [AgentDescriptor] = []
