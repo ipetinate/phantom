@@ -1,6 +1,47 @@
+import AppKit
 import SwiftUI
 
+enum ExtensionListFilter {
+    struct Sections: Equatable {
+        let entries: [ExtensionIndex.Entry]
+        let orphans: [InstalledExtension]
+
+        var isEmpty: Bool { entries.isEmpty && orphans.isEmpty }
+    }
+
+    static func sections(
+        entries: [ExtensionIndex.Entry],
+        installed: [InstalledExtension],
+        query: String
+    ) -> Sections {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let listed = Set(entries.map(\.id))
+        return Sections(
+            entries: byName(entries.filter { matches(needle, in: fields(of: $0)) }, name: \.name),
+            orphans: byName(
+                installed.filter { !listed.contains($0.id) && matches(needle, in: [$0.name, $0.id]) },
+                name: \.name)
+        )
+    }
+
+    private static func fields(of entry: ExtensionIndex.Entry) -> [String] {
+        [entry.name, entry.id, entry.publisher, entry.summary] + entry.languages
+    }
+
+    private static func matches(_ needle: String, in fields: [String]) -> Bool {
+        needle.isEmpty || fields.contains { $0.lowercased().contains(needle) }
+    }
+
+    private static func byName<Item>(_ items: [Item], name: KeyPath<Item, String>) -> [Item] {
+        items.sorted {
+            $0[keyPath: name].localizedStandardCompare($1[keyPath: name]) == .orderedAscending
+        }
+    }
+}
+
 struct ExtensionsSettingsView: View {
+    static let registryURL = URL(string: "https://github.com/ipetinate/phantom-extensions")!
+
     @ObservedObject private var store = ExtensionStore.shared
     @ObservedObject private var navigation = SettingsNavigation.shared
 
@@ -19,6 +60,7 @@ struct ExtensionsSettingsView: View {
             }
 
             registryContent
+            folderSection
         }
         .formStyle(.grouped)
         .navigationTitle("Extensions")
@@ -105,16 +147,16 @@ struct ExtensionsSettingsView: View {
 
     @ViewBuilder
     private func listSections(_ index: ExtensionIndex) -> some View {
-        let entries = visibleEntries(index)
-        let orphans = visibleOrphans(index)
+        let sections = ExtensionListFilter.sections(
+            entries: index.extensions, installed: store.installed, query: searchText)
 
         if index.extensions.isEmpty {
             Section { message("The registry has no extensions yet.") }
-        } else if entries.isEmpty, orphans.isEmpty {
+        } else if sections.isEmpty {
             Section { message("No extension matches.") }
-        } else if !entries.isEmpty {
+        } else if !sections.entries.isEmpty {
             Section {
-                ForEach(entries) { entry in
+                ForEach(sections.entries) { entry in
                     entryRow(entry)
                 }
             } header: {
@@ -126,9 +168,9 @@ struct ExtensionsSettingsView: View {
             }
         }
 
-        if !orphans.isEmpty {
+        if !sections.orphans.isEmpty {
             Section {
-                ForEach(orphans) { installed in
+                ForEach(sections.orphans) { installed in
                     orphanRow(installed)
                 }
             } header: {
@@ -146,29 +188,40 @@ struct ExtensionsSettingsView: View {
             .foregroundStyle(.secondary)
     }
 
-    private func visibleEntries(_ index: ExtensionIndex) -> [ExtensionIndex.Entry] {
-        let query = needle
-        return index.extensions
-            .filter { entry in
-                query.isEmpty || ([entry.name, entry.id, entry.publisher, entry.summary] + entry.languages)
-                    .contains { $0.lowercased().contains(query) }
+    // MARK: Folder
+
+    private var folderSection: some View {
+        Section {
+            LabeledContent("Extensions Folder") {
+                HStack(spacing: 8) {
+                    Text(verbatim: folderPath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                    Button("Open Folder", action: openFolder)
+                }
             }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            Link(destination: Self.registryURL) {
+                Label("Registry", systemImage: "arrow.up.right.square")
+            }
+            .buttonStyle(.link)
+        } footer: {
+            Text("Extensions are installed into this folder, one directory per extension. The registry is a GitHub repository; its index lists every extension above and the zip each one installs from.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
-    private func visibleOrphans(_ index: ExtensionIndex) -> [InstalledExtension] {
-        let query = needle
-        let listed = Set(index.extensions.map(\.id))
-        return store.installed
-            .filter { !listed.contains($0.id) }
-            .filter { installed in
-                query.isEmpty || [installed.name, installed.id].contains { $0.lowercased().contains(query) }
-            }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    private var folderPath: String {
+        (GuiConfigStore.shared.extensionsDirURL.path as NSString).abbreviatingWithTildeInPath
     }
 
-    private var needle: String {
-        searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    private func openFolder() {
+        let url = GuiConfigStore.shared.extensionsDirURL
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(url)
     }
 
     // MARK: Rows
@@ -181,6 +234,8 @@ struct ExtensionsSettingsView: View {
                 stateBadge(state)
                 if let activity = store.activity[entry.id] {
                     activityView(activity)
+                } else {
+                    actionButton(for: entry, state: state)
                 }
             }
         } label: {
@@ -217,6 +272,10 @@ struct ExtensionsSettingsView: View {
         LabeledContent {
             if let activity = store.activity[installed.id] {
                 activityView(activity)
+            } else {
+                Button("Remove") {
+                    Task { await store.remove(id: installed.id) }
+                }
             }
         } label: {
             VStack(alignment: .leading, spacing: 4) {
@@ -234,6 +293,24 @@ struct ExtensionsSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(for entry: ExtensionIndex.Entry, state: ExtensionState) -> some View {
+        switch state {
+        case .notInstalled:
+            Button("Install") {
+                Task { await store.install(entry) }
+            }
+        case .installed:
+            Button("Remove") {
+                Task { await store.remove(id: entry.id) }
+            }
+        case .updateAvailable:
+            Button("Update") {
+                Task { await store.install(entry) }
             }
         }
     }
