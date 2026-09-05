@@ -79,6 +79,67 @@ struct MCPLanguageServerToolsTests {
         #expect(MCPLanguageServerTools.server("not-a-server-anybody-has") == nil)
     }
 
+    private var contributedLua: LSPServerDefinition {
+        LSPServerDefinition(
+            languageID: "lua",
+            displayName: "Lua (acme)",
+            command: "lua-language-server",
+            arguments: ["--stdio"],
+            installHint: "brew install lua-language-server",
+            origin: .manifest(ExtensionProvenance(
+                extensionID: "acme.lua",
+                digest: "0",
+                manifestPath: "/Users/x/.config/phantom/extensions/acme.lua/extension.json",
+                scope: .user
+            ))
+        )
+    }
+
+    @Test func aContributedServerIsFoundByNameCommandOrLanguageID() throws {
+        let builtIn = try #require(LSPServerRegistry.distinctServers.first)
+        let servers = MCPLanguageServerTools.knownServers(
+            builtIn: [builtIn], contributed: [contributedLua]
+        )
+
+        #expect(MCPLanguageServerTools.server("Lua (acme)", among: servers) == contributedLua)
+        #expect(MCPLanguageServerTools.server("lua-language-server", among: servers) == contributedLua)
+        #expect(MCPLanguageServerTools.server("LUA", among: servers) == contributedLua)
+        #expect(MCPLanguageServerTools.server(builtIn.languageID, among: servers) == builtIn)
+    }
+
+    @Test func theNameWinsOverALanguageIDThatSpellsTheSame() {
+        let named = LSPServerDefinition(
+            languageID: "python", displayName: "lua", command: "pyright-langserver",
+            arguments: [], installHint: ""
+        )
+        let servers = MCPLanguageServerTools.knownServers(builtIn: [named], contributed: [contributedLua])
+
+        #expect(MCPLanguageServerTools.server("lua", among: servers) == named)
+    }
+
+    @Test func oneCommandIsListedOnce() {
+        let twin = LSPServerDefinition(
+            languageID: "lua", displayName: "Lua", command: "lua-language-server",
+            arguments: [], installHint: ""
+        )
+        let servers = MCPLanguageServerTools.knownServers(builtIn: [twin], contributed: [contributedLua])
+
+        #expect(servers == [twin])
+    }
+
+    @Test func theListingSaysWhereEachServerCameFrom() throws {
+        let builtIn = try #require(LSPServerRegistry.distinctServers.first)
+
+        #expect(MCPLanguageServerTools.origin(of: builtIn) == "built-in")
+        #expect(MCPLanguageServerTools.origin(of: contributedLua) == "extension:acme.lua")
+    }
+
+    @Test func theRefusalNamesContributedServersToo() {
+        let reason = MCPLanguageServerTools.unknownServer("nonsense", among: [contributedLua])
+
+        #expect(reason.contains("Lua (acme)"))
+    }
+
     /// A refusal that only says "no such server" leaves the caller guessing at
     /// spellings, so it lists what there is.
     @Test func theRefusalNamesTheServersThatExist() throws {
