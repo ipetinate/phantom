@@ -77,6 +77,52 @@ struct LanguageCatalog: Equatable {
         }
     }
 
+    struct ContributedFormatter: Equatable, Identifiable {
+        let provenance: ExtensionProvenance
+        let listIdentity: String
+        let extensionName: String
+        let extensionVersion: String
+        let publisher: String
+        let formatter: FormatterContribution
+        let resolution: Resolution
+        let manifestURL: URL
+
+        var id: String { listIdentity + "#formatter:" + formatter.id }
+
+        var isActive: Bool { resolution == .active }
+
+        var externalFormatter: ExternalFormatter? {
+            guard isActive else { return nil }
+            return ExternalFormatter(
+                id: id,
+                languageName: extensionName,
+                displayName: formatter.name,
+                command: formatter.command,
+                arguments: formatter.arguments,
+                extensions: Set(formatter.fileExtensions),
+                installHint: formatter.installHint,
+                note: nil,
+                provenance: provenance
+            )
+        }
+    }
+
+    struct ContributedTheme: Equatable, Sendable, Identifiable {
+        let listIdentity: String
+        let extensionName: String
+        let theme: ThemeContribution
+
+        var id: String { listIdentity + "#theme:" + theme.name }
+    }
+
+    struct ContributedIconTheme: Equatable, Sendable, Identifiable {
+        let listIdentity: String
+        let extensionName: String
+        let iconTheme: IconThemeContribution
+
+        var id: String { listIdentity + "#iconTheme:" + iconTheme.name }
+    }
+
     enum Resolution: Equatable, Sendable {
         case active
 
@@ -96,8 +142,17 @@ struct LanguageCatalog: Equatable {
 
     let entries: [Entry]
     let contributed: [Contributed]
+    let formatters: [ContributedFormatter]
+    let themes: [ContributedTheme]
+    let iconThemes: [ContributedIconTheme]
 
-    static let empty = LanguageCatalog(entries: [], contributed: [])
+    static let empty = LanguageCatalog(
+        entries: [],
+        contributed: [],
+        formatters: [],
+        themes: [],
+        iconThemes: []
+    )
 
     // MARK: Lookup
 
@@ -126,6 +181,12 @@ struct LanguageCatalog: Equatable {
     func contribution(forLanguageID languageID: String) -> Contributed? {
         let lowered = languageID.lowercased()
         return contributed.first { $0.isActive && $0.language.languageID == lowered }
+    }
+
+    func formatter(forFileName fileName: String) -> ContributedFormatter? {
+        let ext = (fileName.lowercased() as NSString).pathExtension
+        guard !ext.isEmpty else { return nil }
+        return formatters.first { $0.isActive && $0.formatter.fileExtensions.contains(ext) }
     }
 
     // MARK: Loading
@@ -264,7 +325,85 @@ struct LanguageCatalog: Equatable {
             .map(Entry.init(manifest:))
             .sorted { $0.id < $1.id }
 
-        return LanguageCatalog(entries: entries, contributed: contributed)
+        return LanguageCatalog(
+            entries: entries,
+            contributed: contributed,
+            formatters: resolveFormatters(manifests: manifests),
+            themes: resolveThemes(manifests: manifests),
+            iconThemes: resolveIconThemes(manifests: manifests)
+        )
+    }
+
+    private static func ordered<Item>(
+        _ items: (LanguageManifest) -> [Item],
+        in manifests: [LanguageManifest],
+        by key: @escaping (Item) -> String
+    ) -> [(manifest: LanguageManifest, item: Item)] {
+        manifests
+            .flatMap { manifest in items(manifest).map { (manifest: manifest, item: $0) } }
+            .sorted { lhs, rhs in
+                let lhsRank = rank(scope: lhs.manifest.scope, promoted: false)
+                let rhsRank = rank(scope: rhs.manifest.scope, promoted: false)
+                if lhsRank != rhsRank { return lhsRank < rhsRank }
+                let lhsDirectory = lhs.manifest.root.lastPathComponent
+                let rhsDirectory = rhs.manifest.root.lastPathComponent
+                if lhsDirectory != rhsDirectory { return lhsDirectory < rhsDirectory }
+                return key(lhs.item) < key(rhs.item)
+            }
+    }
+
+    static func resolveThemes(manifests: [LanguageManifest]) -> [ContributedTheme] {
+        var seen: Set<String> = []
+        return ordered(\.themes, in: manifests, by: \.name).compactMap { manifest, theme in
+            guard seen.insert(theme.name).inserted else { return nil }
+            return ContributedTheme(
+                listIdentity: manifest.listIdentity,
+                extensionName: manifest.name,
+                theme: theme
+            )
+        }
+    }
+
+    static func resolveIconThemes(manifests: [LanguageManifest]) -> [ContributedIconTheme] {
+        var seen: Set<String> = []
+        return ordered(\.iconThemes, in: manifests, by: \.name).compactMap { manifest, iconTheme in
+            guard seen.insert(iconTheme.name).inserted else { return nil }
+            return ContributedIconTheme(
+                listIdentity: manifest.listIdentity,
+                extensionName: manifest.name,
+                iconTheme: iconTheme
+            )
+        }
+    }
+
+    static func resolveFormatters(manifests: [LanguageManifest]) -> [ContributedFormatter] {
+        var claimed: [String: String] = [:]
+        return ordered(\.formatters, in: manifests, by: \.id).map { manifest, formatter in
+            var resolution = Resolution.active
+            for ext in formatter.fileExtensions {
+                if let owner = claimed[ext] {
+                    resolution = .shadowed(by: .extensionID(owner), claim: "ext:" + ext)
+                    break
+                }
+                if ExternalFormatterRegistry.formatter(forFileNamed: "f." + ext) != nil {
+                    resolution = .shadowed(by: .builtIn, claim: "ext:" + ext)
+                    break
+                }
+            }
+            if resolution == .active {
+                for ext in formatter.fileExtensions { claimed[ext] = manifest.listIdentity }
+            }
+            return ContributedFormatter(
+                provenance: manifest.provenance,
+                listIdentity: manifest.listIdentity,
+                extensionName: manifest.name,
+                extensionVersion: manifest.version,
+                publisher: manifest.publisher,
+                formatter: formatter,
+                resolution: resolution,
+                manifestURL: manifest.manifestURL
+            )
+        }
     }
 
     /// Whether this build already owns a claim.

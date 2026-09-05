@@ -1,7 +1,8 @@
 #if os(macOS)
 import AppKit
 
-/// Asks whether a contributed language server may be launched.
+/// Asks whether a contributed program — a language server, or a formatter —
+/// may be launched.
 ///
 /// Modelled on `UntrustedURLAlert`, down to the details that look cosmetic
 /// and are not: `NSAlert` with a warning icon, the thing being approved in a
@@ -37,12 +38,31 @@ enum LanguageTrustAlert {
 
         let manifestPath: String
         let change: LanguageTrust.Change
+
+        var role: Role = .languageServer
+
+        enum Role: Equatable {
+            case languageServer
+            case formatter(tool: String)
+        }
     }
 
     // MARK: Text
 
     static func messageText(for request: Request) -> String {
-        "Run a Language Server from \u{201c}\(escaped(request.extensionName))\u{201d}?"
+        let program: String
+        switch request.role {
+        case .languageServer: program = "a Language Server"
+        case .formatter: program = "a Formatter"
+        }
+        return "Run \(program) from \u{201c}\(escaped(request.extensionName))\u{201d}?"
+    }
+
+    static func confirmButtonTitle(for request: Request) -> String {
+        switch request.role {
+        case .languageServer: return "Run Language Server"
+        case .formatter: return "Run Formatter"
+        }
     }
 
     /// The prose beside the icon.
@@ -58,10 +78,18 @@ enum LanguageTrustAlert {
         let publisher = request.publisher.isEmpty
             ? "an unidentified publisher"
             : "\u{201c}\(escaped(request.publisher))\u{201d}"
-        lines.append("""
-        This extension, from \(publisher), wants to start a language server \
-        for \(escaped(request.languageName)).
-        """)
+        switch request.role {
+        case .languageServer:
+            lines.append("""
+            This extension, from \(publisher), wants to start a language server \
+            for \(escaped(request.languageName)).
+            """)
+        case .formatter(let tool):
+            lines.append("""
+            This extension, from \(publisher), wants to run \(escaped(tool)) to \
+            format \(escaped(request.languageName)) files.
+            """)
+        }
 
         lines.append("""
         The program below runs as you, with access to your files, your \
@@ -146,7 +174,7 @@ enum LanguageTrustAlert {
         alert.accessoryView = detailView(detailText(for: request))
 
         alert.addButton(withTitle: "Don't Run")
-        alert.addButton(withTitle: "Run Language Server")
+        alert.addButton(withTitle: confirmButtonTitle(for: request))
 
         let handle: (NSApplication.ModalResponse) -> Void = { response in
             completion(response == .alertSecondButtonReturn)
@@ -183,12 +211,14 @@ enum LanguageTrustAlert {
 }
 
 /// The gate itself: store, verdict, prompt and record in one call, so the
-/// only place that creates a language-server process has one line to add
-/// rather than a policy to reimplement.
+/// two places that create a process from a manifest's command — the
+/// language-server start and the external-formatter run — have one line to
+/// add rather than a policy to reimplement.
 ///
 /// It gates `Process.run` and nothing else. A refusal here costs the file
-/// its server; it keeps its highlighting, its comment toggling, its keywords
-/// and its buffer-word completion, because none of those needed a process.
+/// its server or its formatter; it keeps its highlighting, its comment
+/// toggling, its keywords and its buffer-word completion, because none of
+/// those needed a process.
 enum LanguageTrustGate {
     /// Whether this definition may be launched, asking the user when the
     /// answer is not already recorded.
@@ -211,10 +241,40 @@ enum LanguageTrustGate {
             resolvedPath: resolvedPath,
             workspaceRoot: workspaceRoot
         )
+        return await decide(subject, extensionID: provenance.extensionID) { change in
+            request(for: definition, subject: subject, change: change)
+        }
+    }
 
+    @MainActor
+    static func allowsRun(
+        of formatter: ExternalFormatter,
+        resolvedPath: String,
+        workspaceRoot: String?
+    ) async -> Bool {
+        guard case .manifest(let provenance) = formatter.origin else { return true }
+
+        let subject = LanguageTrust.Subject(
+            origin: formatter.origin,
+            digest: provenance.digest,
+            command: formatter.command,
+            resolvedPath: resolvedPath,
+            workspaceRoot: workspaceRoot
+        )
+        return await decide(subject, extensionID: provenance.extensionID) { change in
+            request(for: formatter, provenance: provenance, subject: subject, change: change)
+        }
+    }
+
+    @MainActor
+    private static func decide(
+        _ subject: LanguageTrust.Subject,
+        extensionID: String,
+        request: (LanguageTrust.Change) -> LanguageTrustAlert.Request
+    ) async -> Bool {
         switch LanguageTrust.verdict(
             for: subject,
-            record: LanguageTrustStore.record(for: provenance.extensionID)
+            record: LanguageTrustStore.record(for: extensionID)
         ) {
         case .allow:
             return true
@@ -223,9 +283,7 @@ enum LanguageTrustGate {
             return false
 
         case .ask(let change):
-            let approved = await LanguageTrustAlert.requestApproval(
-                request(for: definition, subject: subject, change: change)
-            )
+            let approved = await LanguageTrustAlert.requestApproval(request(change))
             LanguageTrustStore.remember(approved ? .allowed : .refused, for: subject)
             return approved
         }
@@ -257,6 +315,31 @@ enum LanguageTrustGate {
             resolvedPath: subject.resolvedPath,
             manifestPath: provenance.manifestPath,
             change: change
+        )
+    }
+
+    @MainActor
+    private static func request(
+        for formatter: ExternalFormatter,
+        provenance: ExtensionProvenance,
+        subject: LanguageTrust.Subject,
+        change: LanguageTrust.Change
+    ) -> LanguageTrustAlert.Request {
+        let contributed = LanguageResolver.shared.catalog.formatters
+            .first { $0.provenance == provenance && $0.id == formatter.id }
+
+        return LanguageTrustAlert.Request(
+            extensionName: contributed?.extensionName ?? provenance.extensionID,
+            extensionID: provenance.extensionID,
+            publisher: contributed?.publisher ?? "",
+            extensionVersion: contributed?.extensionVersion ?? "",
+            languageName: formatter.extensions.sorted().map { "." + $0 }.joined(separator: ", "),
+            command: formatter.command,
+            arguments: formatter.arguments,
+            resolvedPath: subject.resolvedPath,
+            manifestPath: provenance.manifestPath,
+            change: change,
+            role: .formatter(tool: formatter.displayName)
         )
     }
 }

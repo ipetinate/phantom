@@ -45,6 +45,7 @@ struct AppearanceSettingsView: View {
 
     private struct ThemeGroups {
         var user: [TerminalTheme] = []
+        var contributed: [TerminalTheme] = []
         var dark: [TerminalTheme] = []
         var light: [TerminalTheme] = []
     }
@@ -55,7 +56,7 @@ struct AppearanceSettingsView: View {
         let visible: [TerminalTheme]
         if search.isEmpty {
             visible = catalog.themes.filter {
-                $0.source == .user || Self.curated.contains($0.name)
+                $0.source != .builtin || Self.curated.contains($0.name)
             }
         } else {
             visible = catalog.themes.filter {
@@ -64,12 +65,17 @@ struct AppearanceSettingsView: View {
         }
 
         for theme in visible {
-            if theme.source == .user {
+            switch theme.source {
+            case .user:
                 result.user.append(theme)
-            } else if theme.background?.isLightColor == true {
-                result.light.append(theme)
-            } else {
-                result.dark.append(theme)
+            case .contributed:
+                result.contributed.append(theme)
+            case .builtin:
+                if theme.background?.isLightColor == true {
+                    result.light.append(theme)
+                } else {
+                    result.dark.append(theme)
+                }
             }
         }
         return result
@@ -176,7 +182,7 @@ struct AppearanceSettingsView: View {
         let groups = groups
 
         HStack(alignment: .top, spacing: 18) {
-            if let current = catalog.themes.first(where: { $0.name == currentTheme }) {
+            if let current = catalog.themes.first(where: store.isCurrentTheme) {
                 VStack(alignment: .leading, spacing: 8) {
                     sectionTitle("Current Theme")
                     ThemeCard(theme: current, isSelected: true) {}
@@ -187,6 +193,11 @@ struct AppearanceSettingsView: View {
 
             if !groups.user.isEmpty {
                 themeSection("Custom Themes", groups.user)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if !groups.contributed.isEmpty {
+                themeSection("Extension Themes", groups.contributed)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -235,7 +246,7 @@ struct AppearanceSettingsView: View {
                 spacing: 10
             ) {
                 ForEach(visible) { theme in
-                    ThemeCard(theme: theme, isSelected: theme.name == currentTheme) {
+                    ThemeCard(theme: theme, isSelected: store.isCurrentTheme(theme)) {
                         store.setTheme(theme)
                         store.apply(ghostty: ghostty)
                     }
@@ -767,6 +778,11 @@ private struct ThemeCard: View {
                         Image(systemName: "person.fill")
                             .font(.system(size: 8))
                             .foregroundStyle(.secondary)
+                    } else if case .contributed(let extensionName) = theme.source {
+                        Image(systemName: "puzzlepiece.extension")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                            .help("From the extension \(extensionName)")
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -1256,7 +1272,7 @@ private struct ThemeCreatorWindowView: View {
                 ghostty: ghostty,
                 store: store,
                 catalog: catalog,
-                seed: catalog.themes.first { $0.name == store.currentThemeName },
+                seed: catalog.themes.first(where: store.isCurrentTheme),
                 onSaved: onSaved
             )
             .padding(16)
@@ -1314,10 +1330,6 @@ private struct AllThemesView: View {
         _catalog = StateObject(wrappedValue: ThemeCatalog(userThemesDirs: store.themeSearchDirs))
     }
 
-    private var currentTheme: String {
-        store.currentThemeName ?? ""
-    }
-
     private var filtered: [TerminalTheme] {
         guard !search.isEmpty else { return catalog.themes }
         return catalog.themes.filter {
@@ -1327,21 +1339,28 @@ private struct AllThemesView: View {
 
     private var sections: [(title: String, themes: [TerminalTheme])] {
         var user: [TerminalTheme] = []
+        var contributed: [TerminalTheme] = []
         var dark: [TerminalTheme] = []
         var light: [TerminalTheme] = []
 
         for theme in filtered {
-            if theme.source == .user {
+            switch theme.source {
+            case .user:
                 user.append(theme)
-            } else if theme.background?.isLightColor == true {
-                light.append(theme)
-            } else {
-                dark.append(theme)
+            case .contributed:
+                contributed.append(theme)
+            case .builtin:
+                if theme.background?.isLightColor == true {
+                    light.append(theme)
+                } else {
+                    dark.append(theme)
+                }
             }
         }
 
         return [
             ("Custom Themes", user),
+            ("Extension Themes", contributed),
             ("Dark", dark),
             ("Light", light),
         ].filter { !$0.1.isEmpty }
@@ -1384,7 +1403,7 @@ private struct AllThemesView: View {
                                     ForEach(section.themes) { theme in
                                         ThemeCard(
                                             theme: theme,
-                                            isSelected: theme.name == currentTheme
+                                            isSelected: store.isCurrentTheme(theme)
                                         ) {
                                             store.setTheme(theme)
                                             store.apply(ghostty: ghostty)

@@ -20,6 +20,18 @@ struct LanguageSyntax: Equatable, Sendable {
         let close: String
     }
 
+    struct Patterns: Equatable, Sendable {
+        var string: String?
+        var number: String?
+        var type: String?
+        var function: String?
+        var attribute: String?
+
+        var isEmpty: Bool {
+            string == nil && number == nil && type == nil && function == nil && attribute == nil
+        }
+    }
+
     /// The language's identity: its `languageId` for a contribution, the
     /// enum's raw value for a built-in.
     ///
@@ -38,6 +50,8 @@ struct LanguageSyntax: Equatable, Sendable {
 
     let lineComment: String?
     let blockComment: BlockComment?
+
+    let patterns: Patterns
 
     /// Whether every field above came from the compiled-in tables.
     ///
@@ -58,6 +72,7 @@ struct LanguageSyntax: Equatable, Sendable {
         keywords: [String],
         lineComment: String?,
         blockComment: BlockComment?,
+        patterns: Patterns,
         isBuiltIn: Bool
     ) {
         self.id = id
@@ -65,6 +80,7 @@ struct LanguageSyntax: Equatable, Sendable {
         self.keywords = keywords
         self.lineComment = lineComment
         self.blockComment = blockComment
+        self.patterns = patterns
         self.isBuiltIn = isBuiltIn
     }
 
@@ -78,6 +94,7 @@ struct LanguageSyntax: Equatable, Sendable {
             blockComment: language.blockComment.map {
                 BlockComment(open: $0.open, close: $0.close)
             },
+            patterns: Patterns(),
             isBuiltIn: true
         )
     }
@@ -93,7 +110,8 @@ struct LanguageSyntax: Equatable, Sendable {
         base: CodeLanguage,
         keywords: [String],
         lineComment: String?,
-        blockComment: BlockComment?
+        blockComment: BlockComment?,
+        patterns: Patterns = Patterns()
     ) -> LanguageSyntax {
         LanguageSyntax(
             id: id,
@@ -101,6 +119,7 @@ struct LanguageSyntax: Equatable, Sendable {
             keywords: keywords,
             lineComment: lineComment,
             blockComment: blockComment,
+            patterns: patterns,
             isBuiltIn: false
         )
     }

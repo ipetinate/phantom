@@ -145,14 +145,14 @@ struct LanguageManifestTests {
           "activationEvents": ["onLanguage:elixir"],
           "contributes": {
             "languages": [{ "languageId": "elixir" }],
-            "themes": [],
+            "snippets": [],
             "commands": []
           }
         }
         """#))
 
         #expect(manifest.unrecognizedFields == [
-            "activationEvents", "contributes.commands", "contributes.themes", "engines",
+            "activationEvents", "contributes.commands", "contributes.snippets", "engines",
         ])
         #expect(manifest.languages.count == 1)
     }

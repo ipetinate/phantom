@@ -6,6 +6,15 @@ struct TerminalTheme: Identifiable, Equatable {
     enum Source: Equatable {
         case builtin
         case user
+        case contributed(extension: String)
+
+        var sortRank: Int {
+            switch self {
+            case .user: return 0
+            case .contributed: return 1
+            case .builtin: return 2
+            }
+        }
     }
 
     let name: String
@@ -20,7 +29,13 @@ struct TerminalTheme: Identifiable, Equatable {
     /// The 16 ANSI palette entries, indexed 0-15 where present.
     var palette: [Int: NSColor] = [:]
 
-    var id: String { "\(source == .builtin ? "builtin" : "user"):\(name)" }
+    var id: String {
+        switch source {
+        case .builtin: return "builtin:" + name
+        case .user: return "user:" + name
+        case .contributed(let extensionName): return "extension:" + extensionName + ":" + name
+        }
+    }
 
     /// The first 8 ANSI colors, for the preview swatch strip.
     var previewColors: [NSColor] {
@@ -28,8 +43,9 @@ struct TerminalTheme: Identifiable, Equatable {
     }
 }
 
-/// Discovers and parses themes from the app bundle and the user's
-/// config directory. Parsing happens once, off the main thread.
+/// Discovers and parses themes from the app bundle, the user's config
+/// directory, and the extensions the language catalog has installed.
+/// Parsing happens once, off the main thread.
 @MainActor
 final class ThemeCatalog: ObservableObject {
     @Published private(set) var themes: [TerminalTheme] = []
@@ -59,6 +75,7 @@ final class ThemeCatalog: ObservableObject {
         isLoading = true
         let builtinDir = Self.builtinThemesDir
         let userDirs = userThemesDirs
+        let contributed = LanguageResolver.shared.catalog.themes
 
         Task.detached(priority: .userInitiated) {
             var result: [TerminalTheme] = []
@@ -75,10 +92,19 @@ final class ThemeCatalog: ObservableObject {
                     result.append(theme)
                 }
             }
+            for entry in contributed {
+                guard let theme = Self.parse(
+                    url: entry.theme.fileURL,
+                    source: .contributed(extension: entry.extensionName),
+                    name: entry.theme.name
+                ), seen.insert(theme.name).inserted
+                else { continue }
+                result.append(theme)
+            }
 
             result.sort {
-                ($0.source == .user ? 0 : 1, $0.name.lowercased())
-                    < ($1.source == .user ? 0 : 1, $1.name.lowercased())
+                ($0.source.sortRank, $0.name.lowercased())
+                    < ($1.source.sortRank, $1.name.lowercased())
             }
 
             let themes = result
@@ -103,10 +129,14 @@ final class ThemeCatalog: ObservableObject {
         }
     }
 
-    nonisolated static func parse(url: URL, source: TerminalTheme.Source) -> TerminalTheme? {
+    nonisolated static func parse(
+        url: URL,
+        source: TerminalTheme.Source,
+        name: String? = nil
+    ) -> TerminalTheme? {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
 
-        var theme = TerminalTheme(name: url.lastPathComponent, source: source, url: url)
+        var theme = TerminalTheme(name: name ?? url.lastPathComponent, source: source, url: url)
 
         for line in content.split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)

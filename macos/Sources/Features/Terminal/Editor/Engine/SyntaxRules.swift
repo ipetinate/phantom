@@ -261,11 +261,13 @@ struct SyntaxRules {
     ///
     /// Starts from the base — which is where strings, numbers and the
     /// capitalized-type and call heuristics come from, and those are the
-    /// parts a list of keywords cannot describe — then replaces exactly the
-    /// two things a contribution gets to say: its keywords and its comment
-    /// markers. A built-in syntax passes straight through, because the
-    /// hand-written rules are strictly better than anything reconstructed
-    /// from `CodeLanguage`'s two comment properties.
+    /// parts a list of keywords cannot describe — then replaces the things
+    /// a contribution gets to say: its keywords and its comment markers
+    /// always, and any of the five other kinds it supplied a pattern for,
+    /// each one over the base's own. A kind the contribution is silent on
+    /// keeps the base's rule. A built-in syntax passes straight through,
+    /// because the hand-written rules are strictly better than anything
+    /// reconstructed from `CodeLanguage`'s two comment properties.
     static func rules(for syntax: LanguageSyntax) -> SyntaxRules {
         var rules = self.rules(for: syntax.base)
         guard !syntax.isBuiltIn else { return rules }
@@ -274,6 +276,13 @@ struct SyntaxRules {
             ? nil
             : words(escaping: syntax.keywords)
         rules.comment = comment(line: syntax.lineComment, block: syntax.blockComment)
+
+        let patterns = syntax.patterns
+        if let string = patterns.string { rules.string = string }
+        if let number = patterns.number { rules.number = number }
+        if let type = patterns.type { rules.type = type }
+        if let function = patterns.function { rules.function = function }
+        if let attribute = patterns.attribute { rules.attribute = attribute }
         return rules
     }
 

@@ -309,8 +309,19 @@ final class GuiConfigStore: ObservableObject {
     /// it loads directly.
     func setTheme(_ theme: TerminalTheme) {
         switch theme.source {
-        case .user: set("theme", theme.url.path)
+        case .user, .contributed: set("theme", theme.url.path)
         case .builtin: set("theme", theme.name)
+        }
+    }
+
+    func isCurrentTheme(_ theme: TerminalTheme) -> Bool {
+        switch theme.source {
+        case .builtin, .user:
+            return currentThemeName == theme.name
+        case .contributed:
+            guard let value = string("theme"), value.hasPrefix("/") else { return false }
+            return URL(fileURLWithPath: value).standardizedFileURL.path
+                == theme.url.standardizedFileURL.path
         }
     }
 

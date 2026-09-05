@@ -4,7 +4,8 @@ import SwiftUI
 ///
 /// One row per `ExternalFormatterRegistry.all`, built from the table rather
 /// than written out again here: a fifth tool added there arrives here with
-/// nothing to change.
+/// nothing to change. A formatter an installed extension contributes gets the
+/// same row after them, marked with where it came from.
 ///
 /// Every row says three things, because between them they are the whole
 /// question somebody in this pane has. What runs — the command line, spelled
@@ -27,9 +28,15 @@ struct ExternalFormatterSettingsSection: View {
     /// time — this is a settings list, not a form of forms.
     @State private var editing: String?
 
+    @ObservedObject private var resolver: LanguageResolver = .shared
+
+    private var formatters: [ExternalFormatter] {
+        ExternalFormatterRegistry.all + resolver.catalog.formatters.compactMap(\.externalFormatter)
+    }
+
     var body: some View {
         Section {
-            ForEach(ExternalFormatterRegistry.all) { formatter in
+            ForEach(formatters) { formatter in
                 row(formatter)
             }
         } header: {
@@ -71,6 +78,12 @@ struct ExternalFormatterSettingsSection: View {
                         Text(verbatim: formatter.languageName)
                         Text(verbatim: formatter.displayName)
                             .foregroundStyle(.secondary)
+                        if let provenance = formatter.provenance {
+                            Image(systemName: "puzzlepiece.extension")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .help("Contributed by the extension \(provenance.extensionID)")
+                        }
                         state(effective.command)
                     }
 
@@ -203,7 +216,7 @@ struct ExternalFormatterSettingsSection: View {
     /// drawing the window — the same mistake `LSPCenter.installedCommands`
     /// exists to have stopped making.
     private func probe() async {
-        let commands = ExternalFormatterRegistry.all.map { formatter -> String in
+        let commands = formatters.map { formatter -> String in
             let setting = ExternalFormatterStore.setting(for: formatter.id)
             let override = setting.command.trimmingCharacters(in: .whitespaces)
             return override.isEmpty ? formatter.command : override
