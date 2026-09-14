@@ -1274,6 +1274,10 @@ class AppDelegate: NSObject,
         WelcomeWindowController.shared.show()
     }
 
+    @IBAction func showAgentOverview(_ sender: Any?) {
+        AgentOverviewWindowController.shared.show()
+    }
+
     @IBAction func showAbout(_ sender: Any?) {
         AboutController.shared.show()
     }
