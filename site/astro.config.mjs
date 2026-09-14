@@ -18,7 +18,8 @@ export default defineConfig({
       description:
         "A Ghostty-powered terminal for macOS with a sidebar, an editor, git, worktrees, language servers, agents and an extension store.",
       logo: {
-        src: "./src/assets/phantom-mark.svg",
+        light: "./src/assets/phantom-mark-dark.svg",
+        dark: "./src/assets/phantom-mark.svg",
         replacesTitle: false,
       },
       favicon: "/favicon.ico",
@@ -46,7 +47,7 @@ export default defineConfig({
         { tag: "meta", attrs: { name: "robots", content: "index, follow, max-image-preview:large" } },
       ],
       customCss: ["./src/styles/docs.css"],
-      expressiveCode: { themes: ["dracula"] },
+      expressiveCode: { themes: ["dracula", "github-light"] },
       social: [
         {
           icon: "github",
