@@ -38,8 +38,23 @@ export default defineConfig({
         { tag: "link", attrs: { rel: "icon", href: "/favicon-16.png", type: "image/png", sizes: "16x16" } },
         { tag: "link", attrs: { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" } },
         { tag: "link", attrs: { rel: "manifest", href: "/site.webmanifest" } },
-        { tag: "meta", attrs: { name: "theme-color", content: "#060608" } },
-        { tag: "meta", attrs: { name: "color-scheme", content: "dark" } },
+        {
+          tag: "meta",
+          attrs: {
+            name: "theme-color",
+            content: "#060608",
+            media: "(prefers-color-scheme: dark)",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "theme-color",
+            content: "#fbfbf9",
+            media: "(prefers-color-scheme: light)",
+          },
+        },
+        { tag: "meta", attrs: { name: "color-scheme", content: "dark light" } },
         { tag: "meta", attrs: { name: "author", content: "Isac Petinate" } },
         { tag: "meta", attrs: { name: "application-name", content: "Phantom" } },
         { tag: "meta", attrs: { name: "apple-mobile-web-app-title", content: "Phantom" } },
