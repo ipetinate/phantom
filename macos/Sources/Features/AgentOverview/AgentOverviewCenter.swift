@@ -7,13 +7,18 @@ final class AgentOverviewCenter: ObservableObject {
     static let shared = AgentOverviewCenter()
 
     static let pidInterval: TimeInterval = 2
-    static let previewInterval: TimeInterval = 1
+    /// Preview text is supporting context, not a live terminal mirror. A
+    /// slower cadence keeps the manager from competing with editor typing and
+    /// tab changes for the main thread while still feeling current.
+    static let previewInterval: TimeInterval = 2
     static let previewLineCount = 6
 
     @Published private(set) var cards: [AgentSessionCard] = []
     @Published var query: String = ""
     @Published var stateFilter: Set<AgentTabState> = []
-    @Published var includeOrphans = false
+    /// The main manager is also the history view, so persisted sessions remain
+    /// visible after their terminal surface has been closed.
+    @Published var includeOrphans = true
 
     private var cancellables: Set<AnyCancellable> = []
     private var pidTimer: Timer?
@@ -22,6 +27,7 @@ final class AgentOverviewCenter: ObservableObject {
     private var openCount = 0
 
     private var foregroundNames: [UUID: String] = [:]
+    private var surfaceAgents: [UUID: CodingAgent] = [:]
     private var idle: [UUID: Bool] = [:]
     private var previews: [UUID: [String]] = [:]
     private var visible: Set<UUID> = []
@@ -116,21 +122,37 @@ final class AgentOverviewCenter: ObservableObject {
             foregroundNames: foregroundNames,
             idle: idle,
             previews: previews,
+            surfaceAgents: surfaceAgents,
             includeOrphans: includeOrphans))
         if composed != cards { cards = composed }
     }
 
     private func sampleProcesses() {
-        let known = Set(TabStateCenter.shared.records.keys)
         var names: [UUID: String] = [:]
         var busy: [UUID: Bool] = [:]
-        for (id, surface) in Self.surfaces() where known.contains(id) {
+        var agents: [UUID: CodingAgent] = [:]
+        for (id, surface) in Self.surfaces() {
             guard let pid = surface.surfaceModel?.foregroundPID else { continue }
             busy[id] = TerminalIdleCheck.isIdle(foregroundPID: pid)
-            if let name = TerminalIdleCheck.processName(pid) { names[id] = name }
+            if let name = TerminalIdleCheck.processName(pid) {
+                names[id] = name
+                if let agent = Self.agent(for: name), !busy[id, default: true] {
+                    agents[id] = agent
+                }
+            }
         }
         foregroundNames = names
         idle = busy
+        surfaceAgents = agents
+    }
+
+    private static func agent(for processName: String) -> CodingAgent? {
+        let name = processName.lowercased()
+        return CodingAgent.allCases.first { agent in
+            let command = URL(fileURLWithPath: agent.launchCommand.split(separator: " ").first.map(String.init) ?? "")
+                .lastPathComponent.lowercased()
+            return name == command || name == agent.rawValue.lowercased()
+        }
     }
 
     private func samplePreviews() {

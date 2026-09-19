@@ -48,7 +48,7 @@ struct SidebarPaneTests {
 
     @Test func aDisabledPaneDropsOutOfTheTabOrder() {
         withPanes([.files: false, .git: true, .worktrees: true, .extensions: true]) {
-            #expect(SidebarPane.enabled == [.terminals, .git, .worktrees, .extensions])
+            #expect(SidebarPane.enabled == [.terminals, .git, .worktrees, .extensions, .orchestrator])
         }
     }
 
@@ -56,7 +56,10 @@ struct SidebarPaneTests {
         #expect(SidebarPane.extensions.canBeHidden)
         #expect(SidebarPane.extensions.defaultsKey == "SidebarShowExtensionsPane")
         #expect(SidebarPane.extensions.symbol == "square.grid.2x2")
-        #expect(SidebarPane.builtIns.last == .extensions)
+        #expect(SidebarPane.builtIns.dropLast().last == .extensions)
+        #expect(SidebarPane.builtIns.last == .orchestrator)
+        #expect(SidebarPane.orchestrator.canBeHidden)
+        #expect(SidebarPane.orchestrator.defaultsKey == "SidebarShowOrchestratorPane")
     }
 
     /// With both extras off there is nothing to switch between, so the bar
@@ -160,6 +163,7 @@ struct SidebarPaneTests {
             .pane(SidebarPaneItem(.git), canToggle: true),
             .pane(SidebarPaneItem(.worktrees), canToggle: true),
             .pane(SidebarPaneItem(.extensions), canToggle: true),
+            .pane(SidebarPaneItem(.orchestrator), canToggle: true),
         ])
     }
 

@@ -88,6 +88,7 @@ enum AgentSessionComposer {
         var foregroundNames: [UUID: String] = [:]
         var idle: [UUID: Bool] = [:]
         var previews: [UUID: [String]] = [:]
+        var surfaceAgents: [UUID: CodingAgent] = [:]
         var includeOrphans = false
     }
 
@@ -131,6 +132,21 @@ enum AgentSessionComposer {
                 worktreeBranch: facts?.worktreeBranch,
                 isFocused: facts?.isFocused ?? false,
                 previewLines: input.previews[id] ?? []))
+        }
+
+        // Hooks provide the rich state/history, but an open tab running an
+        // agent is still a session when the hook has not emitted yet.
+        // Include that live surface so the overview never silently says
+        // “no sessions” while an agent is visibly running in a terminal.
+        for (id, agent) in input.surfaceAgents where input.records[id] == nil {
+            guard let facts = byID[id] else { continue }
+            cards.append(AgentSessionCard(
+                id: id, agent: agent, state: .working, stateWord: "working",
+                endedByUser: false, sessionID: nil, lastEventAt: nil,
+                liveness: .running, foregroundName: input.foregroundNames[id],
+                title: facts.title, pwd: facts.pwd, groupID: facts.groupID,
+                groupName: facts.groupName, worktreeBranch: facts.worktreeBranch,
+                isFocused: facts.isFocused, previewLines: input.previews[id] ?? []))
         }
 
         return sorted(cards)

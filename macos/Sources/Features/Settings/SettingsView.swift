@@ -326,9 +326,21 @@ struct SidebarSettingsView: View {
 
     @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
     @AppStorage("SidebarNewTabHomeDirectory") private var newTabHomeDirectory = ""
+    @AppStorage("SidebarOpenTabsInBackground") private var openTabsInBackground = false
 
     var body: some View {
         Form {
+            Section {
+                Toggle("Open new terminals in the background", isOn: $openTabsInBackground)
+                    .toggleStyle(.switch)
+            } header: {
+                Text("Terminal creation")
+            } footer: {
+                Text("New terminals and agent sessions open without leaving the current tab. Individual actions may still focus a terminal explicitly.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 Toggle("Show Sidebar", isOn: $sidebarEnabled)
                     .toggleStyle(.switch)

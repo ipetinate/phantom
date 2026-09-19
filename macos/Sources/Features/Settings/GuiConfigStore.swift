@@ -175,10 +175,11 @@ final class GuiConfigStore: ObservableObject {
     nonisolated static let factoryThemeName = "Dracula by Phantom"
 
     nonisolated static let factoryTheme = """
-    background = #060608
+    background = #282A36
     foreground = #F8F8F2
     cursor-color = #F8F8F2
     selection-background = #44475A
+    selection-foreground = #F8F8F2
     palette = 0=#21222C
     palette = 1=#FF5555
     palette = 2=#50FA7B
@@ -196,6 +197,20 @@ final class GuiConfigStore: ObservableObject {
     palette = 14=#A4FFFF
     palette = 15=#FFFFFF
 
+    split-divider-color = #44475A
+    unfocused-split-fill = #21222C
+
+    search-background = #F1FA8C
+    search-foreground = #282A36
+    search-selected-background = #FFB86C
+    search-selected-foreground = #282A36
+
+    window-titlebar-background = #21222C
+    window-titlebar-foreground = #F8F8F2
+
+    macos-icon-ghost-color = #BD93F9
+    macos-icon-screen-color = #282A36
+
     """
 
     /// Materializes the factory theme and points `theme` at it. File work,
@@ -205,11 +220,21 @@ final class GuiConfigStore: ObservableObject {
         to values: inout [String: String],
         in dir: URL
     ) -> Bool {
-        guard values["theme"] == nil else { return false }
-
         let themes = dir.appendingPathComponent("themes", isDirectory: true)
         let file = themes.appendingPathComponent(factoryThemeName)
-        if !FileManager.default.fileExists(atPath: file.path) {
+        let isFactoryTheme = values["theme"] == nil
+            || values["theme"] == file.path
+        guard isFactoryTheme else { return false }
+        let needsFactoryWrite: Bool
+        if let existing = try? String(contentsOf: file, encoding: .utf8) {
+            // Upgrade the factory file created by older Phantom builds. A
+            // reader's custom theme never reaches this method: `theme` is
+            // already set in that case.
+            needsFactoryWrite = existing != factoryTheme
+        } else {
+            needsFactoryWrite = true
+        }
+        if needsFactoryWrite {
             try? FileManager.default.createDirectory(
                 at: themes, withIntermediateDirectories: true)
             guard (try? factoryTheme.write(to: file, atomically: true, encoding: .utf8)) != nil

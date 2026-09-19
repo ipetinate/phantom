@@ -263,6 +263,11 @@ struct SidebarView: View {
             )
         case .extensions:
             ExtensionsPanelView()
+        case .orchestrator:
+            AgentOverviewView(
+                center: .shared,
+                compact: true,
+                onReopen: layout.onReopenAgentSession)
         default:
             terminalList
         }

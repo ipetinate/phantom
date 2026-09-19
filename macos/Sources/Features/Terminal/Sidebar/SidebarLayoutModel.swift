@@ -41,6 +41,7 @@ final class SidebarLayoutModel: ObservableObject {
     var onNewAntigravityTab: () -> Void = {}
     var onNewKimiTab: () -> Void = {}
     var onNewPiTab: () -> Void = {}
+    var onReopenAgentSession: (AgentSessionCard, UUID?) -> Void = { _, _ in }
 
     /// Opens a terminal — or a terminal already running an agent — with its
     /// cwd inside a chosen worktree. Wired by the controller like the

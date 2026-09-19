@@ -16,7 +16,8 @@ import Foundation
 @MainActor
 enum MCPTerminalTools {
     static var all: [MCPToolHandler] {
-        [listTerminals, readOutput, createTerminal, runCommand, focusTerminal, updateTerminal]
+        [listTerminals, readOutput, createTerminal, runCommand, sendText, sendKey,
+         focusTerminal, updateTerminal]
     }
 
     // MARK: Appearance
@@ -256,6 +257,8 @@ enum MCPTerminalTools {
                     "agent": MCPSchema.enumeration(
                         "A coding agent to start in the new terminal.",
                         CodingAgent.allCases.map(\.rawValue)),
+                    "background": MCPSchema.boolean(
+                        "Create the tab without leaving the currently selected tab."),
                 ])),
             run: { context, answer in
                 guard let ghostty = (NSApp.delegate as? AppDelegate)?.ghostty else {
@@ -292,8 +295,11 @@ enum MCPTerminalTools {
                 var baseConfig = Ghostty.SurfaceConfiguration()
                 baseConfig.workingDirectory = directory
 
+                let presentation: TerminalController.NewTabPresentation =
+                    context.bool("background") == true ? .background : .focused
                 guard let controller = TerminalController.newTab(
-                    ghostty, from: NSApp.keyWindow, withBaseConfig: baseConfig),
+                    ghostty, from: NSApp.keyWindow, withBaseConfig: baseConfig,
+                    presentation: presentation),
                       let surface = controller.focusedSurface
                         ?? controller.surfaceTree.root?.leftmostLeaf()
                 else { return answer(.refused(MCPTerminalRefusal.couldNotCreate)) }
@@ -312,6 +318,72 @@ enum MCPTerminalTools {
                     "group": group.map { .string($0.name) } ?? .null,
                     "agent": agent.map { .string($0.rawValue) } ?? .null,
                 ])))
+            })
+    }
+
+    /// Sends text to an interactive agent, even while its process is busy.
+    static var sendText: MCPToolHandler {
+        MCPToolHandler(tool: MCPTool(
+            name: "send_text",
+            description: "Send text to a live agent terminal while its process is running. Use this for agent-to-agent communication; optionally submit the text with Enter.",
+            schema: MCPSchema.object([
+                "terminal": MCPSchema.string("Terminal id from list_terminals."),
+                "text": MCPSchema.string("Text to type; newlines are not allowed."),
+                "submit": MCPSchema.boolean("Press Enter after typing."),
+            ], required: ["terminal", "text"])),
+            run: { context, answer in
+                guard let id = context.surface("terminal"), let text = context.string("text"),
+                      !text.isEmpty, !text.contains(where: \.isNewline),
+                      let tab = tab(for: id), let surface = AgentLauncher.surface(for: tab),
+                      let model = surface.surfaceModel else {
+                    return answer(.refused(MCPTerminalRefusal.noSuchTerminal(
+                        context.surface("terminal") ?? UUID())))
+                }
+                allow(.run, for: tab, id: id, context: context) { granted in
+                    guard granted else {
+                        return answer(.refused(MCPTerminalRefusal.notAllowedToRun(displayTitle(tab))))
+                    }
+                    model.sendText(text)
+                    if context.bool("submit") == true {
+                        model.sendKeyEvent(Ghostty.Input.KeyEvent(key: .enter, action: .press))
+                        model.sendKeyEvent(Ghostty.Input.KeyEvent(key: .enter, action: .release))
+                    }
+                    answer(.json(.object(["terminal": .string(id.uuidString), "sent": .string(text)])))
+                }
+            })
+    }
+
+    /// Sends the small set of control keys needed to drive an agent safely.
+    static var sendKey: MCPToolHandler {
+        MCPToolHandler(tool: MCPTool(
+            name: "send_key",
+            description: "Send Ctrl-C or Enter to a live agent terminal while its process is running, so an operator or another agent can drive an interactive prompt safely.",
+            schema: MCPSchema.object([
+                "terminal": MCPSchema.string("Terminal id from list_terminals."),
+                "key": MCPSchema.enumeration("Key to send.", ["c", "enter"]),
+                "control": MCPSchema.boolean("Hold Control while sending the key."),
+            ], required: ["terminal", "key"])),
+            run: { context, answer in
+                guard let id = context.surface("terminal"), let key = context.string("key"),
+                      let tab = tab(for: id), let surface = AgentLauncher.surface(for: tab),
+                      let model = surface.surfaceModel else {
+                    return answer(.refused(MCPTerminalRefusal.noSuchTerminal(
+                        context.surface("terminal") ?? UUID())))
+                }
+                allow(.run, for: tab, id: id, context: context) { granted in
+                    guard granted else {
+                        return answer(.refused(MCPTerminalRefusal.notAllowedToRun(displayTitle(tab))))
+                    }
+                    let inputKey: Ghostty.Input.Key = key == "enter" ? .enter : .c
+                    let mods: Ghostty.Input.Mods = context.bool("control") == true ? [.ctrl] : []
+                    let press = Ghostty.Input.KeyEvent(synthesizing: inputKey, action: .press,
+                        mods: mods, translationMods: model.keyTranslationMods(mods))
+                    let release = Ghostty.Input.KeyEvent(synthesizing: inputKey, action: .release,
+                        mods: mods, translationMods: model.keyTranslationMods(mods))
+                    model.sendKeyEvent(press)
+                    model.sendKeyEvent(release)
+                    answer(.json(.object(["terminal": .string(id.uuidString), "key": .string(key)])))
+                }
             })
     }
 

@@ -14,7 +14,7 @@ final class AgentOverviewWindowController: NSWindowController {
             backing: .buffered,
             defer: true
         )
-        window.title = "Agents"
+        window.title = "Agents Manager"
         window.contentMinSize = Self.minimumSize
         window.isReleasedWhenClosed = false
         window.center()
@@ -27,9 +27,21 @@ final class AgentOverviewWindowController: NSWindowController {
     }
 
     func show() {
+        show(relativeTo: nil)
+    }
+
+    func show(relativeTo parent: NSWindow?) {
         if window?.contentView == nil {
             window?.contentView = NSHostingView(
                 rootView: AgentOverviewView(center: .shared).themedChrome())
+        }
+        if let parent, let window {
+            let frame = parent.frame
+            let size = window.frame.size
+            let origin = NSPoint(
+                x: frame.maxX - size.width,
+                y: frame.midY - size.height / 2)
+            window.setFrame(NSRect(origin: origin, size: size), display: false)
         }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
