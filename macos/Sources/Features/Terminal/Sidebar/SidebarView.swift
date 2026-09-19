@@ -95,11 +95,6 @@ struct SidebarView: View {
     /// See `GitRepoView.onOpenBranchDiff`.
     var onOpenBranchDiff: ((URL, String) -> Void)?
 
-    /// List animations are suspended while the sidebar first populates.
-    private var listAnimation: Animation? {
-        tabManager.animationsEnabled ? .snappy(duration: 0.22) : nil
-    }
-
     /// One rendered group section and the tabs resolved into it, in
     /// sidebar display order.
     private struct Section: Identifiable {
@@ -333,11 +328,11 @@ struct SidebarView: View {
                         }
                     }
                     .padding(8)
-                    .animation(listAnimation, value: content.sections.map(\.id))
-                    .animation(listAnimation, value: store.tabOrder)
-                    // Row membership is intentionally not animated. Animating
-                    // the whole ID array makes LazyVStack rebuild its layout
-                    // on close and can discard the scroll anchor in long lists.
+                    // Keep membership changes transaction-free. Animating the
+                    // section/order arrays makes LazyVStack rebuild its
+                    // layout on both insertion and close, which discards the
+                    // user's scroll anchor in long lists and is expensive
+                    // while an agent is creating a terminal.
                     .background(alignment: .top) { InvisibleScrollers() }
                 }
                 .scrollIndicators(.never)
