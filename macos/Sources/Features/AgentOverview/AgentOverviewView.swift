@@ -4,7 +4,7 @@ import SwiftUI
 struct AgentOverviewView: View {
     @ObservedObject var center: AgentOverviewCenter
     var compact: Bool = false
-    var paneBackground: Color? = nil
+    var paneBackground: Color?
     var onReopen: (AgentSessionCard, UUID?) -> Void = { _, _ in }
     @ObservedObject private var palette: ThemePalette = .shared
 
@@ -75,7 +75,7 @@ struct AgentOverviewView: View {
             }
             Button("Cancel", role: .cancel) { reopenCard = nil }
         } message: { card in
-            Text("Choose where to reopen (card.agent.displayName)'s session.")
+            Text("Choose where to reopen \(card.agent.displayName)'s session.")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(paneBackground ?? .clear)
@@ -129,9 +129,9 @@ struct AgentOverviewView: View {
         ScrollView {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                 ForEach(displayedCards) { card in
-                    AgentSessionCardView(card: card, now: now, onReopen: { reopenCard = $0 }) {
-                        refusal = $0
-                    }
+                    AgentSessionCardView(
+                        card: card, now: now,
+                        onReopen: { reopenCard = $0 }, report: { refusal = $0 })
                 }
             }
             .padding(14)
