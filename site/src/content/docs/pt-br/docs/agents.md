@@ -37,6 +37,35 @@ cópia instalada usa.
 
 No Claude Code a aba também mostra o plano atual, quando existe um.
 
+## Todas as sessões numa tela
+
+**Window › Agents**, ou ⇧⌘A, abre uma janela listando todas as sessões de
+agente do app — todas as janelas, todos os splits, agrupadas por projeto. O que
+precisa de você sobe: esperando e falhou primeiro, depois o que está rodando, e
+dentro de cada faixa o mais antigo na frente, então a sessão parada há mais
+tempo é a que você vê.
+
+Cada card traz o agente, o estado, há quanto tempo está nele, o projeto e o
+branch, e as últimas linhas que o agente escreveu. Três ações:
+
+- **Open** traz aquele terminal para a frente — a janela certa, a aba certa, o
+  split certo. Uma janela em outra Space fica onde você deixou.
+- **Interrupt** manda Ctrl-C.
+- O campo de texto responde o agente: o que você digitar vai seguido de Return.
+
+Responder é texto livre de propósito. O Phantom sabe que um agente está
+esperando, mas não o que ele está perguntando — o estado que chega é uma
+palavra só, sem a pergunta junto. Então a tela digita o que você mandar e nunca
+adivinha. Para um menu de setas, abra o terminal e responda lá.
+
+Uma sessão aparece quando os hooks do agente estão instalados; **Settings ›
+Agents** instala.
+
+Um card dizendo que o processo sumiu é um agente que morreu sem escrever a
+última palavra. O Phantom confere o processo em primeiro plano do terminal
+enquanto esta janela está aberta, e essa conferência só pode retirar uma
+afirmação, nunca criar uma.
+
 ## Resume
 
 Fechar uma aba mata os processos dentro dela, agente incluído. Reabrir a aba —

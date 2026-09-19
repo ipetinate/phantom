@@ -128,7 +128,7 @@ struct GuiConfigBootstrapTests {
         let theme = dir.appendingPathComponent("themes")
             .appendingPathComponent(GuiConfigStore.factoryThemeName)
         #expect(FileManager.default.fileExists(atPath: theme.path))
-        #expect(contents(of: theme).contains("background = #060608"))
+        #expect(contents(of: theme).contains("background = #282A36"))
     }
 
     /// A reader's own choice is never overwritten — a `theme` already in the

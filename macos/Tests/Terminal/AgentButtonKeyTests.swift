@@ -2,7 +2,7 @@ import Foundation
 @testable import Ghostty
 import Testing
 
-/// The eighteen keys behind the agent buttons.
+/// The twenty-seven keys behind the agent buttons.
 ///
 /// These are pinned, not merely tested. Each one is a switch somebody has
 /// already set, and `@AppStorage` writes whatever string it is handed: a key
@@ -17,26 +17,35 @@ struct AgentButtonKeyTests {
         .chrome: [
             .claude: "SidebarShowClaude",
             .codex: "SidebarShowCodex",
+            .cursor: "SidebarShowCursor",
             .opencode: "SidebarShowOpenCode",
             .antigravity: "SidebarShowAntigravity",
             .kimi: "SidebarShowKimi",
             .pi: "SidebarShowPi",
+            .goose: "SidebarShowGoose",
+            .kilo: "SidebarShowKilo",
         ],
         .groupHeader: [
             .claude: "SidebarGroupShowClaude",
             .codex: "SidebarGroupShowCodex",
+            .cursor: "SidebarGroupShowCursor",
             .opencode: "SidebarGroupShowOpenCode",
             .antigravity: "SidebarGroupShowAntigravity",
             .kimi: "SidebarGroupShowKimi",
             .pi: "SidebarGroupShowPi",
+            .goose: "SidebarGroupShowGoose",
+            .kilo: "SidebarGroupShowKilo",
         ],
         .tabRow: [
             .claude: "SidebarTabShowClaude",
             .codex: "SidebarTabShowCodex",
+            .cursor: "SidebarTabShowCursor",
             .opencode: "SidebarTabShowOpenCode",
             .antigravity: "SidebarTabShowAntigravity",
             .kimi: "SidebarTabShowKimi",
             .pi: "SidebarTabShowPi",
+            .goose: "SidebarTabShowGoose",
+            .kilo: "SidebarTabShowKilo",
         ],
     ]
 
@@ -68,7 +77,7 @@ struct AgentButtonKeyTests {
         #expect(CodingAgent.kimi.displayName == "Kimi Code")
     }
 
-    /// Eighteen distinct strings. A collision would make two switches one
+    /// Twenty-seven distinct strings. A collision would make two switches one
     /// switch, which looks like a switch that moves on its own.
     @Test func thereAreEighteenDistinctKeys() {
         var keys: [String] = []
@@ -78,8 +87,8 @@ struct AgentButtonKeyTests {
             }
         }
 
-        #expect(keys.count == 18)
-        #expect(Set(keys).count == 18)
+        #expect(keys.count == 27)
+        #expect(Set(keys).count == 27)
     }
 
     /// Every agent and every place, so a seventh agent fails here rather than

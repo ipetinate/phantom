@@ -55,6 +55,8 @@ enum MCPServerRegistration {
             return JSONMCPInstaller(descriptor: descriptor, mcp: mcp)
         case .toml(let mcp)?:
             return TOMLMCPInstaller(descriptor: descriptor, mcp: mcp)
+        case .yaml(let mcp)?:
+            return YAMLMCPInstaller(descriptor: descriptor, mcp: mcp)
         case nil:
             return nil
         }
@@ -109,5 +111,5 @@ enum MCPServerRegistration {
         for agent in agents { _ = agent.repairIfStale() }
     }
 
-    static let footer = "Writes Phantom's MCP server into each agent's own configuration, merging rather than replacing it. The entry points at this copy of Phantom, so it is rewritten when the app moves. Claude Code, Antigravity and Kimi Code take it as a command and its arguments, Codex as a TOML table, OpenCode as a single command array \u{2014} each shape from that agent's own documentation. Pi has no MCP client of its own: the file is written where the community extension for it reads, so the entry is live only once that extension is installed."
+    static let footer = "Writes Phantom's MCP server into each agent's own configuration, merging rather than replacing it. The entry points at this copy of Phantom, so it is rewritten when the app moves. Each agent keeps its documented shape: JSON for Claude Code, Cursor, Antigravity, Kimi Code, Pi and Kilo; TOML for Codex; OpenCode's command array; and Goose's YAML extensions map. Pi has no MCP client of its own: the file is written where the community extension for it reads, so the entry is live only once that extension is installed."
 }

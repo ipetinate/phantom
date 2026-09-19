@@ -67,6 +67,8 @@ final class TabStateCenter: ObservableObject {
     /// only `states` had no way to notice a session ending.
     @Published private(set) var records: [UUID: AgentTabRecord] = [:]
 
+    @Published private(set) var updatedAt: [UUID: Date] = [:]
+
     /// When this process started watching the directory.
     ///
     /// The line between an ending Phantom saw and one it did not. Everything
@@ -171,6 +173,7 @@ final class TabStateCenter: ObservableObject {
 
         var result: [UUID: AgentTabState] = [:]
         var parsed: [UUID: AgentTabRecord] = [:]
+        var written: [UUID: Date] = [:]
         for url in entries {
             guard let id = UUID(uuidString: url.lastPathComponent),
                   let raw = try? String(contentsOf: url, encoding: .utf8)
@@ -191,6 +194,7 @@ final class TabStateCenter: ObservableObject {
                 record = marked
             }
             parsed[id] = record
+            written[id] = modified
 
             // The Notification hook's attention marker: fire the system
             // notification, then hand the file back to its previous state
@@ -210,6 +214,7 @@ final class TabStateCenter: ObservableObject {
         notifyTransitions(from: states, to: result)
         if parsed != records { records = parsed }
         if result != states { states = result }
+        if written != updatedAt { updatedAt = written }
     }
 
     /// How to rewrite an `ended` record the directory watch just handed us, or

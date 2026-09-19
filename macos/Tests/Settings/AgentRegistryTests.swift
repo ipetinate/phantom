@@ -19,11 +19,24 @@ struct AgentRegistryTests {
             sessions: .none)
     }
 
-    @Test func theSixBuiltInAgentsComeInAFixedOrder() {
+    @Test func theNineBuiltInAgentsComeInAFixedOrder() {
         #expect(AgentRegistry.builtIn.map(\.id) == [
-            "claude", "codex", "opencode", "antigravity", "kimi", "pi",
+            "claude", "codex", "cursor", "opencode", "antigravity", "kimi", "pi", "goose", "kilo",
         ])
         #expect(AgentRegistry.shared.all.map(\.id) == AgentRegistry.builtIn.map(\.id))
+    }
+
+    @Test func cursorUsesItsCliResumeAndMCPConfiguration() {
+        #expect(AgentRegistry.cursor.launchCommand == "cursor-agent")
+        #expect(AgentRegistry.cursor.resume.command(sessionID: "abc") == "cursor-agent --resume abc")
+        #expect(AgentRegistry.cursor.resume.command(sessionID: nil) == "cursor-agent resume")
+        guard case .json(let mcp) = AgentRegistry.cursor.mcp else {
+            Issue.record("Cursor should use JSON MCP configuration")
+            return
+        }
+        #expect(mcp.directory.candidates == ["~/.cursor"])
+        #expect(mcp.fileName == "mcp.json")
+        #expect(mcp.key == "mcpServers")
     }
 
     @Test func everyBuiltInIdIsUnique() {
@@ -78,6 +91,8 @@ struct AgentRegistryTests {
     @Test func theCodexAndKimiHomesFollowTheirVariables() {
         #expect(AgentRegistry.codexHome.candidates == ["$CODEX_HOME", "~/.codex-cli", "~/.codex"])
         #expect(AgentRegistry.kimiHome.candidates == ["$KIMI_CODE_HOME", "~/.kimi-code"])
+        #expect(AgentRegistry.gooseHome.candidates == ["~/.config/goose"])
+        #expect(AgentRegistry.kiloHome.candidates == ["~/.config/kilo"])
     }
 
     @Test func onlyOpenCodeKeepsItsOriginalColours() {
@@ -86,7 +101,7 @@ struct AgentRegistryTests {
     }
 
     @Test func thePluginBodiesCarryTheirPlaceholders() {
-        for body in [AgentRegistry.openCodePlugin, AgentRegistry.piExtension] {
+        for body in [AgentRegistry.openCodePlugin, AgentRegistry.piExtension, AgentRegistry.kiloPlugin] {
             #expect(body.contains(HooksIntegration.PluginFile.agentPlaceholder))
             #expect(body.contains(HooksIntegration.PluginFile.stateFileVariablePlaceholder))
         }

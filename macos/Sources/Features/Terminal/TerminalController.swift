@@ -590,8 +590,14 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     static func newTab(
         _ ghostty: Ghostty.App,
         from parent: NSWindow? = nil,
-        withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil
+        withBaseConfig baseConfig: Ghostty.SurfaceConfiguration? = nil,
+        presentation: NewTabPresentation = .automatic
     ) -> TerminalController? {
+        let presentation = presentation == .automatic
+            ? (UserDefaults.standard.bool(forKey: "SidebarOpenTabsInBackground") ? .background : .focused)
+            : presentation
+        let previousWindow = parent
+        let previousSelectedWindow = parent?.tabGroup?.selectedWindow
         /// A caller with no usable parent used to fall through to a plain
         /// new window — silently. That window was born outside the tab
         /// group, and everything the sidebar believes broke around it: its
@@ -704,6 +710,14 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             // We also activate our app so that it becomes front. This may be
             // necessary for the dock menu.
             NSApp.activate(ignoringOtherApps: true)
+
+            if presentation == .background,
+               let previousWindow,
+               let previousSelectedWindow,
+               let group = previousWindow.tabGroup {
+                group.selectedWindow = previousSelectedWindow
+                previousWindow.makeKeyAndOrderFront(nil)
+            }
         }
 
         // It takes an event loop cycle until the macOS tabGroup state becomes
@@ -740,6 +754,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         return controller
+    }
+
+    enum NewTabPresentation: Equatable {
+        case automatic
+        case focused
+        case background
     }
 
     // MARK: - Methods
@@ -1583,6 +1603,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         layout.onNewCodexTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningAgent: .codex)
         }
+        layout.onNewCursorTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningAgent: .cursor)
+        }
         layout.onNewOpenCodeTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningAgent: .opencode)
         }
@@ -1594,6 +1617,21 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
         layout.onNewPiTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningAgent: .pi)
+        }
+        layout.onNewGooseTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningAgent: .goose)
+        }
+        layout.onNewKiloTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningAgent: .kilo)
+        }
+        layout.onReopenAgentSession = { [weak self] card, groupID in
+            guard let self,
+                  let surface = self.newSidebarTab(
+                    in: SidebarGroupStore.shared.group(groupID),
+                    workingDirectory: card.pwd)
+            else { return }
+            let command = card.agent.resumeCommand(sessionID: card.sessionID)
+            ClaudeSession.run(command, in: surface)
         }
         layout.onNewWorktreeTab = { [weak self] directory, groupId in
             self?.newSidebarTab(
@@ -1625,6 +1663,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             onNewCodexTabInGroup: { [weak self] group in
                 self?.newSidebarTab(in: group, runningAgent: .codex)
             },
+            onNewCursorTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningAgent: .cursor)
+            },
             onNewOpenCodeTabInGroup: { [weak self] group in
                 self?.newSidebarTab(in: group, runningAgent: .opencode)
             },
@@ -1636,6 +1677,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             },
             onNewPiTabInGroup: { [weak self] group in
                 self?.newSidebarTab(in: group, runningAgent: .pi)
+            },
+            onNewGooseTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningAgent: .goose)
+            },
+            onNewKiloTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningAgent: .kilo)
             },
             onSpawnTerminalBesideSelection: { [weak self] in
                 self?.newSidebarTabBesideSelection()
@@ -1790,7 +1837,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                 center: editorCenter,
                 terminalDirectory: editorTerminalDirectory,
                 search: workspaceSearch,
-                terminal: terminalContainer
+                terminal: terminalContainer,
+                sidebarLayout: layout
             ).interfaceFont()
         )
         gridHosting.translatesAutoresizingMaskIntoConstraints = false

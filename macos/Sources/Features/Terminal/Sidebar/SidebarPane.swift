@@ -32,9 +32,10 @@ struct SidebarPane: RawRepresentable, Hashable, Identifiable, Codable, Sendable 
     static let git = SidebarPane(rawValue: "git")
     static let worktrees = SidebarPane(rawValue: "worktrees")
     static let extensions = SidebarPane(rawValue: "extensions")
+    static let orchestrator = SidebarPane(rawValue: "orchestrator")
 
     /// The panels this build ships, in tab order.
-    static let builtIns: [SidebarPane] = [.terminals, .files, .git, .worktrees, .extensions]
+    static let builtIns: [SidebarPane] = [.terminals, .files, .git, .worktrees, .extensions, .orchestrator]
 
     /// What a contributed entry's `rawValue` begins with.
     ///
@@ -69,6 +70,7 @@ struct SidebarPane: RawRepresentable, Hashable, Identifiable, Codable, Sendable 
         case .git: return "Git"
         case .worktrees: return "Worktrees"
         case .extensions: return "Extensions"
+        case .orchestrator: return "Agents Manager"
         default: return contributedViewID ?? rawValue
         }
     }
@@ -81,6 +83,7 @@ struct SidebarPane: RawRepresentable, Hashable, Identifiable, Codable, Sendable 
         case .terminals: return "terminal"
         case .files: return "folder"
         case .extensions: return "square.grid.2x2"
+        case .orchestrator: return "aqi.medium"
         default: return nil
         }
     }
@@ -96,6 +99,7 @@ struct SidebarPane: RawRepresentable, Hashable, Identifiable, Codable, Sendable 
         case .git: return "SidebarShowGitPane"
         case .worktrees: return "SidebarShowWorktreesPane"
         case .extensions: return "SidebarShowExtensionsPane"
+        case .orchestrator: return "SidebarShowOrchestratorPane"
         default:
             guard let id = contributedViewID else { return nil }
             return "SidebarShowExtensionView." + id
@@ -221,13 +225,25 @@ struct SidebarPaneIcon: View {
         if let artwork = item.artwork {
             ExtensionArtwork(url: artwork, size: size + 2)
         } else if let symbol = item.pane.symbol {
-            Image(systemName: symbol)
+            Image(systemName: resolvedSymbol(symbol, for: item.pane))
                 .font(.system(size: size, weight: .medium))
         } else if item.pane == .worktrees {
             WorktreeIcon(size: size + 2)
         } else {
             GitIcon(size: size + 1)
         }
+    }
+
+    private func resolvedSymbol(_ symbol: String, for pane: SidebarPane) -> String {
+        // `aqi.medium` is not present in every SF Symbols version supported
+        // by Phantom. Keep the requested mark on newer systems and retain a
+        // visible orchestrator mark on older ones instead of rendering an
+        // empty Image view.
+        if pane == .orchestrator,
+           NSImage(systemSymbolName: symbol, accessibilityDescription: nil) == nil {
+            return "arrow.triangle.branch"
+        }
+        return symbol
     }
 }
 

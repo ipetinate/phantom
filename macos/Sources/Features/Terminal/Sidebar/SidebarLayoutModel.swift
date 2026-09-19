@@ -33,6 +33,9 @@ final class SidebarLayoutModel: ObservableObject {
     /// Creates a new terminal tab that immediately starts a Codex session.
     var onNewCodexTab: () -> Void = {}
 
+    /// Creates a new terminal tab that immediately starts a Cursor session.
+    var onNewCursorTab: () -> Void = {}
+
     /// Creates a new terminal tab that immediately starts an OpenCode session.
     var onNewOpenCodeTab: () -> Void = {}
 
@@ -41,6 +44,9 @@ final class SidebarLayoutModel: ObservableObject {
     var onNewAntigravityTab: () -> Void = {}
     var onNewKimiTab: () -> Void = {}
     var onNewPiTab: () -> Void = {}
+    var onNewGooseTab: () -> Void = {}
+    var onNewKiloTab: () -> Void = {}
+    var onReopenAgentSession: (AgentSessionCard, UUID?) -> Void = { _, _ in }
 
     /// Opens a terminal — or a terminal already running an agent — with its
     /// cwd inside a chosen worktree. Wired by the controller like the

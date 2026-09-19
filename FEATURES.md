@@ -1,7 +1,7 @@
 # Phantom features
 
 What Phantom adds to Ghostty, and where each piece stands. Current version:
-`0.21.0-beta`. Latest release: `v0.20.0`.
+`0.22.0-beta`. Latest release: `v0.21.0`.
 
 The suffix says how finished a version is: `-beta` while the product is usable
 but still taking fixes, and nothing at all once it is stable. There are no
@@ -105,6 +105,8 @@ and not a new app.
 | Agents | MCP handshake verifies the caller's pid against the socket's peer | Shipped | v0.12.0 |
 | Agents | Register the MCP server into an agent's own config, JSON and TOML | Shipped | v0.12.0 |
 | Agents | `focus_terminal` brings Phantom forward, not only the sidebar's selection | Shipped | v0.21.0 |
+| Agents | Every session in the app on one screen, grouped by project | Shipped | v0.22.0 |
+| Agents | Answer or interrupt a waiting agent without leaving that screen | Shipped | v0.22.0 |
 | Git | Conflicts resolved in the file itself, and staged from the same pane | Shipped | v0.12.0 |
 | Editor | The editor divides into a grid, and the grid is restored | Shipped | v0.11.0 |
 | Editor | Undo history survives closing the file, and closing the app | Shipped | v0.13.0 |

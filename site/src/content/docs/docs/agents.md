@@ -36,6 +36,33 @@ name, so a development build cannot overwrite the one your installed copy uses.
 
 For Claude Code the tab also shows the current plan, when there is one.
 
+## Every session on one screen
+
+**Window › Agents**, or ⇧⌘A, opens a window listing every agent session in the
+app — every window, every split, grouped by project. What needs you sorts to
+the top: waiting and failed first, then work in flight, oldest first inside
+each band, so the session that has been stuck longest is the one you see.
+
+Each card carries the agent, its state, how long it has been in that state, the
+project and branch, and the last few lines the agent printed. Three actions:
+
+- **Open** brings that terminal forward — the right window, the right tab, the
+  right split. A window sitting on another Space is left where you put it.
+- **Interrupt** sends Ctrl-C.
+- The text field answers the agent: what you type is sent followed by Return.
+
+Answering is free text on purpose. Phantom knows that an agent is waiting, but
+not what it is asking — the state it reports is one word with no question
+attached. So the screen types what you tell it to and never guesses. For a
+menu you drive with arrow keys, open the terminal and answer there.
+
+A session appears once its agent's hooks are installed; **Settings › Agents**
+installs them.
+
+A card that says the process is gone is an agent that died without writing its
+last word. Phantom checks the terminal's foreground process while this window
+is open, and that check can only withdraw a claim, never make one.
+
 ## Resume
 
 Closing a tab kills the processes inside it, agent included. Reopening the tab —

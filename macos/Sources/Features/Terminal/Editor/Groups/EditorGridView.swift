@@ -19,15 +19,25 @@ struct EditorGridView: View {
     /// Moving it between cells is re-parenting this exact view — see
     /// `TerminalCellHost`.
     let terminal: NSView
+    @ObservedObject var sidebarLayout: SidebarLayoutModel
 
     var body: some View {
-        EditorGridNode(
-            node: center.tree,
-            center: center,
-            terminalDirectory: terminalDirectory,
-            search: search,
-            terminal: terminal
-        )
+        Group {
+            if sidebarLayout.selectedPane == .orchestrator {
+                AgentOverviewView(
+                    center: .shared,
+                    paneBackground: center.paneBackground.map(Color.init(nsColor:)),
+                    onReopen: sidebarLayout.onReopenAgentSession)
+            } else {
+                EditorGridNode(
+                    node: center.tree,
+                    center: center,
+                    terminalDirectory: terminalDirectory,
+                    search: search,
+                    terminal: terminal
+                )
+            }
+        }
     }
 }
 

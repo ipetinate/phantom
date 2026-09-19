@@ -36,7 +36,10 @@ extension ExtensionCard {
     static let maxScreenshots = 8
     static let maxMedia = 64
 
-    static let maxInlineIconBytes = 16 * 1024
+    // The registry's Alucard artwork is 19 KiB. Keep inline artwork below
+    // the normal media limit, but do not reject a valid card icon merely
+    // because it is a little larger than the old 16 KiB ceiling.
+    static let maxInlineIconBytes = 32 * 1024
     static let inlineIconPrefixes = ["data:image/svg+xml;base64,", "data:image/png;base64,"]
 
     static let maxTitleLength = 128

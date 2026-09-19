@@ -297,19 +297,25 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarTabShowWorktree") private var tabShowWorktree = true
     @AppStorage(AgentButtonDefaults.key(.tabRow, .claude)) private var tabShowClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage(AgentButtonDefaults.key(.tabRow, .codex)) private var tabShowCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .cursor)) private var tabShowCursor = AgentButtonDefaults.isShown(.cursor)
     @AppStorage(AgentButtonDefaults.key(.tabRow, .opencode)) private var tabShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage(AgentButtonDefaults.key(.tabRow, .antigravity)) private var tabShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage(AgentButtonDefaults.key(.tabRow, .kimi)) private var tabShowKimi = AgentButtonDefaults.isShown(.kimi)
     @AppStorage(AgentButtonDefaults.key(.tabRow, .pi)) private var tabShowPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .goose)) private var tabShowGoose = AgentButtonDefaults.isShown(.goose)
+    @AppStorage(AgentButtonDefaults.key(.tabRow, .kilo)) private var tabShowKilo = AgentButtonDefaults.isShown(.kilo)
     @AppStorage("SidebarTabAlwaysShowActions") private var tabAlwaysShowActions = false
 
     @AppStorage("SidebarGroupShowPullRequests") private var groupShowPullRequests = true
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .claude)) private var groupShowClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .codex)) private var groupShowCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .cursor)) private var groupShowCursor = AgentButtonDefaults.isShown(.cursor)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .opencode)) private var groupShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .antigravity)) private var groupShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .kimi)) private var groupShowKimi = AgentButtonDefaults.isShown(.kimi)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .pi)) private var groupShowPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .goose)) private var groupShowGoose = AgentButtonDefaults.isShown(.goose)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .kilo)) private var groupShowKilo = AgentButtonDefaults.isShown(.kilo)
     @AppStorage("SidebarGroupShowNewTerminal") private var groupShowNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var groupShowWorktree = true
     @AppStorage("SidebarGroupShowCount") private var groupShowCount = true
@@ -318,17 +324,32 @@ struct SidebarSettingsView: View {
     @AppStorage("SidebarChromeShowWorktree") private var chromeShowWorktree = true
     @AppStorage(AgentButtonDefaults.key(.chrome, .claude)) private var chromeShowClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage(AgentButtonDefaults.key(.chrome, .codex)) private var chromeShowCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .cursor)) private var chromeShowCursor = AgentButtonDefaults.isShown(.cursor)
     @AppStorage(AgentButtonDefaults.key(.chrome, .opencode)) private var chromeShowOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage(AgentButtonDefaults.key(.chrome, .antigravity)) private var chromeShowAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage(AgentButtonDefaults.key(.chrome, .kimi)) private var chromeShowKimi = AgentButtonDefaults.isShown(.kimi)
     @AppStorage(AgentButtonDefaults.key(.chrome, .pi)) private var chromeShowPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .goose)) private var chromeShowGoose = AgentButtonDefaults.isShown(.goose)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .kilo)) private var chromeShowKilo = AgentButtonDefaults.isShown(.kilo)
     @AppStorage("SidebarChromeAlwaysShowActions") private var chromeAlwaysShowActions = false
 
     @AppStorage("SidebarNewTabPosition") private var newTabPosition = "end"
     @AppStorage("SidebarNewTabHomeDirectory") private var newTabHomeDirectory = ""
+    @AppStorage("SidebarOpenTabsInBackground") private var openTabsInBackground = false
 
     var body: some View {
         Form {
+            Section {
+                Toggle("Open new terminals in the background", isOn: $openTabsInBackground)
+                    .toggleStyle(.switch)
+            } header: {
+                Text("Terminal creation")
+            } footer: {
+                Text("New terminals and agent sessions open without leaving the current tab. Individual actions may still focus a terminal explicitly.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 Toggle("Show Sidebar", isOn: $sidebarEnabled)
                     .toggleStyle(.switch)
@@ -377,12 +398,16 @@ struct SidebarSettingsView: View {
                         .init(id: "claude", title: "Claude Code",
                               short: "Claude", isOn: $chromeShowClaude),
                         .init(id: "codex", title: "Codex", isOn: $chromeShowCodex),
+                        .init(id: "cursor", title: "Cursor", isOn: $chromeShowCursor),
                         .init(id: "opencode", title: "OpenCode", isOn: $chromeShowOpenCode),
                         .init(id: "antigravity", title: "Antigravity",
                               isOn: $chromeShowAntigravity),
                         .init(id: "kimi", title: "Kimi Code", short: "Kimi",
                               isOn: $chromeShowKimi),
                         .init(id: "pi", title: "Pi", isOn: $chromeShowPi),
+                        .init(id: "goose", title: "Goose", isOn: $chromeShowGoose),
+                        .init(id: "kilo", title: "Kilo Code", short: "Kilo",
+                              isOn: $chromeShowKilo),
                     ],
                     emptyLabel: "Hidden")
 
@@ -421,12 +446,16 @@ struct SidebarSettingsView: View {
                         .init(id: "claude", title: "Claude Code",
                               short: "Claude", isOn: $tabShowClaude),
                         .init(id: "codex", title: "Codex", isOn: $tabShowCodex),
+                        .init(id: "cursor", title: "Cursor", isOn: $tabShowCursor),
                         .init(id: "opencode", title: "OpenCode", isOn: $tabShowOpenCode),
                         .init(id: "antigravity", title: "Antigravity",
                               isOn: $tabShowAntigravity),
                         .init(id: "kimi", title: "Kimi Code", short: "Kimi",
                               isOn: $tabShowKimi),
                         .init(id: "pi", title: "Pi", isOn: $tabShowPi),
+                        .init(id: "goose", title: "Goose", isOn: $tabShowGoose),
+                        .init(id: "kilo", title: "Kilo Code", short: "Kilo",
+                              isOn: $tabShowKilo),
                     ],
                     emptyLabel: "Hidden")
 
@@ -452,12 +481,16 @@ struct SidebarSettingsView: View {
                         .init(id: "claude", title: "Claude Code",
                               short: "Claude", isOn: $groupShowClaude),
                         .init(id: "codex", title: "Codex", isOn: $groupShowCodex),
+                        .init(id: "cursor", title: "Cursor", isOn: $groupShowCursor),
                         .init(id: "opencode", title: "OpenCode", isOn: $groupShowOpenCode),
                         .init(id: "antigravity", title: "Antigravity",
                               isOn: $groupShowAntigravity),
                         .init(id: "kimi", title: "Kimi Code", short: "Kimi",
                               isOn: $groupShowKimi),
                         .init(id: "pi", title: "Pi", isOn: $groupShowPi),
+                        .init(id: "goose", title: "Goose", isOn: $groupShowGoose),
+                        .init(id: "kilo", title: "Kilo Code", short: "Kilo",
+                              isOn: $groupShowKilo),
                     ],
                     emptyLabel: "Hidden")
 

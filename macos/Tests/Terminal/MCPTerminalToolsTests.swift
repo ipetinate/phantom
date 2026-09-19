@@ -53,7 +53,7 @@ struct MCPTerminalToolsTests {
     @Test func theToolsOnOfferAreTheOnesDocumented() {
         let names = MCPTerminalTools.all.map(\.tool.name)
         #expect(names == [
-            "list_terminals", "read_output", "create_terminal", "run_command",
+            "list_terminals", "read_output", "create_terminal", "run_command", "send_text", "send_key",
             "focus_terminal", "update_terminal",
         ])
     }
@@ -70,7 +70,7 @@ struct MCPTerminalToolsTests {
     /// The ids handed out have to be the ids taken back, or an agent that
     /// listed the terminals cannot act on one.
     @Test func everyToolThatTakesATerminalSpellsItTheSameWay() {
-        for name in ["read_output", "run_command", "focus_terminal"] {
+        for name in ["read_output", "run_command", "send_text", "send_key", "focus_terminal"] {
             let handler = MCPTerminalTools.all.first { $0.tool.name == name }
             let properties = field(handler!.tool.schema, "properties")
             #expect(properties?.object?["terminal"] != nil, "\(name) takes no `terminal`")

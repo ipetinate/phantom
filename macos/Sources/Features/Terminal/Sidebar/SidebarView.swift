@@ -73,10 +73,13 @@ struct SidebarView: View {
 
     /// Same as `onNewTabInGroup`, with a Codex session started in it.
     var onNewCodexTabInGroup: (SidebarGroup?) -> Void = { _ in }
+    var onNewCursorTabInGroup: (SidebarGroup?) -> Void = { _ in }
     var onNewOpenCodeTabInGroup: (SidebarGroup?) -> Void = { _ in }
     var onNewAntigravityTabInGroup: (SidebarGroup?) -> Void = { _ in }
     var onNewKimiTabInGroup: (SidebarGroup?) -> Void = { _ in }
     var onNewPiTabInGroup: (SidebarGroup?) -> Void = { _ in }
+    var onNewGooseTabInGroup: (SidebarGroup?) -> Void = { _ in }
+    var onNewKiloTabInGroup: (SidebarGroup?) -> Void = { _ in }
 
     /// Opens a terminal directly beside the selected one — same group, or
     /// ungrouped if that's where the selection lives — and hands back its
@@ -94,11 +97,6 @@ struct SidebarView: View {
 
     /// See `GitRepoView.onOpenBranchDiff`.
     var onOpenBranchDiff: ((URL, String) -> Void)?
-
-    /// List animations are suspended while the sidebar first populates.
-    private var listAnimation: Animation? {
-        tabManager.animationsEnabled ? .snappy(duration: 0.22) : nil
-    }
 
     /// One rendered group section and the tabs resolved into it, in
     /// sidebar display order.
@@ -177,6 +175,7 @@ struct SidebarView: View {
 
     @AppStorage(SidebarTabBarPlacement.defaultsKey)
     private var tabBarPlacementRaw = SidebarTabBarPlacement.top.rawValue
+    @State private var lastSelectedTabID: ObjectIdentifier?
 
     private var tabBarPlacement: SidebarTabBarPlacement {
         SidebarTabBarPlacement(raw: tabBarPlacementRaw)
@@ -263,6 +262,11 @@ struct SidebarView: View {
             )
         case .extensions:
             ExtensionsPanelView()
+        case .orchestrator:
+            AgentOverviewView(
+                center: .shared,
+                compact: true,
+                onReopen: layout.onReopenAgentSession)
         default:
             terminalList
         }
@@ -289,10 +293,13 @@ struct SidebarView: View {
             onNewTab: onNewTabInGroup,
             onNewClaudeTab: onNewClaudeTabInGroup,
             onNewCodexTab: onNewCodexTabInGroup,
+            onNewCursorTab: onNewCursorTabInGroup,
             onNewOpenCodeTab: onNewOpenCodeTabInGroup,
             onNewAntigravityTab: onNewAntigravityTabInGroup,
             onNewKimiTab: onNewKimiTabInGroup,
             onNewPiTab: onNewPiTabInGroup,
+            onNewGooseTab: onNewGooseTabInGroup,
+            onNewKiloTab: onNewKiloTabInGroup,
             editorCenter: editorCenter,
             onNewWorktreeTab: layout.onNewWorktreeTab,
             onNewWorktreeTabInGroup: layout.onNewWorktreeTabInGroup
@@ -301,38 +308,59 @@ struct SidebarView: View {
 
     private var terminalList: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                let content = resolved
+            ScrollViewReader { proxy in
+                ScrollView {
+                    let content = resolved
 
-                LazyVStack(spacing: SidebarMetrics.itemSpacing) {
-                    ForEach(content.sections) { section in
-                        groupSection(section)
+                    LazyVStack(spacing: SidebarMetrics.itemSpacing) {
+                        ForEach(content.sections) { section in
+                            groupSection(section)
+                        }
+
+                        // Same spacing as between groups: every item in the
+                        // list sits on the one rhythm, whether it's a group or
+                        // a loose terminal.
+                        ForEach(content.ungrouped) { tab in
+                            SidebarTabRow(
+                                tab: tab,
+                                groupId: nil,
+                                tabManager: tabManager,
+                                store: store,
+                                dragState: dragState,
+                                editorCenter: editorCenter,
+                                onNewWorktreeTab: layout.onNewWorktreeTab
+                            )
+                            .id(tab.id)
+                        }
                     }
+                    .padding(8)
+                    // Keep membership changes transaction-free. Animating the
+                    // section/order arrays makes LazyVStack rebuild its
+                    // layout on both insertion and close, which discards the
+                    // user's scroll anchor in long lists and is expensive
+                    // while an agent is creating a terminal.
+                    .background(alignment: .top) { InvisibleScrollers() }
+                }
+                .scrollIndicators(.never)
+                .onAppear {
+                    lastSelectedTabID = tabManager.models.first(where: \.isSelected)?.id
+                }
+                .onChange(of: tabManager.models.map(\.id)) { ids in
+                    let selectedID = tabManager.models.first(where: \.isSelected)?.id
+                    let selectedWasRemoved = lastSelectedTabID.map { !ids.contains($0) } ?? false
+                    lastSelectedTabID = selectedID
 
-                    // Same spacing as between groups: every item in the
-                    // list sits on the one rhythm, whether it's a group or
-                    // a loose terminal.
-                    ForEach(content.ungrouped) { tab in
-                        SidebarTabRow(
-                            tab: tab,
-                            groupId: nil,
-                            tabManager: tabManager,
-                            store: store,
-                            dragState: dragState,
-                            editorCenter: editorCenter,
-                            onNewWorktreeTab: layout.onNewWorktreeTab
-                        )
+                    // Closing the selected tab moves native focus to its
+                    // neighbour. Keep that neighbour in view, but leave the
+                    // user's scroll position untouched for every other close.
+                    guard selectedWasRemoved, let selectedID else { return }
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(selectedID, anchor: .center)
                     }
                 }
-                .padding(8)
-                .animation(listAnimation, value: content.sections.map(\.id))
-                .animation(listAnimation, value: store.tabOrder)
-                .animation(listAnimation, value: tabManager.models.map(\.id))
-                .background(alignment: .top) { InvisibleScrollers() }
-            }
-            .scrollIndicators(.never)
-            .onDrop(of: [.plainText], isTargeted: nil) { providers in
-                appendDroppedToUngrouped(providers)
+                .onDrop(of: [.plainText], isTargeted: nil) { providers in
+                    appendDroppedToUngrouped(providers)
+                }
             }
         }
     }
@@ -391,10 +419,13 @@ struct SidebarTitlebarChrome: View {
     @ObservedObject private var visibility: SidebarPaneVisibility = .shared
     @AppStorage(AgentButtonDefaults.key(.chrome, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage(AgentButtonDefaults.key(.chrome, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .cursor)) private var showCursor = AgentButtonDefaults.isShown(.cursor)
     @AppStorage(AgentButtonDefaults.key(.chrome, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage(AgentButtonDefaults.key(.chrome, .antigravity)) private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage(AgentButtonDefaults.key(.chrome, .kimi)) private var showKimi = AgentButtonDefaults.isShown(.kimi)
     @AppStorage(AgentButtonDefaults.key(.chrome, .pi)) private var showPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .goose)) private var showGoose = AgentButtonDefaults.isShown(.goose)
+    @AppStorage(AgentButtonDefaults.key(.chrome, .kilo)) private var showKilo = AgentButtonDefaults.isShown(.kilo)
 
     /// Whether the pane actions (new terminal, new Claude session, new
     /// group, refresh) stay visible without a hover — off by default,
@@ -494,6 +525,13 @@ struct SidebarTitlebarChrome: View {
                     CodexIcon(size: 12)
                 }
             }
+            if showCursor {
+                SidebarIconButton(help: "New Cursor Session") {
+                    layout.onNewCursorTab()
+                } label: {
+                    CursorIcon(size: 12)
+                }
+            }
             if showOpenCode {
                 SidebarIconButton(help: "New OpenCode Session") {
                     layout.onNewOpenCodeTab()
@@ -520,6 +558,20 @@ struct SidebarTitlebarChrome: View {
                     layout.onNewPiTab()
                 } label: {
                     PiIcon(size: 12)
+                }
+            }
+            if showGoose {
+                SidebarIconButton(help: "New Goose Session") {
+                    layout.onNewGooseTab()
+                } label: {
+                    GooseIcon(size: 12)
+                }
+            }
+            if showKilo {
+                SidebarIconButton(help: "New Kilo Code Session") {
+                    layout.onNewKiloTab()
+                } label: {
+                    KiloIcon(size: 12)
                 }
             }
             if visibility.isEnabled(.worktrees) {
@@ -740,10 +792,13 @@ private struct SidebarGroupSection: View {
     var onNewTab: (SidebarGroup?) -> Void = { _ in }
     var onNewClaudeTab: (SidebarGroup?) -> Void = { _ in }
     var onNewCodexTab: (SidebarGroup?) -> Void = { _ in }
+    var onNewCursorTab: (SidebarGroup?) -> Void = { _ in }
     var onNewOpenCodeTab: (SidebarGroup?) -> Void = { _ in }
     var onNewAntigravityTab: (SidebarGroup?) -> Void = { _ in }
     var onNewKimiTab: (SidebarGroup?) -> Void = { _ in }
     var onNewPiTab: (SidebarGroup?) -> Void = { _ in }
+    var onNewGooseTab: (SidebarGroup?) -> Void = { _ in }
+    var onNewKiloTab: (SidebarGroup?) -> Void = { _ in }
 
     /// Passed straight through to the rows, which is the only reason this
     /// view knows about either: a group header draws no documents and opens
@@ -762,10 +817,13 @@ private struct SidebarGroupSection: View {
     @AppStorage("SidebarGroupShowPullRequests") private var showPullRequests = true
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .claude)) private var showClaude = AgentButtonDefaults.isShown(.claude)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .codex)) private var showCodex = AgentButtonDefaults.isShown(.codex)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .cursor)) private var showCursor = AgentButtonDefaults.isShown(.cursor)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .opencode)) private var showOpenCode = AgentButtonDefaults.isShown(.opencode)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .antigravity)) private var showAntigravity = AgentButtonDefaults.isShown(.antigravity)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .kimi)) private var showKimi = AgentButtonDefaults.isShown(.kimi)
     @AppStorage(AgentButtonDefaults.key(.groupHeader, .pi)) private var showPi = AgentButtonDefaults.isShown(.pi)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .goose)) private var showGoose = AgentButtonDefaults.isShown(.goose)
+    @AppStorage(AgentButtonDefaults.key(.groupHeader, .kilo)) private var showKilo = AgentButtonDefaults.isShown(.kilo)
     @AppStorage("SidebarGroupShowNewTerminal") private var showNewTerminal = true
     @AppStorage("SidebarGroupShowWorktree") private var showWorktree = true
     @AppStorage("SidebarGroupShowCount") private var showCount = true
@@ -993,6 +1051,15 @@ private struct SidebarGroupSection: View {
                         .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
                         .allowsHitTesting(alwaysShowActions || isHeaderHovered)
                     }
+                    if showCursor {
+                        SidebarIconButton(help: "New Cursor Session in Group") {
+                            onNewCursorTab(group)
+                        } label: {
+                            CursorIcon(size: 12)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
                     if showOpenCode {
                         SidebarIconButton(help: "New OpenCode Session in Group") {
                             onNewOpenCodeTab(group)
@@ -1025,6 +1092,24 @@ private struct SidebarGroupSection: View {
                             onNewPiTab(group)
                         } label: {
                             PiIcon(size: 12)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
+                    if showGoose {
+                        SidebarIconButton(help: "New Goose Session in Group") {
+                            onNewGooseTab(group)
+                        } label: {
+                            GooseIcon(size: 12)
+                        }
+                        .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
+                        .allowsHitTesting(alwaysShowActions || isHeaderHovered)
+                    }
+                    if showKilo {
+                        SidebarIconButton(help: "New Kilo Code Session in Group") {
+                            onNewKiloTab(group)
+                        } label: {
+                            KiloIcon(size: 12)
                         }
                         .opacity(alwaysShowActions || isHeaderHovered ? 1 : 0)
                         .allowsHitTesting(alwaysShowActions || isHeaderHovered)
@@ -1206,6 +1291,9 @@ private struct SidebarGroupSection: View {
         Button { onNewCodexTab(group) } label: {
             agentMenuLabel("New Codex Session in Group", .codex)
         }
+        Button { onNewCursorTab(group) } label: {
+            agentMenuLabel("New Cursor Session in Group", .cursor)
+        }
         Button { onNewOpenCodeTab(group) } label: {
             agentMenuLabel("New OpenCode Session in Group", .opencode)
         }
@@ -1217,6 +1305,12 @@ private struct SidebarGroupSection: View {
         }
         Button { onNewPiTab(group) } label: {
             agentMenuLabel("New Pi Session in Group", .pi)
+        }
+        Button { onNewGooseTab(group) } label: {
+            agentMenuLabel("New Goose Session in Group", .goose)
+        }
+        Button { onNewKiloTab(group) } label: {
+            agentMenuLabel("New Kilo Code Session in Group", .kilo)
         }
 
         Divider()

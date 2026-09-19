@@ -1723,7 +1723,10 @@ struct CodeTextView: NSViewRepresentable {
             guard let minimap, !minimap.isHidden else { return }
             minimapTask?.cancel()
             minimapTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(250))
+                // The minimap is deliberately eventual. Running its document
+                // reduction during a typing pause made a large file fight the
+                // keystroke that just ended the pause.
+                try? await Task.sleep(for: .milliseconds(600))
                 guard !Task.isCancelled else { return }
                 self?.refreshMinimap()
             }
@@ -1736,7 +1739,13 @@ struct CodeTextView: NSViewRepresentable {
         func refreshMinimap() {
             guard let minimap, minimap.isHidden == false, let textView else { return }
             let text = textView.string
-            let tokens = storage.tokens(in: text, range: NSRange(location: 0, length: (text as NSString).length))
+            let length = (text as NSString).length
+            // Tokenising a generated file solely to colour two-pixel bars is
+            // wasted work. The minimap still shows line lengths and shape;
+            // syntax colours resume automatically for normal-sized files.
+            let tokens = length <= 512 * 1024
+                ? storage.tokens(in: text, range: NSRange(location: 0, length: length))
+                : []
             minimap.setRows(CodeMinimapView.rows(for: text, tokens: tokens))
         }
 
