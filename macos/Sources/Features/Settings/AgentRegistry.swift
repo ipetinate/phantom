@@ -9,7 +9,7 @@ final class AgentRegistry: @unchecked Sendable {
     static let openCodeHome: ConfigPath = "~/.config/opencode"
     static let piHome: ConfigPath = "~/.pi/agent"
 
-    static let builtIn: [AgentDescriptor] = [claude, codex, opencode, antigravity, kimi, pi]
+    static let builtIn: [AgentDescriptor] = [claude, codex, cursor, opencode, antigravity, kimi, pi]
     static let builtInIDs: Set<String> = Set(builtIn.map(\.id))
 
     private let lock = NSLock()
@@ -139,6 +139,28 @@ final class AgentRegistry: @unchecked Sendable {
             table: "mcp_servers",
             entry: MCPIntegration.Entry(command: .separateArguments))),
         sessions: .codexSessions)
+
+    static let cursor = AgentDescriptor(
+        id: "cursor",
+        displayName: "Cursor",
+        launchCommand: "cursor-agent",
+        resume: ResumeCommand(
+            withSession: "cursor-agent --resume {session}",
+            withoutSession: "cursor-agent resume"),
+        installation: AgentInstallation(
+            commands: [],
+            documentation: URL(string: "https://docs.cursor.com/en/cli/installation")),
+        icon: .asset("CursorIcon"),
+        brandColour: .label,
+        keepsOriginalColours: false,
+        settingsKeyToken: "Cursor",
+        hooks: nil,
+        mcp: .json(MCPIntegration.JSONMCP(
+            directory: "~/.cursor",
+            fileName: "mcp.json",
+            key: "mcpServers",
+            entry: MCPIntegration.Entry(command: .separateArguments))),
+        sessions: .none)
 
     static let opencode = AgentDescriptor(
         id: "opencode",

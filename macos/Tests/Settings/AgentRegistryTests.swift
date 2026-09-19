@@ -19,11 +19,24 @@ struct AgentRegistryTests {
             sessions: .none)
     }
 
-    @Test func theSixBuiltInAgentsComeInAFixedOrder() {
+    @Test func theSevenBuiltInAgentsComeInAFixedOrder() {
         #expect(AgentRegistry.builtIn.map(\.id) == [
-            "claude", "codex", "opencode", "antigravity", "kimi", "pi",
+            "claude", "codex", "cursor", "opencode", "antigravity", "kimi", "pi",
         ])
         #expect(AgentRegistry.shared.all.map(\.id) == AgentRegistry.builtIn.map(\.id))
+    }
+
+    @Test func cursorUsesItsCliResumeAndMCPConfiguration() {
+        #expect(AgentRegistry.cursor.launchCommand == "cursor-agent")
+        #expect(AgentRegistry.cursor.resume.command(sessionID: "abc") == "cursor-agent --resume abc")
+        #expect(AgentRegistry.cursor.resume.command(sessionID: nil) == "cursor-agent resume")
+        guard case .json(let mcp) = AgentRegistry.cursor.mcp else {
+            Issue.record("Cursor should use JSON MCP configuration")
+            return
+        }
+        #expect(mcp.directory.candidates == ["~/.cursor"])
+        #expect(mcp.fileName == "mcp.json")
+        #expect(mcp.key == "mcpServers")
     }
 
     @Test func everyBuiltInIdIsUnique() {
