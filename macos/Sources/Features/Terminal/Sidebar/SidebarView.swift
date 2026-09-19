@@ -177,6 +177,7 @@ struct SidebarView: View {
 
     @AppStorage(SidebarTabBarPlacement.defaultsKey)
     private var tabBarPlacementRaw = SidebarTabBarPlacement.top.rawValue
+    @State private var lastSelectedTabID: ObjectIdentifier?
 
     private var tabBarPlacement: SidebarTabBarPlacement {
         SidebarTabBarPlacement(raw: tabBarPlacementRaw)
@@ -306,38 +307,59 @@ struct SidebarView: View {
 
     private var terminalList: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                let content = resolved
+            ScrollViewReader { proxy in
+                ScrollView {
+                    let content = resolved
 
-                LazyVStack(spacing: SidebarMetrics.itemSpacing) {
-                    ForEach(content.sections) { section in
-                        groupSection(section)
+                    LazyVStack(spacing: SidebarMetrics.itemSpacing) {
+                        ForEach(content.sections) { section in
+                            groupSection(section)
+                        }
+
+                        // Same spacing as between groups: every item in the
+                        // list sits on the one rhythm, whether it's a group or
+                        // a loose terminal.
+                        ForEach(content.ungrouped) { tab in
+                            SidebarTabRow(
+                                tab: tab,
+                                groupId: nil,
+                                tabManager: tabManager,
+                                store: store,
+                                dragState: dragState,
+                                editorCenter: editorCenter,
+                                onNewWorktreeTab: layout.onNewWorktreeTab
+                            )
+                            .id(tab.id)
+                        }
                     }
+                    .padding(8)
+                    .animation(listAnimation, value: content.sections.map(\.id))
+                    .animation(listAnimation, value: store.tabOrder)
+                    // Row membership is intentionally not animated. Animating
+                    // the whole ID array makes LazyVStack rebuild its layout
+                    // on close and can discard the scroll anchor in long lists.
+                    .background(alignment: .top) { InvisibleScrollers() }
+                }
+                .scrollIndicators(.never)
+                .onAppear {
+                    lastSelectedTabID = tabManager.models.first(where: \.isSelected)?.id
+                }
+                .onChange(of: tabManager.models.map(\.id)) { ids in
+                    let selectedID = tabManager.models.first(where: \.isSelected)?.id
+                    let selectedWasRemoved = lastSelectedTabID.map { !ids.contains($0) } ?? false
+                    lastSelectedTabID = selectedID
 
-                    // Same spacing as between groups: every item in the
-                    // list sits on the one rhythm, whether it's a group or
-                    // a loose terminal.
-                    ForEach(content.ungrouped) { tab in
-                        SidebarTabRow(
-                            tab: tab,
-                            groupId: nil,
-                            tabManager: tabManager,
-                            store: store,
-                            dragState: dragState,
-                            editorCenter: editorCenter,
-                            onNewWorktreeTab: layout.onNewWorktreeTab
-                        )
+                    // Closing the selected tab moves native focus to its
+                    // neighbour. Keep that neighbour in view, but leave the
+                    // user's scroll position untouched for every other close.
+                    guard selectedWasRemoved, let selectedID else { return }
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(selectedID, anchor: .center)
                     }
                 }
-                .padding(8)
-                .animation(listAnimation, value: content.sections.map(\.id))
-                .animation(listAnimation, value: store.tabOrder)
-                .animation(listAnimation, value: tabManager.models.map(\.id))
-                .background(alignment: .top) { InvisibleScrollers() }
-            }
-            .scrollIndicators(.never)
-            .onDrop(of: [.plainText], isTargeted: nil) { providers in
-                appendDroppedToUngrouped(providers)
+                .onDrop(of: [.plainText], isTargeted: nil) { providers in
+                    appendDroppedToUngrouped(providers)
+                }
             }
         }
     }
