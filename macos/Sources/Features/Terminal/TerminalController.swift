@@ -1603,6 +1603,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         layout.onNewCodexTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningAgent: .codex)
         }
+        layout.onNewCursorTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningAgent: .cursor)
+        }
         layout.onNewOpenCodeTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningAgent: .opencode)
         }
@@ -1614,6 +1617,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
         layout.onNewPiTab = { [weak self] in
             self?.newSidebarTab(in: nil, runningAgent: .pi)
+        }
+        layout.onNewGooseTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningAgent: .goose)
+        }
+        layout.onNewKiloTab = { [weak self] in
+            self?.newSidebarTab(in: nil, runningAgent: .kilo)
         }
         layout.onReopenAgentSession = { [weak self] card, groupID in
             guard let self,
@@ -1654,6 +1663,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             onNewCodexTabInGroup: { [weak self] group in
                 self?.newSidebarTab(in: group, runningAgent: .codex)
             },
+            onNewCursorTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningAgent: .cursor)
+            },
             onNewOpenCodeTabInGroup: { [weak self] group in
                 self?.newSidebarTab(in: group, runningAgent: .opencode)
             },
@@ -1665,6 +1677,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             },
             onNewPiTabInGroup: { [weak self] group in
                 self?.newSidebarTab(in: group, runningAgent: .pi)
+            },
+            onNewGooseTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningAgent: .goose)
+            },
+            onNewKiloTabInGroup: { [weak self] group in
+                self?.newSidebarTab(in: group, runningAgent: .kilo)
             },
             onSpawnTerminalBesideSelection: { [weak self] in
                 self?.newSidebarTabBesideSelection()
