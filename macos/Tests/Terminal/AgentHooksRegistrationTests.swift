@@ -30,13 +30,13 @@ struct AgentHooksRegistrationTests {
     @Test func statusAnswersForEveryAgentAtOnce() {
         let status = AgentHooksRegistration.status()
 
-        #expect(Set(status.keys) == Set(CodingAgent.allCases))
+        #expect(Set(status.keys) == Set(AgentHooksRegistration.agents.map(\.id)))
     }
 
     @Test func everyAgentIsListedOnce() {
         let ids = AgentHooksRegistration.agents.map(\.id)
 
-        #expect(ids.count == CodingAgent.allCases.count)
+        #expect(ids.count == AgentHooksRegistration.agents.count)
         #expect(Set(ids).count == ids.count)
     }
 

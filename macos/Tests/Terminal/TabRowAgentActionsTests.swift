@@ -14,10 +14,12 @@ import Testing
 /// last word leaves it saying `working` for the life of the tab. Every test
 /// below therefore states a shell as well as a record.
 struct TabRowAgentActionsTests {
-    private let all: Set<CodingAgent> = [.claude, .codex, .opencode, .antigravity, .kimi, .pi]
+    private let all: Set<CodingAgent> = [
+        .claude, .codex, .cursor, .opencode, .antigravity, .kimi, .pi, .goose, .kilo,
+    ]
 
     private let everyButton: [CodingAgent] = [
-        .claude, .codex, .opencode, .antigravity, .kimi, .pi,
+        .claude, .codex, .cursor, .opencode, .antigravity, .kimi, .pi, .goose, .kilo,
     ]
 
     @Test func aPlainTabOffersEveryAgentTheReaderEnabled() {
@@ -110,7 +112,9 @@ struct TabRowAgentActionsTests {
     /// Order comes from the enum, not from the set, so rows do not disagree
     /// with each other about where a button sits.
     @Test func theOrderIsFixedRegardlessOfTheSet() {
-        let reversed: Set<CodingAgent> = [.pi, .kimi, .antigravity, .opencode, .codex, .claude]
+        let reversed: Set<CodingAgent> = [
+            .kilo, .goose, .pi, .kimi, .antigravity, .opencode, .cursor, .codex, .claude,
+        ]
 
         #expect(
             TabRowAgentActions.agents(shown: reversed, liveAgent: nil, isIdle: true)

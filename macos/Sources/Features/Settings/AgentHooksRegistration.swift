@@ -71,6 +71,8 @@ enum AgentHooksRegistration {
             return TOMLHooksInstaller(descriptor: descriptor, hooks: hooks)
         case .file(let plugin)?:
             return PluginFileInstaller(descriptor: descriptor, plugin: plugin)
+        case .goose(let hooks)?:
+            return GooseHooksInstaller(descriptor: descriptor, hooks: hooks)
         case nil:
             return nil
         }

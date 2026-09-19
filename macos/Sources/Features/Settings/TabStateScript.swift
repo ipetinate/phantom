@@ -219,6 +219,7 @@ extension HooksIntegration {
         case .json(let hooks): return hooks.script
         case .toml(let hooks): return hooks.script
         case .file: return nil
+        case .goose: return nil
         }
     }
 }

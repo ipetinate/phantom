@@ -8,8 +8,12 @@ final class AgentRegistry: @unchecked Sendable {
     static let antigravityHome: ConfigPath = "~/.gemini/config"
     static let openCodeHome: ConfigPath = "~/.config/opencode"
     static let piHome: ConfigPath = "~/.pi/agent"
+    static let gooseHome: ConfigPath = "~/.config/goose"
+    static let kiloHome: ConfigPath = "~/.config/kilo"
 
-    static let builtIn: [AgentDescriptor] = [claude, codex, cursor, opencode, antigravity, kimi, pi]
+    static let builtIn: [AgentDescriptor] = [
+        claude, codex, cursor, opencode, antigravity, kimi, pi, goose, kilo,
+    ]
     static let builtInIDs: Set<String> = Set(builtIn.map(\.id))
 
     private let lock = NSLock()
@@ -160,6 +164,41 @@ final class AgentRegistry: @unchecked Sendable {
             fileName: "mcp.json",
             key: "mcpServers",
             entry: MCPIntegration.Entry(command: .separateArguments))),
+        sessions: .none)
+
+    static let goose = AgentDescriptor(
+        id: "goose",
+        displayName: "Goose",
+        launchCommand: "goose",
+        resume: ResumeCommand(
+            withSession: "goose session --resume",
+            withoutSession: "goose session"),
+        installation: AgentInstallation(
+            commands: [],
+            documentation: URL(string: "https://github.com/aaif-goose/goose#readme")),
+        icon: .asset("GooseIcon"),
+        brandColour: .label,
+        keepsOriginalColours: false,
+        settingsKeyToken: "Goose",
+        hooks: .goose(HooksIntegration.GooseHooks(
+            directory: "~/.agents/plugins",
+            pluginName: "phantom",
+            events: [
+                .init("SessionStart", ""),
+                .init("UserPromptSubmit", "working"),
+                .init("PreToolUse", "working"),
+                .init("PostToolUse", "working"),
+                .init("PermissionRequest", "awaiting"),
+                .init("Stop", "done"),
+                .init("SessionEnd", "ended"),
+            ],
+            sessionKeys: ["session_id", "sessionId", "conversation_id", "conversationId"])),
+        mcp: .yaml(MCPIntegration.YAMLMCP(
+            directory: gooseHome,
+            fileName: "config.yaml",
+            table: "extensions",
+            entry: MCPIntegration.Entry(command: .separateArguments),
+            timeout: 300)),
         sessions: .none)
 
     static let opencode = AgentDescriptor(
@@ -320,6 +359,41 @@ final class AgentRegistry: @unchecked Sendable {
             fileName: "mcp.json",
             key: "mcpServers",
             entry: MCPIntegration.Entry(command: .separateArguments))),
+        sessions: .none)
+
+    static let kilo = AgentDescriptor(
+        id: "kilo",
+        displayName: "Kilo Code",
+        launchCommand: "kilo",
+        resume: ResumeCommand(
+            withSession: "kilo --session {session}",
+            withoutSession: "kilo --continue"),
+        installation: AgentInstallation(
+            commands: [
+                AgentInstallCommand(manager: .homebrew, command: "brew install Kilo-Org/tap/kilo"),
+                AgentInstallCommand(manager: .npm, command: "npm install -g @kilocode/cli"),
+            ],
+            documentation: URL(string: "https://github.com/Kilo-Org/kilocode")),
+        icon: .asset("KiloIcon"),
+        brandColour: .label,
+        keepsOriginalColours: false,
+        settingsKeyToken: "Kilo",
+        hooks: .file(HooksIntegration.PluginFile(
+            directory: kiloHome,
+            subdirectory: "plugin",
+            fileName: "phantom.ts",
+            body: kiloPlugin,
+            events: [
+                "session.created", "session.status", "session.idle", "session.error",
+                "permission.asked", "chat.message", "tool.execute.before", "command.executed",
+            ])),
+        mcp: .json(MCPIntegration.JSONMCP(
+            directory: kiloHome,
+            fileName: "kilo.json",
+            key: "mcp",
+            entry: MCPIntegration.Entry(
+                command: .singleArray,
+                extras: ["type": .string("local"), "enabled": .bool(true)]))),
         sessions: .none)
 
     // MARK: Plugin bodies
@@ -522,5 +596,72 @@ final class AgentRegistry: @unchecked Sendable {
       pi.on("agent_end", async () => report("done"));
       pi.on("session_shutdown", async () => report("ended"));
     }
+    """#
+
+    static let kiloPlugin = #"""
+    // Reports Kilo Code session state to the Phantom sidebar.
+    import { writeFileSync, renameSync, unlinkSync, readFileSync } from "node:fs";
+
+    export default {
+      id: "phantom",
+      server: async () => {
+        const stateFile = process.env.{{stateFileVariable}};
+        if (!stateFile) return {};
+
+        let session = "";
+        const valid = (value) => typeof value === "string" &&
+          /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
+
+        const remember = (value) => {
+          if (valid(value)) session = value;
+        };
+
+        const fromEvent = (event) => {
+          const props = event?.properties || {};
+          return props.sessionID || props.sessionId || props.session_id ||
+            event?.sessionID || event?.sessionId || event?.session_id || "";
+        };
+
+        const carried = () => {
+          try {
+            const line = readFileSync(stateFile, "utf8")
+              .split("\n").find((value) => value.startsWith("session="));
+            return line ? line.slice("session=".length).trim() : "";
+          } catch {
+            return "";
+          }
+        };
+
+        const report = (state) => {
+          if (!session) remember(carried());
+          const temp = stateFile + "." + process.pid + ".tmp";
+          let body = state + "\nagent={{agent}}\n";
+          if (session) body += "session=" + session + "\n";
+          try {
+            writeFileSync(temp, body);
+            renameSync(temp, stateFile);
+          } catch {
+            try { unlinkSync(temp); } catch {}
+          }
+        };
+
+        return {
+          event: async ({ event }) => {
+            remember(fromEvent(event));
+            const type = event?.type || "";
+            const status = event?.properties?.status?.type ||
+              event?.status?.type || event?.status || "";
+            if (type === "session.created") report("");
+            else if (type === "session.status") {
+              if (status === "busy" || status === "retry") report("working");
+              else if (status === "idle") report("done");
+            } else if (type === "session.idle") report("done");
+            else if (type === "session.error" || type === "permission.asked") report("awaiting");
+            else if (type === "chat.message" || type === "tool.execute.before" ||
+              type === "command.executed") report("working");
+          },
+        };
+      },
+    };
     """#
 }

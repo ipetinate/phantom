@@ -43,6 +43,8 @@ struct CodingAgent: Hashable, RawRepresentable, Sendable, CaseIterable {
     static let antigravity = CodingAgent(id: AgentRegistry.antigravity.id)
     static let kimi = CodingAgent(id: AgentRegistry.kimi.id)
     static let pi = CodingAgent(id: AgentRegistry.pi.id)
+    static let goose = CodingAgent(id: AgentRegistry.goose.id)
+    static let kilo = CodingAgent(id: AgentRegistry.kilo.id)
 
     static var allCases: [CodingAgent] {
         AgentRegistry.shared.all.map { CodingAgent(id: $0.id) }

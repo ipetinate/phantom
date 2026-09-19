@@ -19,9 +19,9 @@ struct AgentRegistryTests {
             sessions: .none)
     }
 
-    @Test func theSevenBuiltInAgentsComeInAFixedOrder() {
+    @Test func theNineBuiltInAgentsComeInAFixedOrder() {
         #expect(AgentRegistry.builtIn.map(\.id) == [
-            "claude", "codex", "cursor", "opencode", "antigravity", "kimi", "pi",
+            "claude", "codex", "cursor", "opencode", "antigravity", "kimi", "pi", "goose", "kilo",
         ])
         #expect(AgentRegistry.shared.all.map(\.id) == AgentRegistry.builtIn.map(\.id))
     }
@@ -91,6 +91,8 @@ struct AgentRegistryTests {
     @Test func theCodexAndKimiHomesFollowTheirVariables() {
         #expect(AgentRegistry.codexHome.candidates == ["$CODEX_HOME", "~/.codex-cli", "~/.codex"])
         #expect(AgentRegistry.kimiHome.candidates == ["$KIMI_CODE_HOME", "~/.kimi-code"])
+        #expect(AgentRegistry.gooseHome.candidates == ["~/.config/goose"])
+        #expect(AgentRegistry.kiloHome.candidates == ["~/.config/kilo"])
     }
 
     @Test func onlyOpenCodeKeepsItsOriginalColours() {
@@ -99,7 +101,7 @@ struct AgentRegistryTests {
     }
 
     @Test func thePluginBodiesCarryTheirPlaceholders() {
-        for body in [AgentRegistry.openCodePlugin, AgentRegistry.piExtension] {
+        for body in [AgentRegistry.openCodePlugin, AgentRegistry.piExtension, AgentRegistry.kiloPlugin] {
             #expect(body.contains(HooksIntegration.PluginFile.agentPlaceholder))
             #expect(body.contains(HooksIntegration.PluginFile.stateFileVariablePlaceholder))
         }

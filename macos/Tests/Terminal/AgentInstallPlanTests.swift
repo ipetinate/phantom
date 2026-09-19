@@ -78,6 +78,7 @@ struct AgentInstallPlanTests {
             .opencode: "opencode",
             .kimi: "kimi-code",
             .pi: "pi-coding-agent",
+            .kilo: "kilo",
         ]
 
         for entry in AgentInstallPlan.all {

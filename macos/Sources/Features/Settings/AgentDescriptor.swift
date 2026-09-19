@@ -75,6 +75,7 @@ enum HooksIntegration: Equatable, Sendable {
     case json(JSONHooks)
     case toml(TOMLHooks)
     case file(PluginFile)
+    case goose(GooseHooks)
 
     struct Event: Equatable, Sendable {
         let name: String
@@ -141,11 +142,19 @@ enum HooksIntegration: Equatable, Sendable {
         let events: [String]
     }
 
+    struct GooseHooks: Equatable, Sendable {
+        let directory: ConfigPath
+        let pluginName: String
+        let events: [Event]
+        let sessionKeys: [String]
+    }
+
     var hookEvents: [Event] {
         switch self {
         case .json(let hooks): return hooks.events
         case .toml(let hooks): return hooks.events
         case .file: return []
+        case .goose(let hooks): return hooks.events
         }
     }
 
@@ -154,6 +163,7 @@ enum HooksIntegration: Equatable, Sendable {
         case .json(let hooks): return hooks.events.map(\.name)
         case .toml(let hooks): return hooks.events.map(\.name)
         case .file(let plugin): return plugin.events
+        case .goose(let hooks): return hooks.events.map(\.name)
         }
     }
 }
@@ -161,6 +171,7 @@ enum HooksIntegration: Equatable, Sendable {
 enum MCPIntegration: Equatable, Sendable {
     case json(JSONMCP)
     case toml(TOMLMCP)
+    case yaml(YAMLMCP)
 
     struct Entry: Equatable, Sendable {
         enum Command: Equatable, Sendable {
@@ -189,5 +200,13 @@ enum MCPIntegration: Equatable, Sendable {
         let fileName: String
         let table: String
         let entry: Entry
+    }
+
+    struct YAMLMCP: Equatable, Sendable {
+        let directory: ConfigPath
+        let fileName: String
+        let table: String
+        let entry: Entry
+        let timeout: Int
     }
 }
