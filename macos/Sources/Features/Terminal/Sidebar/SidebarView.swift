@@ -1520,9 +1520,27 @@ private struct GroupStatusRollup: View {
     var body: some View {
         content
             .font(.system(size: 10))
-            .onReceive(Publishers.MergeMany(tabs.map { $0.objectWillChange })) { _ in
+            .onReceive(groupStatusPublisher) { _ in
                 tick &+= 1
             }
+    }
+
+    /// The only facts the badge can change on are a tab's agent state and its
+    /// attention flag — everything `content` branches on. Subscribing to every
+    /// tab's `objectWillChange` made any keystroke, title change or metadata
+    /// tick anywhere in the group re-render the header's badge, and keystrokes
+    /// are exactly what a terminal group produces without pause. `@Published`
+    /// projects are always holding a value, so `CombineLatest` fires as soon
+    /// as either of the two facts changes.
+    private var groupStatusPublisher: AnyPublisher<Void, Never> {
+        Publishers.MergeMany(
+            tabs.map { tab in
+                Publishers.CombineLatest(tab.$agentState, tab.$needsAttention)
+                    .map { _, _ in () }
+                    .eraseToAnyPublisher()
+            }
+        )
+        .eraseToAnyPublisher()
     }
 
     @ViewBuilder

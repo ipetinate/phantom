@@ -40,6 +40,18 @@ final class SidebarTabManager: ObservableObject {
     private var attentionWindows: Set<ObjectIdentifier> = []
     private var pendingRefresh = false
 
+    /// Whether this sidebar currently holds the shared centers' subscriptions
+    /// and the 5-second metadata timer.
+    ///
+    /// Only the selected tab's sidebar is on screen, but every manager used to
+    /// hold its own copy of all of it: n managers subscribed to the same
+    /// centers, and every center publication walked each manager's models —
+    /// O(n²) work per tab event once there are enough tabs. Subscriptions and
+    /// the timer come and go with `isSidebarVisible` instead; a hidden manager
+    /// keeps only its (cheap) notification observers and is brought back up to
+    /// date from the centers' snapshots when it is shown again.
+    private var isObservingCenters = false
+
     /// Becomes true the first time a refresh sees the whole tab group at
     /// once, which is the moment a fresh or restored sidebar's list
     /// settles. Animations wait until the *second* full-group pass so the
@@ -61,15 +73,7 @@ final class SidebarTabManager: ObservableObject {
         }
 
         setupObservers()
-        subscribeCenters()
         refresh()
-
-        metadataRefreshTimer = Timer.scheduledTimer(
-            withTimeInterval: 5,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.refreshMetadata() }
-        }
     }
 
     deinit {
@@ -183,8 +187,10 @@ final class SidebarTabManager: ObservableObject {
         for name in refreshNames {
             notificationObservers.append(center.addObserver(
                 forName: name, object: nil, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.scheduleRefresh() }
+            ) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    self?.handleWindowNotification(name, notification)
+                }
             })
         }
 
@@ -234,8 +240,50 @@ final class SidebarTabManager: ObservableObject {
         })
     }
 
+    /// Reacts to a global window notification only when it concerns a window
+    /// this sidebar draws a row for.
+    ///
+    /// Every key change in the app used to wake every manager, which is
+    /// O(managers × groupWindows) scheduling per focus switch — the loading
+    /// nobody looks at that grows with the tab count. A manager's list changes
+    /// only when its own group's windows change, so the rest is filtered here.
+    ///
+    /// `willClose` is exempt: the closing window can already be gone from
+    /// `groupWindows` by the time the notice lands (row eligibility checks the
+    /// controller's `hasClosed`), and dropping the notice then would leave the
+    /// corpse of a row behind. It is rare enough that waking everyone is fine.
+    private func handleWindowNotification(
+        _ name: Notification.Name,
+        _ notification: Notification
+    ) {
+        if name == NSWindow.willCloseNotification {
+            scheduleRefresh()
+            return
+        }
+        if let window = notification.object as? NSWindow, !isOneOfMyWindows(window) {
+            return
+        }
+        scheduleRefresh()
+    }
+
+    /// Whether a window is one this sidebar can draw a row for — O(1).
+    ///
+    /// Keyed on `modelsById` rather than on `groupWindows`: the map's keys are
+    /// exactly the `ObjectIdentifier`s of the group's windows (plus the seed),
+    /// so a focus switch in an unrelated window costs this manager a dictionary
+    /// lookup and nothing else.
+    private func isOneOfMyWindows(_ window: NSWindow) -> Bool {
+        if window === self.window { return true }
+        return modelsById[ObjectIdentifier(window)] != nil
+    }
+
     /// Shared centers are observed once here and distributed into the
     /// affected models, so rows never observe app-wide state.
+    ///
+    /// Held only while this sidebar is the visible one — see `syncVisibility`
+    /// — so a center publication walks the visible manager's models instead
+    /// of every manager's. Cancelled wholesale (`.removeAll()`) the moment
+    /// the sidebar is hidden; `applyCenterSnapshot` catches a re-shown one up.
     private func subscribeCenters() {
         TabStateCenter.shared.$states
             .sink { [weak self] states in
@@ -389,6 +437,97 @@ final class SidebarTabManager: ObservableObject {
             } else {
                 hasSeenFullGroup = true
             }
+        }
+
+        syncVisibility()
+    }
+
+    /// Brings the center subscriptions and the metadata timer in and out of
+    /// existence with the sidebar's visibility.
+    ///
+    /// A hidden sidebar is a row of facts waiting to be drawn; it does not
+    /// need to subscribe to the app's shared state, and every subscription it
+    /// cancels is one less pass each publication has to make over it. Awake
+    /// managers keep their cheap notification observers (command signals,
+    /// window close) so the rows stay *correct*; only the subscriptions and
+    /// the timer are suspended. Being shown again re-subscribes and
+    /// immediately reconciles the rows against the centers' current
+    /// snapshots — see `applyCenterSnapshot`.
+    private func syncVisibility() {
+        let visible = isSidebarVisible
+        guard visible != isObservingCenters else { return }
+
+        if visible {
+            isObservingCenters = true
+            subscribeCenters()
+            startMetadataTimer()
+            refreshMetadata()
+            applyCenterSnapshot()
+        } else {
+            stopMetadataTimer()
+            centerCancellables.removeAll()
+            isObservingCenters = false
+        }
+    }
+
+    private func startMetadataTimer() {
+        guard metadataRefreshTimer == nil else { return }
+        metadataRefreshTimer = Timer.scheduledTimer(
+            withTimeInterval: 5,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshMetadata() }
+        }
+    }
+
+    private func stopMetadataTimer() {
+        metadataRefreshTimer?.invalidate()
+        metadataRefreshTimer = nil
+    }
+
+    /// Re-reads each center's current snapshot and pushes it into the rows,
+    /// so a sidebar that is shown again is right at once.
+    ///
+    /// This is the half the old visibility story was missing: subscriptions
+    /// were always on, so a hidden tab's rows were kept fresh by the center
+    /// traffic it was permanently wired into. With those cancelled, everything
+    /// must be re-read here — including when a model's `surfaceId` did *not*
+    /// change, because `update` only applied agent state on a new surface and
+    /// a re-shown tab whose surface persisted would otherwise go on drawing
+    /// stale agent/Git/dev-server facts.
+    private func applyCenterSnapshot() {
+        let states = TabStateCenter.shared.states
+        let records = TabStateCenter.shared.records
+        let repos = GitStatusCenter.shared.repos
+        let devServers = DevServerCenter.shared
+
+        for model in models {
+            if let surfaceId = model.surfaceId {
+                model.setAgentState(states[surfaceId])
+                model.setLiveAgent(records[surfaceId]?.liveAgent)
+            } else {
+                model.setAgentState(nil)
+                model.setLiveAgent(nil)
+            }
+
+            if let root = model.repoRoot, let info = repos[root] {
+                model.setRepoStatus(
+                    isDirty: info.isDirty,
+                    conflicts: info.conflicts,
+                    prNumber: info.prNumber,
+                    prURL: info.prURL
+                )
+            } else {
+                model.setRepoStatus(isDirty: nil, prNumber: nil, prURL: nil)
+            }
+
+            if let pid = model.foregroundPID {
+                model.setDevServerPort(devServers.port(forPID: pid))
+            } else {
+                model.setDevServerPort(nil)
+            }
+
+            applyCommandRun(model, signal: .tick)
         }
     }
 

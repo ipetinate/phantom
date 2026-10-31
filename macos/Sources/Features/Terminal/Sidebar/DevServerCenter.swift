@@ -64,15 +64,47 @@ final class DevServerCenter: ObservableObject {
                 )
 
                 let now = Date()
-                for pid in pids {
-                    self.servers[pid] = ServerInfo(port: resolved[pid], checkedAt: now)
-                }
-                // Drop tabs that went away between scans.
-                self.servers = self.servers.filter { self.tracked.contains($0.key) }
+                self.applyScanResult(pids: pids, resolved: resolved, now: now)
                 self.scannedAt = now
                 self.isScanning = false
             }
         }
+    }
+
+    /// Replaces the published `servers` with the outcome of one scan, in a
+    /// single publication and only when the drawn facts actually changed.
+    ///
+    /// Building the whole map in memory, comparing it to the current one and
+    /// assigning once is what makes a scan cost exactly one render no matter
+    /// how many tabs asked for it. The previous version read `servers[pid]`
+    /// inside a loop followed by a filter assign, and every write to the
+    /// published property notified every subscriber — with many tabs, one
+    /// scan cascaded into several passes over every model.
+    ///
+    /// The comparison is over ports alone, deliberately not the whole value:
+    /// `checkedAt` advances on every scan, so keying the "did anything
+    /// change" answer on it would make every scan look like news. A scan that
+    /// resolved the same ports for every tracked tab is a scan the rows can
+    /// ignore. Freshness still lives in `scannedAt`, which is what the TTL
+    /// reads.
+    ///
+    /// Returns whether anything was published, which is what the tests pin:
+    /// an identical snapshot is not news.
+    @discardableResult
+    func applyScanResult(pids: Set<Int>, resolved: [Int: Int], now: Date) -> Bool {
+        var next = servers
+        for pid in pids {
+            next[pid] = ServerInfo(port: resolved[pid], checkedAt: now)
+        }
+        // Drop tabs that went away between scans.
+        next = next.filter { pids.contains($0.key) }
+
+        guard next.mapValues(\.port) != servers.mapValues(\.port) else {
+            return false
+        }
+
+        servers = next
+        return true
     }
 
     /// Walks up from each listening process until it reaches a tracked PID,
