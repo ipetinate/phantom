@@ -1,7 +1,7 @@
 # Phantom features
 
 What Phantom adds to Ghostty, and where each piece stands. Current version:
-`0.22.0-beta`. Latest release: `v0.21.0`.
+`0.23.0-beta`. Latest release: `v0.22.0`.
 
 The suffix says how finished a version is: `-beta` while the product is usable
 but still taking fixes, and nothing at all once it is stable. There are no
