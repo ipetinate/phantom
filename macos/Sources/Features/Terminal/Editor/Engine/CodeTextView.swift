@@ -966,6 +966,7 @@ struct CodeTextView: NSViewRepresentable {
         /// to be done explicitly or a formatted file keeps the colours of the
         /// text it replaced.
         private func refreshAfterReplacement(in textStorage: NSTextStorage) {
+            storage.invalidate(from: 0)
             highlightsOnDemand = textStorage.length > Self.wholeDocumentBudget
             if highlightsOnDemand {
                 highlightVisibleRegion()
@@ -1010,6 +1011,7 @@ struct CodeTextView: NSViewRepresentable {
             defer { isApplyingExternalText = false }
 
             textStorage.setAttributedString(NSAttributedString(string: text))
+            storage.invalidate(from: 0)
 
             highlightsOnDemand = textStorage.length > Self.wholeDocumentBudget
             if highlightsOnDemand {
@@ -1315,9 +1317,16 @@ struct CodeTextView: NSViewRepresentable {
         @objc func scrolled() {
             snapOutOfTheLeftMargin()
             guard highlightsOnDemand else { return }
+            scheduleVisibleHighlight()
+        }
+
+        /// Recolour the viewport after input settles. The edited line is
+        /// painted synchronously; painting the surrounding screen on every
+        /// keystroke makes TextKit relayout the same text repeatedly.
+        private func scheduleVisibleHighlight(after delay: Duration = .milliseconds(60)) {
             highlightTask?.cancel()
             highlightTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(60))
+                try? await Task.sleep(for: delay)
                 guard !Task.isCancelled else { return }
                 self?.highlightVisibleRegion()
             }
@@ -2299,14 +2308,15 @@ struct CodeTextView: NSViewRepresentable {
             skippedRegionCache = nil
             let region = CodeTextStorage.invalidationRange(
                 for: edited,
-                in: textStorage.string as NSString
+                in: textStorage.string as NSString,
+                padding: 0
             )
             storage.highlight(textStorage, in: region, seedWhenBehind: highlightsOnDemand)
-            // Typing a brace changes the depth of everything after it, so
-            // the whole document's colours are stale — but recolouring all of
-            // it per keystroke is the cost this editor exists to avoid. The
-            // visible region is what a reader can see being wrong.
+            // Repaint the edited line now and the surrounding viewport after
+            // a short pause. A block comment or bracket can change colours
+            // below the edit, while the next typed character must stay fast.
             colorBrackets(in: region)
+            scheduleVisibleHighlight(after: .milliseconds(150))
 
             /// The waves are drawn by a sibling view, and a sibling is not
             /// told that the text storage moved. Only the exposed part, which

@@ -58,6 +58,29 @@ struct CodeHighlightAttributeTests {
         NSRange(location: 0, length: storage.length)
     }
 
+    @Test func cachedTokensAreClearedAfterAnEditAtTheSameLength() {
+        let engine = engine()
+        let before = "let value = 1" as NSString
+        let range = NSRange(location: 0, length: before.length)
+
+        #expect(engine.tokens(in: before as String, range: range).contains { $0.kind == .keyword })
+        #expect(engine.tokens(in: before as String, range: range).contains { $0.kind == .keyword })
+
+        let after = "foo value = 1" as NSString
+        engine.invalidate(from: 0)
+        #expect(!engine.tokens(in: after as String, range: range).contains { $0.kind == .keyword })
+    }
+
+    @Test func changingGrammarClearsCachedTokens() {
+        let engine = engine()
+        let text = "let value = 1"
+        let range = NSRange(location: 0, length: (text as NSString).length)
+
+        #expect(!engine.tokens(in: text, range: range).isEmpty)
+        engine.setHighlighter(.plain, languageID: nil)
+        #expect(engine.tokens(in: text, range: range).isEmpty)
+    }
+
     // MARK: The underline survives
 
     /// Both keys, because only one of them was ever the visible half of the
@@ -137,8 +160,15 @@ struct CodeHighlightAttributeTests {
 
         engine.highlight(plain, in: region, preserving: [])
 
-        let bare = elapsed { engine.highlight(plain, in: region, preserving: []) }
-        let preserved = elapsed { engine.highlight(squiggled, in: region) }
+        // An edit invalidates the token cache before each real recolour.
+        let bare = elapsed {
+            engine.invalidate(from: 0)
+            engine.highlight(plain, in: region, preserving: [])
+        }
+        let preserved = elapsed {
+            engine.invalidate(from: 0)
+            engine.highlight(squiggled, in: region)
+        }
 
         #expect(preserved < bare * 3, "\(preserved) against \(bare)")
     }
