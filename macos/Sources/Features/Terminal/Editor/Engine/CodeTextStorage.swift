@@ -20,6 +20,10 @@ final class CodeTextStorage {
 
     private(set) var highlighter: GrammarHighlighter
     private var cache: LineTokenizationCache?
+    /// Highlighting and bracket colours request the same range on each edit.
+    /// Keep that result until the text or grammar changes so the second pass
+    /// does not run the TextMate tokenizer over the file again.
+    private var lastTokens: (range: NSRange, seedWhenBehind: Bool, tokens: [GrammarHighlighter.Token])?
     var theme: CodeTheme
     var configuration: CodeEditorConfiguration
 
@@ -41,12 +45,14 @@ final class CodeTextStorage {
         self.languageID = languageID
         self.highlighter = highlighter
         self.cache = highlighter.initialState.map(LineTokenizationCache.init(initialState:))
+        lastTokens = nil
     }
 
     /// Forgets the tokenizer state from the line holding `location` onwards.
     /// Called before the recolour that follows an edit, so the lines below it
     /// are lexed again from what the edited line now ends in.
     func invalidate(from location: Int) {
+        lastTokens = nil
         cache?.invalidate(from: location)
     }
 
@@ -57,12 +63,19 @@ final class CodeTextStorage {
     /// ``LineTokenizationCache/tokens(in:range:highlighter:seedWhenBehind:)``.
     func tokens(in text: String, range: NSRange, seedWhenBehind: Bool = false) -> [GrammarHighlighter.Token] {
         guard let cache else { return [] }
-        return cache.tokens(
+        if let lastTokens,
+           lastTokens.range == range,
+           lastTokens.seedWhenBehind == seedWhenBehind {
+            return lastTokens.tokens
+        }
+        let tokens = cache.tokens(
             in: text as NSString,
             range: range,
             highlighter: highlighter,
             seedWhenBehind: seedWhenBehind
         )
+        lastTokens = (range, seedWhenBehind, tokens)
+        return tokens
     }
 
     /// Applies colors to `range` of `storage`.
